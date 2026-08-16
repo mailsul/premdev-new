@@ -152,7 +152,7 @@ function resolveSubdomain(sub: string, incomingDomain: string):
         if (r.custom_subdomain) continue;
         if (`${dnsSafe(r.name)}-${dnsSafe(r._username)}` !== candidateSub) continue;
         try {
-          const portMap: Record<string, number> = JSON.parse(r.preview_ports);
+          const portMap: Record<string, number> = JSON.parse(r.preview_ports!);
           // Check if any process runs on the requested port
           const hasPort = Object.values(portMap).includes(portNum);
           if (hasPort) {
