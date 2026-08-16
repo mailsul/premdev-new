@@ -92,7 +92,7 @@ import /etc/caddy/extra/*.caddy
         # Caddyfile and reload Caddy (see perintah.md).
         @gitea host ${GITEA_SUBDOMAIN}.${PRIMARY_DOMAIN}
         handle @gitea {
-                reverse_proxy ${GITEA_CONTAINER_HOST:-gitea}:${GITEA_PORT:-3000}
+                reverse_proxy ${GITEA_CONTAINER_HOST}:${GITEA_PORT}
         }
 
         @workspace header_regexp workspace Host ^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?\.${PRIMARY_DOMAIN}$

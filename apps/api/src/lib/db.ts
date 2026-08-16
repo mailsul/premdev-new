@@ -152,6 +152,14 @@ export function initDb() {
     db.exec("ALTER TABLE workspaces ADD COLUMN custom_domain TEXT");
   }
 
+  // preview_ports — multi-process port map.
+  // JSON: Record<string, number> — process name → port number.
+  // Set when a workspace uses `processes` in .premdev; NULL for single-port
+  // workspaces (backward-compatible).
+  if (!cols.find((c) => c.name === "preview_ports")) {
+    db.exec("ALTER TABLE workspaces ADD COLUMN preview_ports TEXT");
+  }
+
   // custom_domains table — additional base domains the admin points to
   // this PremDev instance. PRIMARY_DOMAIN from config is always active and
   // is NOT stored here (to avoid config drift when env changes).
@@ -275,6 +283,8 @@ export type DbWorkspace = {
   status: "stopped" | "starting" | "running" | "error";
   container_id: string | null;
   preview_port: number | null;
+  /** JSON: Record<string, number> — process name → port. Set when workspace uses multi-process mode. */
+  preview_ports: string | null;
   run_command: string | null;
   env_vars: string;
   last_active_at: number | null;
@@ -363,6 +373,22 @@ export function workspaceToPublic(w: DbWorkspace) {
     ? workspaceUrl(w.name, username, w.custom_subdomain, w.custom_domain)
     : undefined;
   const defaultUrl = defaultWorkspaceUrl(w.name, username);
+
+  // Build per-process URLs for multi-port workspaces.
+  // Each extra port is accessible at <project>-<port>-<user>.<domain>.
+  let previewPorts: Record<string, { port: number; url: string }> | undefined;
+  if (w.preview_ports) {
+    try {
+      const portMap: Record<string, number> = JSON.parse(w.preview_ports);
+      const proto = process.env.PROTOCOL ?? "https";
+      previewPorts = {};
+      for (const [name, port] of Object.entries(portMap)) {
+        const sub = `${dnsSafe(w.name)}-${port}-${dnsSafe(username)}`;
+        previewPorts[name] = { port, url: `${proto}://${sub}.${config.PRIMARY_DOMAIN}` };
+      }
+    } catch { /* ignore malformed JSON */ }
+  }
+
   return {
     id: w.id,
     name: w.name,
@@ -373,6 +399,8 @@ export function workspaceToPublic(w: DbWorkspace) {
     defaultUrl,
     customSubdomain: w.custom_subdomain ?? null,
     customDomain: w.custom_domain ?? null,
+    /** Multi-process: name → { port, url } for each named process. */
+    previewPorts: previewPorts ?? null,
     createdAt: new Date(w.created_at).toISOString(),
     runCommand: w.run_command,
   };

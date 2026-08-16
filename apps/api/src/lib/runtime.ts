@@ -179,6 +179,57 @@ export async function ensureNetwork() {
   }
 }
 
+/**
+ * Build a multi-process supervisor script for Opsi A+C.
+ * Spawns every process in a background loop with labeled, colored output.
+ * Each process auto-restarts if it exits.
+ */
+function buildMultiProcessScript(
+  processes: Record<string, { run: string; port: number }>,
+  hostFixSnippet: string,
+): string {
+  const processLines = Object.entries(processes)
+    .map(([name, proc]) => `_pd_run ${JSON.stringify(name)} ${JSON.stringify(proc.run)}`)
+    .join("\n");
+
+  return [
+    "set -e",
+    hostFixSnippet,
+    "if [ -f /workspace/requirements.txt ]; then \\",
+    '  echo "[premdev] installing requirements.txt…"; \\',
+    "  pip install -q --user --no-warn-script-location -r /workspace/requirements.txt 2>&1 | tail -20 || true; \\",
+    "fi",
+    "if [ -f /workspace/package-lock.json ] && [ ! -d /workspace/node_modules ]; then \\",
+    '  echo "[premdev] running npm ci…"; \\',
+    "  cd /workspace && npm ci --silent 2>&1 | tail -20 || true; \\",
+    "fi",
+    "cd /workspace",
+    "",
+    "_pd_cleanup() {",
+    "  kill $(jobs -p 2>/dev/null) 2>/dev/null || true",
+    "  exit 0",
+    "}",
+    "trap '_pd_cleanup' SIGTERM SIGINT",
+    "",
+    // The runner: background loop with colored prefix and auto-restart
+    "_pd_run() {",
+    '  local name="$1" cmd="$2"',
+    "  while true; do",
+    '    printf "\\e[1;36m[%s]\\e[0m \\e[2mStarting...\\e[0m\\n" "${name}"',
+    '    bash -lc "$cmd" 2>&1 | while IFS= read -r _pd_line; do',
+    '      printf "\\e[1;36m[%s]\\e[0m %s\\n" "${name}" "${_pd_line}"',
+    "    done",
+    '    printf "\\e[1;33m[%s]\\e[0m Exited — restarting in 3s...\\n" "${name}"',
+    "    sleep 3",
+    "  done &",
+    "}",
+    "",
+    processLines,
+    "",
+    "wait",
+  ].join("\n");
+}
+
 export async function startContainer(opts: {
   workspaceId: string;
   username: string;
@@ -188,6 +239,8 @@ export async function startContainer(opts: {
   port: number;
   envVars: Record<string, string>;
   runCommand?: string;
+  /** Multi-process mode: record of process name → {run, port}. */
+  processes?: Record<string, { run: string; port: number }>;
 }): Promise<string> {
   if (!docker) throw new Error("Docker not available");
   await ensureNetwork();
@@ -204,6 +257,12 @@ export async function startContainer(opts: {
   const env = Object.entries(opts.envVars).map(([k, v]) => `${k}=${v}`);
   env.push(`PORT=${opts.port}`);
   env.push(`HOST=0.0.0.0`);
+  // Multi-process: inject PORT_<name>=<port> for every named process.
+  if (opts.processes) {
+    for (const [name, proc] of Object.entries(opts.processes)) {
+      env.push(`PORT_${name}=${proc.port}`);
+    }
+  }
   env.push(`USER=${opts.username}`);
   // Make pip / npm honour the per-workspace bind-mounted user-home dirs even
   // when /home/premdev resolves to a different uid mid-install.
@@ -265,8 +324,11 @@ end
 RBEOF
 fi`;
 
-  const runCmd = opts.runCommand
-    ? `set -e
+  // Multi-process supervisor mode takes priority over single runCommand.
+  const runCmd = opts.processes && Object.keys(opts.processes).length > 0
+    ? buildMultiProcessScript(opts.processes, HOST_FIX_SNIPPET)
+    : opts.runCommand
+      ? `set -e
 ${HOST_FIX_SNIPPET}
 if [ -f /workspace/requirements.txt ]; then \
   echo "[premdev] installing requirements.txt…"; \
@@ -277,7 +339,7 @@ if [ -f /workspace/package-lock.json ] && [ ! -d /workspace/node_modules ]; then
   cd /workspace && npm ci --silent 2>&1 | tail -20 || true; \
 fi
 cd /workspace && exec bash -lc ${JSON.stringify(opts.runCommand)}`
-    : null;
+      : null;
 
   // Mount docker socket supaya `docker compose up` bisa jalan dari tombol Run.
   const runDockerSock = config.DOCKER_SOCKET;

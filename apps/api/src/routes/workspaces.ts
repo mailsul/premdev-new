@@ -330,14 +330,33 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     const tmpl = getTemplate(w.template);
     const rawCmd = resolveRunCommand(w, tmpl, dir);
     const cmd = rawCmd ? fixRunCommandHost(rawCmd) : rawCmd;
-    // Port resolution priority:
-    //   1. .premdev explicit `port` field (user override)
-    //   2. Hard-coded port auto-detected in the entry file (e.g. port=5000 in app.py)
-    //   3. Template default
     const cfg = readWorkspaceConfig(dir);
-    const port = (cfg?.port && Number.isInteger(cfg.port) && cfg.port > 0 && cfg.port < 65536)
-      ? cfg.port
-      : (detectHardcodedPort(dir, cmd ?? undefined) ?? tmpl.port);
+
+    // ── Multi-process resolution ──────────────────────────────────────────
+    // If .premdev has a `processes` map, use the first entry as the main
+    // port and build a preview_ports JSON map for all processes.
+    const processes = cfg?.processes && Object.keys(cfg.processes).length > 0
+      ? cfg.processes
+      : undefined;
+
+    let port: number;
+    let previewPortsJson: string | null = null;
+
+    if (processes) {
+      const entries = Object.entries(processes);
+      port = entries[0][1].port; // first process = main/default port
+      const portMap: Record<string, number> = {};
+      for (const [name, proc] of entries) portMap[name] = proc.port;
+      previewPortsJson = JSON.stringify(portMap);
+    } else {
+      // Port resolution priority (single-process, unchanged):
+      //   1. .premdev explicit `port` field
+      //   2. Hard-coded port auto-detected in entry file
+      //   3. Template default
+      port = (cfg?.port && Number.isInteger(cfg.port) && cfg.port > 0 && cfg.port < 65536)
+        ? cfg.port
+        : (detectHardcodedPort(dir, cmd ?? undefined) ?? tmpl.port);
+    }
 
     try {
       // Self-heal: make sure the per-user MySQL account + project DB exist
@@ -376,12 +395,15 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           diskMb: userRow.quota_disk_mb,
           port,
           envVars: resolveEnvVars(w, dir),
-          runCommand: cmd,
+          runCommand: processes ? undefined : cmd,
+          processes,
         });
       } else {
         startLocal(id, cmd, dir, port);
       }
-      db.prepare("UPDATE workspaces SET status = 'running', preview_port = ? WHERE id = ?").run(port, id);
+      db.prepare(
+        "UPDATE workspaces SET status = 'running', preview_port = ?, preview_ports = ? WHERE id = ?",
+      ).run(port, previewPortsJson, id);
     } catch (e: any) {
       db.prepare("UPDATE workspaces SET status = 'error' WHERE id = ?").run(id);
       return reply.code(500).send({ error: e.message });
@@ -419,11 +441,25 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     const dir = workspacePath(id);
     const tmpl = getTemplate(w.template);
     const rawCmd2 = resolveRunCommand(w, tmpl, dir);
-    const cmd = rawCmd2 ? fixRunCommandHost(rawCmd2) : rawCmd2;
-    const cfg = readWorkspaceConfig(dir);
-    const port = (cfg?.port && Number.isInteger(cfg.port) && cfg.port > 0 && cfg.port < 65536)
-      ? cfg.port
-      : (detectHardcodedPort(dir, cmd ?? undefined) ?? tmpl.port);
+    const cmd2 = rawCmd2 ? fixRunCommandHost(rawCmd2) : rawCmd2;
+    const cfg2 = readWorkspaceConfig(dir);
+
+    const processes2 = cfg2?.processes && Object.keys(cfg2.processes).length > 0
+      ? cfg2.processes : undefined;
+
+    let port2: number;
+    let previewPortsJson2: string | null = null;
+    if (processes2) {
+      const entries2 = Object.entries(processes2);
+      port2 = entries2[0][1].port;
+      const portMap2: Record<string, number> = {};
+      for (const [n, p] of entries2) portMap2[n] = p.port;
+      previewPortsJson2 = JSON.stringify(portMap2);
+    } else {
+      port2 = (cfg2?.port && Number.isInteger(cfg2.port) && cfg2.port > 0 && cfg2.port < 65536)
+        ? cfg2.port
+        : (detectHardcodedPort(dir, cmd2 ?? undefined) ?? tmpl.port);
+    }
 
     try {
       if (isDocker()) {
@@ -434,14 +470,17 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           cpu: userRow.quota_cpu,
           memMb: userRow.quota_mem_mb,
           diskMb: userRow.quota_disk_mb,
-          port,
+          port: port2,
           envVars: resolveEnvVars(w, dir),
-          runCommand: cmd,
+          runCommand: processes2 ? undefined : cmd2,
+          processes: processes2,
         });
       } else {
-        startLocal(id, cmd, dir, port);
+        startLocal(id, cmd2, dir, port2);
       }
-      db.prepare("UPDATE workspaces SET status = 'running', preview_port = ? WHERE id = ?").run(port, id);
+      db.prepare(
+        "UPDATE workspaces SET status = 'running', preview_port = ?, preview_ports = ? WHERE id = ?",
+      ).run(port2, previewPortsJson2, id);
     } catch (e: any) {
       db.prepare("UPDATE workspaces SET status = 'error' WHERE id = ?").run(id);
       return reply.code(500).send({ error: e.message });

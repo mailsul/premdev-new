@@ -126,6 +126,41 @@ function resolveSubdomain(sub: string, incomingDomain: string):
     `${dnsSafe(r.name)}-${dnsSafe(r._username)}` === sub,
   );
   if (matches.length === 0) {
+    // ── Multi-port routing ───────────────────────────────────────────────
+    // Try pattern: <project>-<PORT_NUMBER>-<user>  (e.g. bot-3000-naufal)
+    // Port number must be a pure numeric segment between project and user.
+    // We scan all possible positions for a numeric segment to handle
+    // projects/users that contain hyphens themselves.
+    const parts = sub.split("-");
+    for (let i = 1; i < parts.length - 1; i++) {
+      const seg = parts[i];
+      if (!/^\d+$/.test(seg)) continue;
+      const portNum = Number(seg);
+      if (portNum < 1 || portNum > 65535) continue;
+
+      const candidateSub = [...parts.slice(0, i), ...parts.slice(i + 1)].join("-");
+      const multiRows = db
+        .prepare(`
+          SELECT w.*, u.username AS _username
+          FROM workspaces w
+          JOIN users u ON u.id = w.user_id
+          WHERE w.status = 'running' AND w.preview_ports IS NOT NULL
+        `)
+        .all() as Array<DbWorkspace & { _username: string }>;
+
+      for (const r of multiRows) {
+        if (r.custom_subdomain) continue;
+        if (`${dnsSafe(r.name)}-${dnsSafe(r._username)}` !== candidateSub) continue;
+        try {
+          const portMap: Record<string, number> = JSON.parse(r.preview_ports);
+          // Check if any process runs on the requested port
+          const hasPort = Object.values(portMap).includes(portNum);
+          if (hasPort) {
+            return { ok: true, target: { containerName: `pw_${r.id}`, port: portNum } };
+          }
+        } catch { /* malformed JSON — skip */ }
+      }
+    }
     return { ok: false, status: 503, msg: "Workspace not running" };
   }
   if (matches.length > 1) {

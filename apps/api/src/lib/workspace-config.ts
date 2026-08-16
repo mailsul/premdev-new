@@ -7,6 +7,20 @@ export const CONFIG_FILENAME = ".premdev";
 // transparently read it as a fallback and migrate on first write.
 export const LEGACY_CONFIG_FILENAME = ".premdev.json";
 
+/**
+ * One named process inside a multi-process workspace.
+ * Each gets its own port and run command.
+ * Example in .premdev:
+ *   "processes": {
+ *     "web":  { "run": "php -S 0.0.0.0:$PORT_web", "port": 8080 },
+ *     "api":  { "run": "node server.js",            "port": 3000 }
+ *   }
+ */
+export type ProcessConfig = {
+  run: string;
+  port: number;
+};
+
 export type WorkspaceConfig = {
   run?: string;
   env?: Record<string, string>;
@@ -17,12 +31,23 @@ export type WorkspaceConfig = {
    * willing/able to read `os.environ["PORT"]`. Without this, PremDev
    * assigns a random port via the PORT env var and the user's app
    * binds to a different one — proxy gets ECONNREFUSED → blank page.
+   * Ignored when `processes` is set.
    */
   port?: number;
   /** Replit-style hints: copied at workspace creation, AI reads them. */
   language?: string;
   entrypoint?: string;
   modules?: string[];
+  /**
+   * Multi-process mode (Opsi A+C).  When present, `run` and `port` are
+   * ignored.  PremDev spawns every listed process inside one container,
+   * prefixes each line of output with [name], and exposes each port at
+   * <project>-<port>-<user>.<domain>.
+   *
+   * The first entry is treated as the "main" process: its URL is the
+   * default <project>-<user>.<domain> preview URL.
+   */
+  processes?: Record<string, ProcessConfig>;
 };
 
 export function configPath(workspaceDir: string): string {
