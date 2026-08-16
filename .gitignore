@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.npm/
+
+# Logs
+logs/
+*.log
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+backup_db/
+
+# Zip archives
+*.zip
+*.tar.gz
+
+# Uploaded assets (bukan bagian dari source code)
+attached_assets/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Cache & build output
+.cache/
+dist/
+build/
+
+# Replit internal
+.local/
+.agents/
+.upm/
+replit.nix
+.replit
+
+# OS
+.DS_Store
+Thumbs.db
