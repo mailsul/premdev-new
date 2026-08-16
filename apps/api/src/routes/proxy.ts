@@ -416,8 +416,24 @@ export function setupProxy(app: FastifyInstance): void {
     upstream.on("connect", () => {
       // Replay the original upgrade request line + headers, then any
       // bytes that arrived after the head (rare but possible).
+      //
+      // IMPORTANT: Strip `sec-websocket-extensions` before forwarding.
+      // Caddy (the TLS terminator in front of us) builds its own 101
+      // response to the browser and does NOT echo the backend's
+      // Sec-WebSocket-Extensions header back. If we forward the
+      // extension header, the workspace's Node.js/Socket.IO server
+      // accepts permessage-deflate and starts sending compressed frames
+      // (RSV1=1). The browser, having never seen the extension in the
+      // 101, treats RSV1=1 as an invalid frame header and kills the
+      // connection immediately — producing the "Invalid frame header"
+      // reconnect loop. Stripping the header here forces the workspace
+      // to skip compression entirely, keeping frames plain-text and
+      // transparent to any intermediate proxy.
+      const WS_STRIP = new Set(["sec-websocket-extensions"]);
+
       const headerLines: string[] = [`${req.method} ${req.url} HTTP/1.1`];
       for (const [k, v] of Object.entries(req.headers)) {
+        if (WS_STRIP.has(k.toLowerCase())) continue;
         if (Array.isArray(v)) for (const vv of v) headerLines.push(`${k}: ${vv}`);
         else if (v !== undefined) headerLines.push(`${k}: ${v}`);
       }
