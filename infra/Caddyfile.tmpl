@@ -100,8 +100,19 @@ import /etc/caddy/extra/*.caddy
                 reverse_proxy app:3001 {
                         transport http {
                                 dial_timeout 5s
-                                response_header_timeout 120s
+                                # Long read/write timeouts are required for long-lived
+                                # WebSocket connections (Socket.IO, terminals, etc.).
+                                # response_header_timeout only guards the initial HTTP
+                                # handshake; once the 101 is received Caddy tunnels raw
+                                # bytes and these timeouts prevent mid-session drops.
+                                read_timeout 24h
+                                write_timeout 24h
                         }
+                        # flush_interval -1 forces Caddy to flush response data
+                        # immediately (no buffering). Critical for WebSocket upgrades,
+                        # Socket.IO polling, and SSE — without it Caddy may hold back
+                        # the 101 Switching Protocols or event-stream chunks.
+                        flush_interval -1
                         header_up Host {host}
                         header_up X-Real-IP {remote}
                         header_up X-Forwarded-Proto https

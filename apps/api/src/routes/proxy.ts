@@ -69,6 +69,36 @@ const HOP_BY_HOP = new Set([
 type Target = { containerName: string; port: number };
 
 /**
+ * For workspaces that run multiple processes (e.g. a PHP/AdonisJS web server
+ * on the main port AND a Node.js Socket.IO server on a secondary port), the
+ * Socket.IO client in the browser connects to the SAME origin as the page
+ * (`socket = io()`, i.e. `TYPE_SERVER=hosting`). The page lives on the main
+ * port, but /socket.io/* must reach the Node.js process.
+ *
+ * This helper checks `preview_ports` (stored as JSON when the workspace
+ * starts) for a process conventionally named "NODE", "node", or "Node" and
+ * returns it as the override target. If no such port exists the original
+ * target is returned unchanged.
+ */
+function resolveSocketIOTarget(base: Target): Target {
+  try {
+    const id = base.containerName.replace(/^pw_/, "");
+    const row = db.prepare(
+      "SELECT preview_ports FROM workspaces WHERE id = ?"
+    ).get(id) as { preview_ports: string | null } | undefined;
+    if (!row?.preview_ports) return base;
+    const portMap: Record<string, number> = JSON.parse(row.preview_ports);
+    // Conventional names for the Socket.IO / Node.js process in .premdev
+    const nodePort =
+      portMap["NODE"] ?? portMap["node"] ?? portMap["Node"] ?? null;
+    if (nodePort != null && nodePort !== base.port) {
+      return { containerName: base.containerName, port: nodePort };
+    }
+  } catch { /* malformed JSON or DB error — fall through */ }
+  return base;
+}
+
+/**
  * Resolve a subdomain label to a running workspace target.
  * `incomingDomain` is the base domain that received this request (e.g.
  * "flixprem.org"). Used for domain-aware routing so that `myapp.domainA`
@@ -266,7 +296,13 @@ export function setupProxy(app: FastifyInstance): void {
         ));
       return reply;
     }
-    const { target } = decision;
+    // For Socket.IO paths, transparently route to the NODE process port so
+    // that MPWA-style apps using TYPE_SERVER=hosting (socket = io()) work
+    // without having to configure a separate WA_URL_SERVER.
+    let { target } = decision;
+    if ((req.url ?? "").startsWith("/socket.io")) {
+      target = resolveSocketIOTarget(target);
+    }
 
     // Buffer the body up-front so we can send a precise Content-Length
     // and never resort to chunked transfer encoding. PHP's built-in dev
@@ -398,7 +434,11 @@ export function setupProxy(app: FastifyInstance): void {
       try { clientSocket.destroy(); } catch {}
       return;
     }
-    const { target } = decision;
+    // For Socket.IO WebSocket upgrades on the main port, route to NODE process.
+    let { target } = decision;
+    if ((req.url ?? "").startsWith("/socket.io")) {
+      target = resolveSocketIOTarget(target);
+    }
 
     const upstream = net.connect(target.port, target.containerName);
     upstream.setNoDelay(true);
