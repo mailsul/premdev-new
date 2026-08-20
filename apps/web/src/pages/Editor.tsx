@@ -875,15 +875,11 @@ export default function EditorPage() {
                     recentFiles={recentFiles}
                   />
                 ) : activePath && isImageFile(activePath) ? (
-                  <div className="flex h-full flex-col items-center justify-center gap-3 overflow-auto bg-[#1e1e1e] p-6">
-                    <img
-                      src={`/api/workspaces/${id}/files/raw?path=${encodeURIComponent(activePath)}`}
-                      alt={activePath}
-                      className="max-h-full max-w-full rounded object-contain shadow-lg"
-                      style={{ imageRendering: "pixelated" }}
-                    />
-                    <p className="text-xs text-text-muted">{activePath.split("/").pop()}</p>
-                  </div>
+                  <ImagePreview
+                    key={activePath}
+                    workspaceId={id!}
+                    path={activePath}
+                  />
                 ) : activePath ? (
                   <Editor
                     height="100%"
@@ -2126,6 +2122,43 @@ function FileTree({
   );
 }
 
+// ── Image preview with error handling ────────────────────────────────────────
+function ImagePreview({ workspaceId, path: filePath }: { workspaceId: string; path: string }) {
+  const [status, setStatus] = useState<"loading" | "ok" | "error">("loading");
+  const src = `/api/workspaces/${workspaceId}/files/raw?path=${encodeURIComponent(filePath)}`;
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 overflow-auto bg-[#1e1e1e] p-6">
+      {status === "error" ? (
+        <div className="flex flex-col items-center gap-2 text-center">
+          <span className="text-4xl opacity-30">🖼️</span>
+          <p className="text-sm text-danger">Gambar gagal dimuat</p>
+          <p className="text-xs text-text-muted">{filePath}</p>
+          <a
+            href={src}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 text-xs text-accent underline"
+          >
+            Coba buka langsung →
+          </a>
+        </div>
+      ) : (
+        <img
+          src={src}
+          alt={filePath}
+          className={`max-h-full max-w-full rounded object-contain shadow-lg transition-opacity ${status === "ok" ? "opacity-100" : "opacity-0"}`}
+          style={{ imageRendering: "pixelated" }}
+          onLoad={() => setStatus("ok")}
+          onError={() => setStatus("error")}
+        />
+      )}
+      {status === "ok" && (
+        <p className="text-xs text-text-muted">{filePath.split("/").pop()}</p>
+      )}
+    </div>
+  );
+}
+
 const DND_MIME = "application/x-premdev-path";
 
 // ── File-type icon helpers ────────────────────────────────────────────────────
@@ -2325,12 +2358,26 @@ function NodeRow({
             e.preventDefault();
             e.stopPropagation();
             e.dataTransfer.dropEffect = "move";
-            setDragOver(true);
+            if (!dragOver) {
+              setDragOver(true);
+              // Auto-expand closed folder after hovering 600 ms so the user
+              // can drag into a subfolder without having to expand it first.
+              if (!open) {
+                const t = window.setTimeout(() => onToggleExpand?.(node.path), 600);
+                (e.currentTarget as HTMLElement).dataset.expandTimer = String(t);
+              }
+            }
           }}
-          onDragLeave={() => setDragOver(false)}
+          onDragLeave={(e) => {
+            setDragOver(false);
+            const t = (e.currentTarget as HTMLElement).dataset.expandTimer;
+            if (t) { clearTimeout(Number(t)); delete (e.currentTarget as HTMLElement).dataset.expandTimer; }
+          }}
           onDrop={(e) => {
             const raw = e.dataTransfer.getData(DND_MIME);
             setDragOver(false);
+            const t = (e.currentTarget as HTMLElement).dataset.expandTimer;
+            if (t) { clearTimeout(Number(t)); delete (e.currentTarget as HTMLElement).dataset.expandTimer; }
             if (!raw) return;
             e.preventDefault();
             e.stopPropagation();

@@ -116,9 +116,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       secure: config.SECURE_COOKIES,
       domain: config.COOKIE_DOMAIN || undefined,
       path: "/",
-      // Persistent (30 days) when "remember me" is checked; otherwise omit
-      // maxAge so the cookie disappears when the browser session ends.
-      ...(body.remember ? { maxAge: 60 * 60 * 24 * 30 } : {}),
+      // "Remember me" → 30 days. Without it → 8 hours. Never omit maxAge
+      // entirely: a pure session cookie is cleared by mobile browsers and any
+      // browser configured to not restore sessions on startup, which causes
+      // a logout on ordinary page refresh — a confusing UX.
+      maxAge: body.remember ? 60 * 60 * 24 * 30 : 60 * 60 * 8,
     });
     return { user: userToPublic(u) };
   });

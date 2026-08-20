@@ -38,8 +38,8 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-6">
-      <div className="card w-full max-w-md p-8 shadow-glow">
+    <div className="flex min-h-screen items-center justify-center p-3 sm:p-6">
+      <div className="card w-full max-w-md p-5 sm:p-8 shadow-glow">
         <div className="mb-6 flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-md bg-accent text-white">
             <Code2 size={22} />
