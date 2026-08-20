@@ -250,19 +250,32 @@ export default function EditorPage() {
     }
     setNewTabOpen(false);
     setOpenTabs((prev) => (prev.includes(p) ? prev : [...prev, p]));
-    setActivePath(p);
     // Track recent files (max 10, no duplicates, most recent first)
     setRecentFiles((prev) => {
       const next = [p, ...prev.filter((r) => r !== p)].slice(0, 10);
       try { localStorage.setItem(`premdev.recent.${id}`, JSON.stringify(next)); } catch {}
       return next;
     });
-    if (isImageFile(p)) { setContent(""); setDirty(false); setSavingState("idle"); return; }
+    // For image files there is no text content to load — switch immediately.
+    if (isImageFile(p)) {
+      setContent(""); setDirty(false); setSavingState("idle");
+      setActivePath(p);
+      return;
+    }
+    // Fetch the file content BEFORE updating activePath so that Monaco never
+    // sees a path/value mismatch. If setActivePath ran first, @monaco-editor/react
+    // would call model.setValue(oldContent) on the new file's model the moment
+    // the path prop changes, recording a spurious undo entry. Then when content
+    // arrived it would call setValue again — two phantom undo entries that made
+    // Ctrl+Z in file B jump back to file A's content.
     const res = await API.get<{ content: string }>(`/workspaces/${id}/files?path=${encodeURIComponent(p)}`);
     setContent(res.content);
     setDiffOriginal(res.content);
     setDirty(false);
     setSavingState("idle");
+    // Only now switch the visible path — content is ready, Monaco gets the
+    // correct value on the very first render for this path.
+    setActivePath(p);
   }
 
   async function openSplit(p: string) {
