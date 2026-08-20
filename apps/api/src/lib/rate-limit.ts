@@ -59,6 +59,13 @@ export class RateLimiter {
 export const loginLimiter = new RateLimiter(10, 0.1);    // 10 burst, +1 every 10s
 export const apiLimiter   = new RateLimiter(120, 2);      // 120 burst, +2/s
 export const aiLimiter    = new RateLimiter(30, 0.2);     // 30 burst, +1 every 5s
+// File writes are intentionally separate from the general API bucket. A
+// normal editor session produces background status/tree requests while an
+// upload may legitimately write dozens of files. Sharing one small bucket
+// made those harmless operations starve each other and surfaced as 429s.
+// This remains bounded per IP, but has enough burst and refill capacity for
+// interactive batches without making other API endpoints unlimited.
+export const fileWriteLimiter = new RateLimiter(120, 20); // 120 burst, +20/s
 
 /**
  * Pull the client IP via Fastify's `req.ip`, which already honours

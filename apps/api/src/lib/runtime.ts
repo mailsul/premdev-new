@@ -75,6 +75,24 @@ export function ensureWorkspaceDir(workspaceId: string) {
 }
 
 /**
+ * The API imports and writes files as root, while the interactive terminal
+ * deliberately runs as `premdev` (UID 1000). Normalize the project before a
+ * Run/Shell container is mounted so users always have read/write/delete access
+ * to their own files without sudo. This only happens when a container is
+ * created, never on every editor request.
+ */
+export function ensureWorkspaceUserOwnership(workspaceId: string) {
+  const p = ensureWorkspaceDir(workspaceId);
+  try {
+    spawnSync("chown", ["-R", "1000:1000", p], {
+      stdio: "ignore",
+      timeout: 15_000,
+    });
+  } catch {}
+  return p;
+}
+
+/**
  * Per-workspace user-home subdirs that are bind-mounted into BOTH the run
  * container (`pw_<id>`) and the long-lived terminal container (`pwsh_<id>`),
  * so that `pip install --user`, `npm config`, `~/.cache/pip` etc. installed
@@ -252,7 +270,7 @@ export async function startContainer(opts: {
     await existing.remove({ force: true });
   } catch {}
 
-  ensureWorkspaceDir(opts.workspaceId);
+  ensureWorkspaceUserOwnership(opts.workspaceId);
   const wsHostDir = workspaceHostPath(opts.workspaceId);
   const env = Object.entries(opts.envVars).map(([k, v]) => `${k}=${v}`);
   env.push(`PORT=${opts.port}`);
@@ -485,7 +503,7 @@ export async function runOneOff(workspaceId: string, command: string, timeoutMs 
     return await execInContainer(workspaceId, ["bash", "-lc", wrappedForExec], timeoutMs + 5_000);
   } catch {
     // Spawn ephemeral container with workspace mount
-    ensureWorkspaceDir(workspaceId);
+    ensureWorkspaceUserOwnership(workspaceId);
     const wsHostDir = workspaceHostPath(workspaceId);
     const name = `pwx_${workspaceId}_${Date.now()}`;
     const container = await docker.createContainer({
@@ -537,6 +555,10 @@ export async function runOneOff(workspaceId: string, command: string, timeoutMs 
 export async function ensureShellContainer(workspaceId: string): Promise<string> {
   if (!docker) throw new Error("Docker not available");
   await ensureNetwork();
+  // A shell container can outlive file imports. Normalize before checking for
+  // an existing shell too, so an already-running shell immediately sees files
+  // uploaded by the API as writable by `premdev`.
+  ensureWorkspaceUserOwnership(workspaceId);
   const shellName = `pwsh_${workspaceId}`;
   // Look up the workspace's persisted env vars so terminal sessions see the
   // same DATABASE_*, API keys etc. that the run container does.
@@ -575,7 +597,6 @@ export async function ensureShellContainer(workspaceId: string): Promise<string>
     try { await c.remove({ force: true }); } catch {}
   } catch {}
 
-  ensureWorkspaceDir(workspaceId);
   const wsHostDir = workspaceHostPath(workspaceId);
   // Inject pip/npm user-base envs so `pip install --user X` from the terminal
   // populates the same bind-mounted dir that the run container reads from.

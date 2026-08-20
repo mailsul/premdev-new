@@ -74,7 +74,8 @@ RUN mkdir -p /usr/local/cargo /usr/local/rustup && \
       sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path && \
     chmod -R a+rwX /usr/local/cargo /usr/local/rustup
 
-# Create user (remove default ubuntu user that ships with ubuntu:24.04 holding UID 1000)
+# Create user (remove default ubuntu user that ships with ubuntu:24.04 holding UID 1000).
+# Root's login profile also returns `sudo -i` sessions to /workspace.
 RUN /usr/sbin/userdel -r ubuntu 2>/dev/null || true; \
     /usr/sbin/groupdel ubuntu 2>/dev/null || true; \
     /usr/sbin/groupadd -g 1000 premdev && \
@@ -83,7 +84,9 @@ RUN /usr/sbin/userdel -r ubuntu 2>/dev/null || true; \
     chown -R premdev:premdev /home/premdev && \
     chmod 755 /home/premdev && \
     echo "premdev ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers && \
-    mkdir -p /workspace && chown premdev:premdev /workspace
+    mkdir -p /workspace && chown premdev:premdev /workspace && \
+    printf '%s\n' 'cd /workspace 2>/dev/null || true' >> /root/.profile && \
+    printf '%s\n' 'cd /workspace 2>/dev/null || true' >> /root/.bash_profile
 
 # Smart shell setup: oh-my-zsh + autosuggestions + syntax highlighting + starship
 USER premdev

@@ -116,6 +116,9 @@ export default function EditorPage() {
   const nav = useNavigate();
   const qc = useQueryClient();
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const [compactLayout, setCompactLayout] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches,
+  );
   const [activePath, setActivePath] = useState<string | null>(() => {
     try { return localStorage.getItem(`premdev.activePath.${id}`) || null; } catch { return null; }
   });
@@ -184,6 +187,17 @@ export default function EditorPage() {
   // Monotonic save generation so stale completions cannot clear newer dirty state.
   const saveGenRef = useRef(0);
   const lastEditGenRef = useRef(0);
+
+  // The desktop editor has three side-by-side panes. On a phone those panes
+  // must stack vertically; forcing the desktop horizontal layout made every
+  // panel too narrow to use. Listen for rotation/resizing as well.
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    const sync = () => setCompactLayout(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
 
   const { data: ws, error: wsError, refetch: wsRefetch } = useQuery({
     queryKey: ["workspace", id],
@@ -437,7 +451,7 @@ export default function EditorPage() {
           </button>
         </div>
       )}
-      <header className="flex items-center gap-2 border-b border-bg-border bg-bg-panel px-3 py-2">
+      <header className="flex shrink-0 items-center gap-2 overflow-x-auto whitespace-nowrap border-b border-bg-border bg-bg-panel px-3 py-2">
         <button className="btn-ghost" onClick={() => nav("/")}>
           <ChevronLeft size={16} />
         </button>
@@ -749,8 +763,12 @@ export default function EditorPage() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <PanelGroup direction="horizontal">
-          <Panel defaultSize={18} minSize={12} maxSize={30}>
+        <PanelGroup direction={compactLayout ? "vertical" : "horizontal"}>
+          <Panel
+            defaultSize={compactLayout ? 24 : 18}
+            minSize={compactLayout ? 16 : 12}
+            maxSize={compactLayout ? 45 : 30}
+          >
             <FileTree
               workspaceId={id!}
               confirm={confirm}
@@ -758,9 +776,9 @@ export default function EditorPage() {
               activePath={activePath}
             />
           </Panel>
-          <PanelResizeHandle className="w-px bg-bg-border hover:bg-accent" />
+          <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
 
-          <Panel defaultSize={showAI ? 50 : 60}>
+          <Panel defaultSize={compactLayout ? (showAI ? 54 : 76) : (showAI ? 50 : 60)}>
             <PanelGroup direction="vertical">
               <Panel defaultSize={65} minSize={20}>
                 {/* ── Breadcrumb ─────────────────────────────────────── */}
@@ -957,8 +975,8 @@ export default function EditorPage() {
 
           {splitPath && (
             <>
-              <PanelResizeHandle className="w-px bg-bg-border hover:bg-accent" />
-              <Panel defaultSize={30} minSize={15}>
+              <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
+              <Panel defaultSize={compactLayout ? 35 : 30} minSize={compactLayout ? 18 : 15}>
                 <div className="flex h-full flex-col">
                   <div className="flex items-center gap-2 border-b border-bg-border bg-bg-subtle px-3 py-1 text-[11px] text-text-muted">
                     {getFileIcon(splitPath.split("/").pop() ?? splitPath, 11)}
@@ -1010,8 +1028,8 @@ export default function EditorPage() {
           )}
           {showAI && (
             <>
-              <PanelResizeHandle className="w-px bg-bg-border hover:bg-accent" />
-              <Panel defaultSize={30} minSize={20}>
+              <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
+              <Panel defaultSize={compactLayout ? 30 : 30} minSize={compactLayout ? 18 : 20}>
                 <AIChat
                   workspaceId={id!}
                   onWorkspaceMutated={() => qc.invalidateQueries({ queryKey: ["workspace", id] })}
@@ -1678,8 +1696,9 @@ function FileTree({
   activePath: string | null;
   confirm: (o: any) => Promise<boolean>;
 }) {
-  const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [uploadingCount, setUploadingCount] = useState(0);
   // Show hidden files (dotfiles like .env). Persisted per-browser so users
   // don't have to re-enable on every page load.
   const [showHidden, setShowHidden] = useState<boolean>(() => {
@@ -1710,10 +1729,26 @@ function FileTree({
       ),
   });
 
+  // A recursive tree fetch is comparatively expensive for large projects.
+  // Several changes in a row (multi-file move/upload) previously launched a
+  // fetch after every item, making the UI feel stuck and burning the general
+  // API rate-limit bucket. Coalesce those into one refresh after the final
+  // mutation while keeping the visible action instant.
+  function scheduleTreeRefresh() {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      refetch();
+    }, 350);
+  }
+  useEffect(() => () => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+  }, []);
+
   const create = useMutation({
     mutationFn: (body: { path: string; type: "file" | "dir" }) =>
       API.post(`/workspaces/${workspaceId}/files/create`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["files", workspaceId] }),
+    onSuccess: scheduleTreeRefresh,
   });
   const del = useMutation({
     mutationFn: (paths: string | string[]) =>
@@ -1721,12 +1756,12 @@ function FileTree({
         `/workspaces/${workspaceId}/files/delete`,
         Array.isArray(paths) ? { paths } : { path: paths },
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["files", workspaceId] }),
+    onSuccess: scheduleTreeRefresh,
   });
   const rename = useMutation({
     mutationFn: (body: { from: string; to: string }) =>
       API.post(`/workspaces/${workspaceId}/files/rename`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["files", workspaceId] }),
+    onSuccess: scheduleTreeRefresh,
   });
 
   async function handleDelete(p: string) {
@@ -1868,6 +1903,7 @@ function FileTree({
   async function uploadFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     const failures: string[] = [];
+    setUploadingCount(files.length);
     for (const file of Array.from(files)) {
       try {
         // Zip files: send to extract endpoint so binary contents survive.
@@ -1890,26 +1926,31 @@ function FileTree({
             throw new Error(msg);
           }
         } else {
-          const reader = new FileReader();
-          const text = await new Promise<string>((res, rej) => {
-            reader.onload = () => res(String(reader.result || ""));
-            reader.onerror = rej;
-            reader.readAsText(file);
+          // Keep the original binary bytes and send each file once. The old
+          // create+FileReader+PUT flow doubled API traffic and corrupted
+          // non-text files such as PNGs and fonts.
+          const fd = new FormData();
+          fd.append("path", file.name);
+          fd.append("file", file);
+          const res = await fetch(`/api/workspaces/${workspaceId}/files/upload`, {
+            method: "POST",
+            credentials: "include",
+            body: fd,
           });
-          await API.post(`/workspaces/${workspaceId}/files/create`, {
-            path: file.name,
-            type: "file",
-          });
-          await API.put(`/workspaces/${workspaceId}/files`, {
-            path: file.name,
-            content: text,
-          });
+          if (!res.ok) {
+            let message = res.statusText;
+            try { message = (await res.json())?.error ?? message; } catch {}
+            throw new Error(message);
+          }
         }
       } catch (e: any) {
         failures.push(`${file.name}: ${e?.message ?? String(e)}`);
+      } finally {
+        setUploadingCount((n) => Math.max(0, n - 1));
       }
     }
-    qc.invalidateQueries({ queryKey: ["files", workspaceId] });
+    fileInputRef.current && (fileInputRef.current.value = "");
+    scheduleTreeRefresh();
     if (failures.length) alert(`Some uploads failed:\n${failures.join("\n")}`);
   }
 
@@ -1945,10 +1986,11 @@ function FileTree({
           </button>
           <button
             className="btn-ghost p-1"
-            title="Upload files"
+            title={uploadingCount ? `Uploading ${uploadingCount} file…` : "Upload files"}
             onClick={() => fileInputRef.current?.click()}
+            disabled={uploadingCount > 0}
           >
-            <span className="text-[10px]">⇪</span>
+            <span className="text-[10px]">{uploadingCount ? "…" : "⇪"}</span>
           </button>
           <button
             className="btn-ghost p-1"

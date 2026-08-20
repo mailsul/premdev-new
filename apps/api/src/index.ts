@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import fastifyJwt from "@fastify/jwt";
 import fastifyCors from "@fastify/cors";
@@ -20,7 +20,7 @@ import { adminRoutes } from "./routes/admin.js";
 import { dbRoutes } from "./routes/db.js";
 import { vfsRoutes } from "./routes/vfs.js";
 import { setupProxy } from "./routes/proxy.js";
-import { apiLimiter, aiLimiter, loginLimiter, clientIp } from "./lib/rate-limit.js";
+import { apiLimiter, aiLimiter, fileWriteLimiter, loginLimiter, clientIp } from "./lib/rate-limit.js";
 import { getAllRtSettings } from "./lib/ai-settings.js";
 import { applyAIBudgets } from "./lib/ai-prompt.js";
 import { startCrashMonitor } from "./lib/crash-monitor.js";
@@ -28,7 +28,7 @@ import { startCrashMonitor } from "./lib/crash-monitor.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const app = Fastify({
+const app: FastifyInstance = Fastify({
   logger: {
     level: config.LOG_LEVEL,
     transport: config.NODE_ENV === "development"
@@ -38,9 +38,10 @@ const app = Fastify({
   // Trust ONLY the immediate proxy (Caddy) — not arbitrary upstream
   // X-Forwarded-For headers. Without this restriction an attacker could
   // spoof X-Forwarded-For to bypass per-IP rate limiting and lockout.
-  // In production the request chain is: client → Caddy → app, so 1 hop.
+  // In production the request chain is: client → Caddy → app, so only the
+  // direct peer (hop 0) is trusted.
   // In dev (no proxy) this still works — req.ip falls back to the socket.
-  trustProxy: 1,
+  trustProxy: (_address, hop) => hop === 0,
   bodyLimit: 50 * 1024 * 1024,
 });
 
@@ -88,8 +89,10 @@ await app.register(fastifyWebsocket);
 // (the setNotFoundHandler below specifically excludes /ws/* from the SPA fallback)
 await app.register(terminalRoutes);
 
-// Per-IP rate limiting on the API surface. Two pools:
+// Per-IP rate limiting on the API surface. Three pools:
 //   - apiLimiter: generous (120 burst / +2/s) — covers normal browsing
+//   - fileWriteLimiter: separate bounded pool for editor writes/uploads, so
+//     background tree/status polling cannot make a user upload hit a 429
 //   - aiLimiter:  tight   (30  burst / +1/5s) — applied to /api/ai/* only,
 //     since each AI call costs real money on upstream providers
 // Health endpoint is excluded so monitoring scripts don't burn tokens.
@@ -99,7 +102,14 @@ app.addHook("onRequest", async (req, reply) => {
   if (url === "/api/health") return;
   const ip = clientIp(req);
   const isAi = url.startsWith("/api/ai/");
-  const ok = isAi ? aiLimiter.take(`ai:${ip}`) : apiLimiter.take(`api:${ip}`);
+  const isFileWrite =
+    /^\/api\/workspaces\/[^/]+\/(?:files(?:\/(?:create|delete|rename|upload))?|upload-zip)(?:\?|$)/.test(url) &&
+    !["GET", "HEAD", "OPTIONS"].includes(req.method);
+  const ok = isAi
+    ? aiLimiter.take(`ai:${ip}`)
+    : isFileWrite
+      ? fileWriteLimiter.take(`file-write:${ip}`)
+      : apiLimiter.take(`api:${ip}`);
   if (!ok) {
     reply.code(429).send({ error: "Too many requests. Please slow down." });
   }

@@ -183,6 +183,37 @@ export const fileRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
+  // Upload one file in a single multipart request. The previous frontend
+  // implementation created an empty file and then issued a second PUT with
+  // FileReader text content. Besides doubling traffic (and triggering the
+  // global rate limit during a batch), it corrupted binary assets. Keeping
+  // the payload as a Buffer makes image/font uploads reliable.
+  app.post("/:id/files/upload", async (req, reply) => {
+    const w = await getWorkspace(req, reply);
+    if (!w) return;
+    let targetPath = "";
+    let content: Buffer | null = null;
+    for await (const part of req.parts()) {
+      if (part.type === "field" && part.fieldname === "path") {
+        targetPath = String((part as any).value ?? "");
+      } else if (part.type === "file" && part.fieldname === "file") {
+        content = await (part as any).toBuffer();
+      }
+    }
+    if (!targetPath || content == null) {
+      return reply.code(400).send({ error: "File and path are required" });
+    }
+    let abs: string;
+    try {
+      abs = safeWritePath(workspacePath(w.id), targetPath);
+    } catch (e: any) {
+      return reply.code(400).send({ error: e?.message ?? "Invalid path" });
+    }
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content);
+    return { ok: true, path: targetPath, size: content.length };
+  });
+
   // Accept either { path } (legacy single) or { paths: [...] } (bulk).
   // Returning per-path success lets the FE show a partial-failure toast
   // when one of many paths is invalid, without aborting the whole batch.
