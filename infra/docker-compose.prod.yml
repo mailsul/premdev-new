@@ -93,6 +93,11 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/premdev/data:/var/lib/premdev
+      # VPS filesystem browser (/admin → VPS Files).
+      # Mounts the host root as /vpsroot inside the container so the API can
+      # read/write host files without running on the host directly.
+      # Remove this line if you don't want to expose the host filesystem.
+      - /:/vpsroot:rw
     depends_on:
       mysql:
         condition: service_healthy
