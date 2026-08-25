@@ -7,7 +7,7 @@ import {
   Plus, MessageSquare, Mic, MicOff, Bookmark, FlaskConical,
   Clock, Zap, ChevronDown, Loader2, Brain,
   Terminal, BookOpen, PenLine, Wrench, RefreshCw,
-  Users, GitMerge, ChevronRight, Shield, AlertTriangle,
+  Users, GitMerge, ChevronRight, Shield, AlertTriangle, RotateCcw,
 } from "lucide-react";
 import { API } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
@@ -27,6 +27,14 @@ type Msg = {
   // flag on the same request — this field exists purely as a client-side
   // marker so the UI / persistence layer can distinguish them.
   synthetic?: boolean;
+  // When synthetic=true AND continuation=true, this is an auto-injected
+  // "please continue" user message — hide it from the UI entirely.
+  // When synthetic=true but continuation is absent/false, it's a status
+  // message (loop warning, session summary) that SHOULD be rendered.
+  continuation?: boolean;
+  // For session-end summary messages: the checkpoint ID that was created
+  // at the start of this session (so user can rollback).
+  sessionCheckpointId?: string;
   // Provenance: which provider/model produced this assistant reply,
   // captured at SEND time so historical bubbles keep showing the model
   // that actually generated them even after the user later switches the
@@ -322,11 +330,6 @@ async function runAction(
       return { ok: r.exitCode === 0, output: r.output ?? "" };
     }
     if (action.kind === "file") {
-      try {
-        await fetchJson("POST", `/workspaces/${workspaceId}/checkpoints`, {
-          message: `Auto: before AI edit ${action.path}`,
-        });
-      } catch {}
       await fetchJson("POST", `/workspaces/${workspaceId}/files/create`, {
         path: action.path,
         type: "file",
@@ -389,11 +392,6 @@ async function runAction(
       return { ok: true, output: `Renamed ${action.from} → ${action.to}` };
     }
     if (action.kind === "patch") {
-      try {
-        await fetchJson("POST", `/workspaces/${workspaceId}/checkpoints`, {
-          message: `Auto: before AI patch ${action.path}`,
-        });
-      } catch {}
       const r = await fetchJson("POST", `/workspaces/${workspaceId}/files/patch`, {
         path: action.path,
         find: action.find,
@@ -1038,7 +1036,8 @@ function parseMarkdown(text: string): MdNode[] {
       continue;
     }
     if (line.trim() === "") { i++; continue; }
-    // Paragraph: gather consecutive non-empty, non-special lines
+    // Paragraph: gather consecutive non-empty, non-special lines.
+    // Must stop at pipe-table start so table rows don't get absorbed.
     const buf: string[] = [line];
     i++;
     while (
@@ -1047,7 +1046,8 @@ function parseMarkdown(text: string): MdNode[] {
       !/^```/.test(lines[i]) &&
       !/^#{1,6}\s+/.test(lines[i]) &&
       !/^\s*[-*+]\s+/.test(lines[i]) &&
-      !/^>\s+/.test(lines[i])
+      !/^>\s+/.test(lines[i]) &&
+      !(/^\|.+\|/.test(lines[i]) && i + 1 < lines.length && /^\|[\s|:-]+\|/.test(lines[i + 1]))
     ) { buf.push(lines[i]); i++; }
     out.push({ type: "para", text: buf.join("\n") });
   }
@@ -1513,8 +1513,9 @@ export function AIChat({
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
   const iterationRef = useRef<number>(0);
   const stoppedRef = useRef<boolean>(false);
-  const sessionStartRef = useRef<number>(0);   // wall-clock ms when current session started
-  const sessionActionsRef = useRef<number>(0); // total actions run this session
+  const sessionStartRef = useRef<number>(0);       // wall-clock ms when current session started
+  const sessionActionsRef = useRef<number>(0);     // total actions run this session
+  const sessionCheckpointRef = useRef<string | null>(null); // checkpoint created at start of this session
   // Per-message action results: msgIdx -> [results]. Filled sequentially by
   // the autonomous orchestrator below; ActionCard reads from this map to
   // display the outcome without ever running the action itself.
@@ -2348,6 +2349,7 @@ export function AIChat({
     processedBatchesRef.current = new Set();
     sessionStartRef.current = Date.now();
     sessionActionsRef.current = 0;
+    sessionCheckpointRef.current = null;
     batchHistoryRef.current = [];
     setAutoManagedBatches(new Set());
     // Clear any pending mid-run queue from the PREVIOUS AI turn so the
@@ -2605,6 +2607,7 @@ export function AIChat({
         const mins = Math.floor(elapsed / 60);
         const secs = elapsed % 60;
         const timeStr = mins > 0 ? `${mins} mnt ${secs} dtk` : `${secs} dtk`;
+        const ckId = sessionCheckpointRef.current ?? undefined;
         setMsgs((prev) => [
           ...prev,
           {
@@ -2612,6 +2615,7 @@ export function AIChat({
             content: `✅ **Selesai** — ${timeStr} · ${sessionActionsRef.current} aksi dijalankan`,
             synthetic: true,
             sentAt: Date.now(),
+            ...(ckId ? { sessionCheckpointId: ckId } : {}),
           },
         ]);
       }
@@ -2724,6 +2728,18 @@ export function AIChat({
 
     (async () => {
       setAutoExecuting(true);
+      // Create a session-level checkpoint before the FIRST batch of actions.
+      // This lets the user roll back ALL AI changes in one click.
+      if (iterationRef.current === 0 && sessionCheckpointRef.current === null) {
+        try {
+          const ckRes = await fetchJson("POST", `/workspaces/${workspaceId}/checkpoints`, {
+            message: "Auto: início de sessão AI",
+          });
+          sessionCheckpointRef.current = ckRes?.checkpoint?.id ?? null;
+        } catch {
+          // Non-fatal: checkpoint creation failure must not block AI execution.
+        }
+      }
       const results: ActionResult[] = [];
       for (let i = 0; i < toRun.length; i++) {
         if (stoppedRef.current) break;
@@ -3093,12 +3109,36 @@ export function AIChat({
           </div>
         )}
         {msgs.map((m, i) => {
-          // Hide auto-continuation user messages from the UI — the user
-          // never typed them, they're a synthetic "please continue" signal
-          // we send to the model. Still kept in `msgs` so the in-flight
-          // recursion can pick up the right history; stripped from
-          // localStorage by the persistence effect above.
-          if (m.synthetic) return null;
+          // Hide auto-continuation user messages — the user never typed them.
+          // synthetic=true + continuation=true → internal "please continue" signals.
+          // synthetic=true WITHOUT continuation → status messages (summary, warnings) → SHOW.
+          if (m.synthetic && m.continuation) return null;
+          if (m.synthetic) {
+            // Render status / summary synthetic messages as a slim banner
+            return (
+              <div key={i} className="mx-1 my-1">
+                <div className="rounded-md border border-bg-border bg-bg-subtle/60 px-3 py-2 text-xs text-text-muted">
+                  <Markdown text={m.content} />
+                  {m.sessionCheckpointId && (
+                    <button
+                      className="mt-2 flex items-center gap-1 rounded border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-warning hover:bg-warning/20"
+                      onClick={async () => {
+                        if (!confirm("Rollback semua perubahan file sejak sesi ini dimulai?")) return;
+                        try {
+                          await fetch(`/api/workspaces/${workspaceId}/checkpoints/${m.sessionCheckpointId}/restore`, { method: "POST" });
+                          alert("✅ Rollback selesai — workspace dikembalikan ke kondisi sebelum sesi AI ini.");
+                        } catch {
+                          alert("❌ Rollback gagal.");
+                        }
+                      }}
+                    >
+                      <RotateCcw size={11} /> Rollback sesi ini
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          }
           return (
             <Bubble
               key={i}
