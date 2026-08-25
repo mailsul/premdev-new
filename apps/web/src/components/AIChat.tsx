@@ -490,6 +490,20 @@ async function runAction(
 }
 
 /**
+ * Fast 32-bit FNV-1a hash — deterministic, collision-resistant enough for
+ * loop-detection fingerprints. Returns a 6-char base-36 string.
+ * Never used for security; purely for action fingerprinting.
+ */
+function fnv1a32(s: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h.toString(36).slice(0, 6);
+}
+
+/**
  * Build the audit "target" string for a given action — short, human-readable,
  * and stable across the bash/file/setRun/setEnv/restart/checkpoint variants.
  * Mirrors actionLabel() but optimised for log filtering rather than UI display.
@@ -619,13 +633,10 @@ function formatToolResults(actions: Action[], results: ActionResult[]): string {
   return lines.join("\n");
 }
 
-// Effectively unlimited per user request — the orchestrator runs until
-// the AI stops emitting actions or the user clicks Stop. The 999 cap is
-// only a runaway-loop safety net (a model emitting an action every turn
-// for 999 turns would hit ~16 million tokens of activity, which is a
-// clear pathology worth aborting). Real interactive sessions never get
-// near this number.
-const MAX_AUTO_ITERATIONS = 999;
+// Conservative default — still allows long multi-step sessions but stops
+// clearly-runaway loops before they burn thousands of tokens. Configurable
+// at runtime: localStorage.setItem("premdev:ai:maxIterations", "30").
+const MAX_AUTO_ITERATIONS_DEFAULT = 20;
 
 /**
  * Strip backend routing annotations injected by the auto-model router.
@@ -1466,11 +1477,26 @@ export function AIChat({
   // finishes. The displayed count drives the "N pesan di-queue" pill.
   const pendingQueueRef = useRef<string[]>([]);
   const [queuedCount, setQueuedCount] = useState<number>(0);
-  // Effectively unlimited (was 10, then user asked for no limit at all).
-  // Same runaway-loop safety net rationale as MAX_AUTO_ITERATIONS — 999
-  // rounds × 16k output ≈ 16M tokens, well past any legitimate single
-  // user turn. The real bounds are the user's wallet and the Stop button.
-  const MAX_CONTINUATIONS = 999;
+  // Configurable max autonomous iterations per user turn. Read from
+  // localStorage so power users can raise/lower it without a code change:
+  //   localStorage.setItem("premdev:ai:maxIterations", "30")
+  const MAX_AUTO_ITERATIONS = (() => {
+    try {
+      const v = parseInt(localStorage.getItem("premdev:ai:maxIterations") ?? "", 10);
+      return v > 0 && v <= 500 ? v : MAX_AUTO_ITERATIONS_DEFAULT;
+    } catch { return MAX_AUTO_ITERATIONS_DEFAULT; }
+  })();
+  // Same pattern for continuation (mid-output truncation) rounds.
+  //   localStorage.setItem("premdev:ai:maxContinuations", "30")
+  const MAX_CONTINUATIONS = (() => {
+    try {
+      const v = parseInt(localStorage.getItem("premdev:ai:maxContinuations") ?? "", 10);
+      return v > 0 && v <= 500 ? v : 20;
+    } catch { return 20; }
+  })();
+  // Rolling history of action fingerprints for loop detection.
+  // Each entry = array of fingerprints for one executed batch.
+  const batchHistoryRef = useRef<string[][]>([]);
   // Mirror of the latest committed `msgs` state, kept in sync via the
   // useEffect below. Needed because `sendRaw()` recursively re-invokes
   // itself for auto-continuation; the recursive call would otherwise
@@ -2084,6 +2110,7 @@ export function AIChat({
     if (!txt || streaming || autoExecuting) return;
     setInput("");
     stoppedRef.current = false;
+    batchHistoryRef.current = [];
 
     const configuredProviders = providers?.providers.filter((p) => p.configured) ?? [];
     const members = councilMembers.length >= 2
@@ -2228,6 +2255,7 @@ export function AIChat({
     stoppedRef.current = false;
     continuationCountRef.current = 0;
     processedBatchesRef.current = new Set();
+    batchHistoryRef.current = [];
     setAutoManagedBatches(new Set());
     // Clear any pending mid-run queue from the PREVIOUS AI turn so the
     // newly typed message starts fresh. Queue items are only valid for the
@@ -2268,6 +2296,7 @@ export function AIChat({
       continuationCountRef.current = 0;
       iterationRef.current = 0;
       processedBatchesRef.current = new Set();
+      batchHistoryRef.current = [];
       setAutoManagedBatches(new Set());
       await sendRaw(queued, []);
     }
@@ -2378,6 +2407,7 @@ export function AIChat({
     setActionResults(new Map());
     setAutoManagedBatches(new Set());
     processedBatchesRef.current = new Set();
+    batchHistoryRef.current = [];
     iterationRef.current = 0;
     lastAutoSavedTurnRef.current = 0;
     try { localStorage.removeItem(TAB_MSGS_KEY(workspaceId, activeTabId)); } catch {}
@@ -2398,6 +2428,7 @@ export function AIChat({
     setActionResults(new Map());
     setAutoManagedBatches(new Set());
     processedBatchesRef.current = new Set();
+    batchHistoryRef.current = [];
     iterationRef.current = 0;
   }
   function switchTab(id: string) {
@@ -2407,6 +2438,7 @@ export function AIChat({
     setActionResults(new Map());
     setAutoManagedBatches(new Set());
     processedBatchesRef.current = new Set();
+    batchHistoryRef.current = [];
     iterationRef.current = 0;
   }
   function renameTab(id: string) {
@@ -2434,6 +2466,14 @@ export function AIChat({
   // previous), populate the results map for ActionCard display, then send a
   // "Tool results" continuation so the AI can keep iterating. Bounded by
   // MAX_AUTO_ITERATIONS and stoppedRef.
+  //
+  // Enhancements:
+  //  • Loop detection — if any action fingerprint appears in 3 consecutive
+  //    batches the loop is stopped and the user is notified.
+  //  • Auto-inject diag — if AI wrote/patched a file but skipped diagnostics,
+  //    a diag action is appended automatically.
+  //  • Auto-inject curl — if AI restarted the workspace but included no
+  //    follow-up health check, a curl probe is appended automatically.
   useEffect(() => {
     if (!autonomous || streaming || autoExecuting || stoppedRef.current) return;
     const lastIdx = msgs.length - 1;
@@ -2449,14 +2489,111 @@ export function AIChat({
       return n;
     });
 
+    // ── Loop detection ──────────────────────────────────────────────────────
+    // Build a content-sensitive fingerprint per action. The payload is hashed
+    // (not just the path) so three distinct patches to the same file are
+    // correctly seen as three DIFFERENT operations, while a truly repeated
+    // identical operation (same command, same find+replace, same content)
+    // is correctly flagged as a loop.
+    // Every behavior-affecting field is included in the hash so distinct
+    // operations on the same target are not confused with repeated loops.
+    const actionFp = (a: Action): string => {
+      switch (a.kind) {
+        case "bash":       return `bash:${fnv1a32(a.command)}`;
+        case "file":       return `file:${a.path}@${fnv1a32(a.content)}`;
+        case "patch":      return `patch:${a.path}@${fnv1a32(a.find + "\0" + a.replace + "\0" + String(a.replaceAll))}`;
+        case "delete":     return `delete:${a.path}`;
+        case "mkdir":      return `mkdir:${a.path}`;
+        case "rename":     return `rename:${a.from}→${a.to}`;
+        case "restart":    return "restart:";
+        case "diag":       return "diag:";
+        case "test":       return `test:${fnv1a32(a.command ?? "")}`;
+        case "search":     return `search:${fnv1a32(a.pattern + "\0" + (a.pathGlob ?? "") + "\0" + String(a.regex))}`;
+        case "db":         return `db:${fnv1a32(a.sql)}`;
+        case "web":        return `web:${fnv1a32(a.query)}`;
+        case "webFetch":   return `webFetch:${fnv1a32(a.url)}`;
+        case "memorySave": return `memorySave:${fnv1a32(a.content)}`;
+        case "setRun":     return `setRun:${fnv1a32(a.command)}`;
+        case "setEnv":     return `setEnv:${fnv1a32(JSON.stringify(a.vars))}`;
+        case "checkpoint": return `checkpoint:${fnv1a32(a.message)}`;
+        case "open":       return `open:${a.path}`;
+        default:           return `${(a as Action).kind}:`;
+      }
+    };
+    const currentFps = acts.map(actionFp);
+    const batchHistory = batchHistoryRef.current;
+    // Stop if any fingerprint has appeared in each of the last 2 batches AND
+    // the current one (= 3 consecutive identical actions across 3 turns).
+    if (batchHistory.length >= 2) {
+      const prev1 = new Set(batchHistory[batchHistory.length - 1]);
+      const prev2 = new Set(batchHistory[batchHistory.length - 2]);
+      const loopFp = currentFps.find((fp) => prev1.has(fp) && prev2.has(fp));
+      if (loopFp) {
+        stoppedRef.current = true;
+        // Mark every action in this batch as skipped so ActionCards show a
+        // stopped/skipped state instead of remaining in a pending/queued look.
+        setActionResults((prev) => {
+          const n = new Map(prev);
+          n.set(lastIdx, acts.map(() => ({
+            ok: false,
+            output: "⏹ Dihentikan — loop terdeteksi",
+          })));
+          return n;
+        });
+        setMsgs((prev) => [
+          ...prev,
+          {
+            role: "assistant" as const,
+            content: `⚠️ **Loop terdeteksi** — AI tampaknya berputar-putar (action \`${loopFp}\` diulang 3 kali berturut-turut). Sesi dihentikan otomatis. Silakan periksa secara manual.`,
+            synthetic: true,
+            sentAt: Date.now(),
+          },
+        ]);
+        return;
+      }
+    }
+    // Record current batch fingerprints; keep last 10 batches only.
+    batchHistoryRef.current = [...batchHistory.slice(-9), currentFps];
+
+    // ── Auto-inject verification actions ───────────────────────────────────
+    // Clone the action list so the AI-authored actions are unchanged for
+    // ActionCard display while we can append to the execution queue.
+    const toRun: Action[] = [...acts];
+
+    // 1. Inject diag:run if the LAST file/patch action in the batch is not
+    // already followed by a diagnostic. This is order-sensitive: a batch
+    // like [diag, file] still gets a trailing diag, while [file, diag]
+    // does not. We check from the last edit index to the end.
+    const lastEditIdx = acts.reduce<number>(
+      (max, a, i) => (a.kind === "file" || a.kind === "patch") ? i : max,
+      -1,
+    );
+    const diagAfterLastEdit = lastEditIdx !== -1
+      && acts.slice(lastEditIdx + 1).some((a) => a.kind === "diag");
+    if (lastEditIdx !== -1 && !diagAfterLastEdit) toRun.push({ kind: "diag" });
+
+    // 2. Always inject a standardized localhost health-check after any restart.
+    // Unconditional injection is the only reliable guarantee: any non-localhost
+    // bash command (external curl, wget download, echo) cannot confirm that the
+    // restarted workspace service is actually healthy.
+    // Flags: -f (fail on HTTP ≥ 400), -s (suppress progress), -S (show errors),
+    //        -I (HEAD only), --max-time (abort if server never responds).
+    const hasRestart = acts.some((a) => a.kind === "restart");
+    if (hasRestart) {
+      toRun.push({
+        kind: "bash",
+        command: `sleep 2 && curl -fsSI --max-time 10 "http://localhost:\${PORT:-5000}/"`,
+      });
+    }
+
     (async () => {
       setAutoExecuting(true);
       const results: ActionResult[] = [];
-      for (let i = 0; i < acts.length; i++) {
+      for (let i = 0; i < toRun.length; i++) {
         if (stoppedRef.current) break;
         const ac = new AbortController();
         actionAbortRef.current = ac;
-        const r = await runAction(workspaceId, acts[i], ac.signal);
+        const r = await runAction(workspaceId, toRun[i], ac.signal);
         actionAbortRef.current = null;
         results[i] = r;
         // Audit each action with the provider/model that triggered it. Fire
@@ -2465,7 +2602,7 @@ export function AIChat({
           workspaceId,
           provider,
           model,
-          action: acts[i],
+          action: toRun[i],
           result: r,
         });
         // Snapshot results into state so ActionCard re-renders with outcome.
@@ -2474,7 +2611,7 @@ export function AIChat({
           n.set(lastIdx, results.slice());
           return n;
         });
-        const k = acts[i].kind;
+        const k = toRun[i].kind;
         if (k === "file" || k === "setRun" || k === "setEnv") onFilesMutated?.();
         if (k === "restart" || k === "setRun") onWorkspaceMutated?.();
         // If user clicked Stop mid-action, the abort propagates as a
@@ -2485,7 +2622,9 @@ export function AIChat({
       if (stoppedRef.current) return;
       if (iterationRef.current >= MAX_AUTO_ITERATIONS) return;
       iterationRef.current += 1;
-      await sendRaw(formatToolResults(acts, results));
+      // Pass `toRun` (not `acts`) so the AI receives results for injected
+      // verification steps too (diag output, curl response).
+      await sendRaw(formatToolResults(toRun, results));
     })().catch(() => {
       setAutoExecuting(false);
       actionAbortRef.current = null;
