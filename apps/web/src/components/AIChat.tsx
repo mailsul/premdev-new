@@ -1513,6 +1513,8 @@ export function AIChat({
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
   const iterationRef = useRef<number>(0);
   const stoppedRef = useRef<boolean>(false);
+  const sessionStartRef = useRef<number>(0);   // wall-clock ms when current session started
+  const sessionActionsRef = useRef<number>(0); // total actions run this session
   // Per-message action results: msgIdx -> [results]. Filled sequentially by
   // the autonomous orchestrator below; ActionCard reads from this map to
   // display the outcome without ever running the action itself.
@@ -2344,6 +2346,8 @@ export function AIChat({
     stoppedRef.current = false;
     continuationCountRef.current = 0;
     processedBatchesRef.current = new Set();
+    sessionStartRef.current = Date.now();
+    sessionActionsRef.current = 0;
     batchHistoryRef.current = [];
     setAutoManagedBatches(new Set());
     // Clear any pending mid-run queue from the PREVIOUS AI turn so the
@@ -2594,7 +2598,25 @@ export function AIChat({
       }
     }
 
-    if (acts.length === 0) return; // AI ended naturally — loop stops
+    if (acts.length === 0) {
+      // AI ended naturally — show session summary if we ran at least 1 action.
+      if (autonomous && sessionActionsRef.current > 0) {
+        const elapsed = Math.round((Date.now() - sessionStartRef.current) / 1000);
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        const timeStr = mins > 0 ? `${mins} mnt ${secs} dtk` : `${secs} dtk`;
+        setMsgs((prev) => [
+          ...prev,
+          {
+            role: "assistant" as const,
+            content: `✅ **Selesai** — ${timeStr} · ${sessionActionsRef.current} aksi dijalankan`,
+            synthetic: true,
+            sentAt: Date.now(),
+          },
+        ]);
+      }
+      return;
+    }
     if (processedBatchesRef.current.has(lastIdx)) return;
     processedBatchesRef.current.add(lastIdx);
     setAutoManagedBatches((prev) => {
@@ -2728,6 +2750,7 @@ export function AIChat({
         const r = await runAction(workspaceId, toRun[i], ac.signal, { provider, model });
         actionAbortRef.current = null;
         results[i] = r;
+        sessionActionsRef.current += 1;
         // Audit each action with the provider/model that triggered it. Fire
         // and forget — never block on the network here.
         logAudit({

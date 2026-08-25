@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { API } from "@/lib/api";
 import { Layout } from "@/components/Layout";
-import { Plus, Trash2, Loader2, Activity, Users, HardDrive, Cpu, Key, Eye, EyeOff, Save, Shield, ScrollText, LogIn, Cloud, RefreshCw, Play, Download, AlertTriangle, Sparkles, Search, Database, Zap, Server, Folder, FileText, ChevronRight, Home, FolderPlus, FilePen, X, Globe, ToggleLeft, ToggleRight, Star, ExternalLink, BookOpen, Clock } from "lucide-react";
+import { Plus, Trash2, Loader2, Activity, Users, HardDrive, Cpu, Key, Eye, EyeOff, Save, Shield, ScrollText, LogIn, Cloud, RefreshCw, Play, Download, AlertTriangle, Sparkles, Search, Database, Zap, Server, Folder, FileText, ChevronRight, Home, FolderPlus, FilePen, X, Globe, ToggleLeft, ToggleRight, Star, ExternalLink, BookOpen, Clock, Check } from "lucide-react";
 import { useConfirm } from "@/lib/useConfirm";
 
 type Tab = "users" | "audit" | "logins" | "backup" | "semantic" | "vpsfiles" | "ai-runtime" | "domains" | "custom-providers" | "metrics";
@@ -2370,10 +2370,12 @@ function CustomProviderForm({
 }) {
   const [name, setName] = useState(provider?.name ?? "");
   const [baseUrl, setBaseUrl] = useState(provider?.base_url ?? "");
-  // Multi-key support: each entry is one new API key being typed.
-  // Empty entries are ignored on save. If all empty on edit → keys unchanged.
-  const [newKeys, setNewKeys] = useState<string[]>([""]);
-  const [showKeys, setShowKeys] = useState<boolean[]>([false]);
+  // Comma-separated keys input (same UX as built-in providers)
+  const [keysText, setKeysText] = useState("");
+  const [showKeys, setShowKeys] = useState(false);
+  // Saved masked keys fetched from server (when editing existing provider)
+  const [savedMaskedKeys, setSavedMaskedKeys] = useState<string[]>([]);
+  const [loadingKeys, setLoadingKeys] = useState(false);
   const [defaultModel, setDefaultModel] = useState(provider?.default_model ?? "");
   const [modelsRaw, setModelsRaw] = useState(provider?.models.join(", ") ?? "");
   const [docsUrl, setDocsUrl] = useState(provider?.docs_url ?? "");
@@ -2381,20 +2383,15 @@ function CustomProviderForm({
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  function addKeySlot() {
-    setNewKeys((k) => [...k, ""]);
-    setShowKeys((s) => [...s, false]);
-  }
-  function removeKeySlot(i: number) {
-    setNewKeys((k) => k.filter((_, idx) => idx !== i));
-    setShowKeys((s) => s.filter((_, idx) => idx !== i));
-  }
-  function updateKey(i: number, val: string) {
-    setNewKeys((k) => k.map((v, idx) => (idx === i ? val : v)));
-  }
-  function toggleShowKey(i: number) {
-    setShowKeys((s) => s.map((v, idx) => (idx === i ? !v : v)));
-  }
+  // Fetch saved masked keys when editing an existing provider
+  useEffect(() => {
+    if (!provider?.id || !provider.configured) return;
+    setLoadingKeys(true);
+    API.get<{ keys: string[]; count: number }>(`/admin/custom-providers/${provider.id}/keys`)
+      .then((r) => setSavedMaskedKeys(r.keys ?? []))
+      .catch(() => {})
+      .finally(() => setLoadingKeys(false));
+  }, [provider?.id]);
 
   async function save() {
     if (!name.trim() || !baseUrl.trim()) {
@@ -2405,7 +2402,7 @@ function CustomProviderForm({
     setErr("");
     try {
       const models = modelsRaw.split(",").map((m) => m.trim()).filter(Boolean);
-      const filledKeys = newKeys.map((k) => k.trim()).filter(Boolean);
+      const filledKeys = keysText.split(",").map((k) => k.trim()).filter(Boolean);
       const body: Record<string, unknown> = {
         name: name.trim(),
         base_url: baseUrl.trim(),
@@ -2415,7 +2412,7 @@ function CustomProviderForm({
         enabled,
       };
       // Only send api_keys when the user actually typed something —
-      // an empty array means "don't touch stored keys" on the backend.
+      // an empty value means "don't touch stored keys" on the backend.
       if (filledKeys.length > 0) body.api_keys = filledKeys;
       if (provider?.id) {
         await API.put(`/admin/custom-providers/${provider.id}`, body);
@@ -2469,72 +2466,66 @@ function CustomProviderForm({
           </div>
 
           <div>
-            <div className="mb-1 flex items-center justify-between">
-              <label className="text-xs font-medium text-text-muted">
-                API Keys
-                {provider?.configured && (
-                  <span className="ml-1.5 font-normal text-success">
-                    ({provider.key_count} tersimpan — biarkan kosong untuk tidak mengubah)
-                  </span>
-                )}
-                {!provider?.configured && (
-                  <span className="ml-1.5 font-normal text-text-muted">(opsional — bisa diisi user nanti)</span>
-                )}
-              </label>
+            <label className="mb-1 block text-xs font-medium text-text-muted">
+              API Keys
+              {!provider?.configured && (
+                <span className="ml-1.5 font-normal text-text-muted">(opsional — bisa diisi nanti)</span>
+              )}
+            </label>
+
+            {/* Show currently saved masked keys */}
+            {provider?.configured && (
+              <div className="mb-2 rounded border border-bg-border bg-bg-subtle px-3 py-2 text-[11px]">
+                <div className="mb-1 flex items-center gap-1.5 font-medium text-success">
+                  <Check size={11} />
+                  {provider.key_count} key tersimpan{provider.key_count > 1 ? " (dirotasi acak)" : ""}
+                  {loadingKeys && <Loader2 size={10} className="animate-spin ml-1" />}
+                </div>
+                <div className="space-y-0.5 font-mono text-text-muted">
+                  {savedMaskedKeys.map((k, i) => (
+                    <div key={i}>
+                      <span className="opacity-60">#{i + 1}:</span> {k}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Comma-separated key input */}
+            <div className="flex gap-2">
+              <input
+                className="input flex-1 font-mono text-sm"
+                type={showKeys ? "text" : "password"}
+                placeholder={
+                  provider?.configured
+                    ? "key baru (kosong = tidak ubah) — pisah koma untuk multi-key"
+                    : "sk-… — pisahkan dengan koma untuk multi-key (sk-key1,sk-key2)"
+                }
+                value={keysText}
+                onChange={(e) => setKeysText(e.target.value)}
+              />
               <button
+                className="btn-ghost px-2 shrink-0"
+                onClick={() => setShowKeys((s) => !s)}
+                title={showKeys ? "Sembunyikan" : "Tampilkan"}
                 type="button"
-                className="btn-secondary text-[11px] py-0.5 px-2"
-                onClick={addKeySlot}
-                title="Tambah key lagi"
               >
-                <Plus size={11} /> Tambah key
+                {showKeys ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
             </div>
-            <div className="space-y-2">
-              {newKeys.map((k, i) => (
-                <div key={i} className="flex gap-2 items-center">
-                  <input
-                    className="input flex-1 font-mono text-sm"
-                    type={showKeys[i] ? "text" : "password"}
-                    placeholder={
-                      provider?.configured
-                        ? `Key ${i + 1} baru (kosong = tidak ubah)`
-                        : `sk-… / bearer token (key ${i + 1})`
-                    }
-                    value={k}
-                    onChange={(e) => updateKey(i, e.target.value)}
-                  />
-                  <button
-                    className="btn-ghost px-2 shrink-0"
-                    onClick={() => toggleShowKey(i)}
-                    title={showKeys[i] ? "Sembunyikan" : "Tampilkan"}
-                    type="button"
-                  >
-                    {showKeys[i] ? <EyeOff size={14} /> : <Eye size={14} />}
-                  </button>
-                  {newKeys.length > 1 && (
-                    <button
-                      className="btn-ghost px-1.5 text-danger shrink-0"
-                      onClick={() => removeKeySlot(i)}
-                      title="Hapus slot key ini"
-                      type="button"
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-            {newKeys.filter(k => k.trim()).length > 1 && (
+            {keysText.split(",").filter(k => k.trim()).length > 1 && (
               <p className="mt-1 text-[10px] text-info">
-                ✓ {newKeys.filter(k => k.trim()).length} keys — akan dirotasi acak setiap request (load balancing / rate-limit avoidance)
+                ✓ {keysText.split(",").filter(k => k.trim()).length} keys — dirotasi acak setiap request
               </p>
             )}
-            {provider?.configured && newKeys.filter(k => k.trim()).length > 0 && (
+            {provider?.configured && keysText.trim() && (
               <p className="mt-1 text-[10px] text-warning">
-                ⚠ Keys yang diisi akan MENGGANTI semua {provider.key_count} key lama yang tersimpan
+                ⚠ Akan MENGGANTI semua {provider.key_count} key lama
               </p>
             )}
+            <p className="mt-1 text-[10px] text-text-muted">
+              Multi-key: tempel beberapa key dipisah <code className="rounded bg-bg-hover px-1 font-mono">,</code> — AI rotasi otomatis tiap request
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
