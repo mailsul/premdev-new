@@ -406,6 +406,253 @@ export async function search(workspaceId: string, query: string, k = 5): Promise
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// BM25 keyword search
+// ---------------------------------------------------------------------------
+
+// BM25 tuning parameters (Robertson et al. standard defaults).
+const BM25_K1 = 1.5;
+const BM25_B  = 0.75;
+
+/** Simple whitespace + punctuation tokeniser — good enough for code. */
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9_]+/)
+    .filter((t) => t.length >= 2 && t.length <= 50);
+}
+
+interface DocEntry {
+  path: string;
+  startLine: number;
+  endLine: number;
+  content: string;
+}
+
+/**
+ * Score `docs` against `query` using BM25 and return up to `k` deduplicated
+ * hits (one per file path, highest score wins). Pure CPU, no I/O.
+ */
+function scoreBM25(docs: DocEntry[], query: string, k: number): SearchHit[] {
+  if (docs.length === 0) return [];
+  const qTokens = tokenize(query);
+  if (qTokens.length === 0) return [];
+
+  // Tokenise all docs once.
+  const tokenized = docs.map((d) => tokenize(d.content));
+  const avgdl = tokenized.reduce((s, t) => s + t.length, 0) / tokenized.length;
+  const N = docs.length;
+
+  // IDF per query token: log((N - df + 0.5) / (df + 0.5) + 1)
+  const idf = new Map<string, number>();
+  for (const tok of new Set(qTokens)) {
+    const df = tokenized.filter((t) => t.includes(tok)).length;
+    idf.set(tok, Math.log((N - df + 0.5) / (df + 0.5) + 1));
+  }
+
+  const scored: SearchHit[] = docs
+    .map((d, i) => {
+      const toks = tokenized[i];
+      const dl = toks.length;
+      // Build a TF map for this doc.
+      const tf = new Map<string, number>();
+      for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1);
+      let score = 0;
+      for (const tok of qTokens) {
+        const f = tf.get(tok) ?? 0;
+        if (f === 0) continue;
+        const idfVal = idf.get(tok) ?? 0;
+        score += idfVal * (f * (BM25_K1 + 1)) / (f + BM25_K1 * (1 - BM25_B + BM25_B * dl / avgdl));
+      }
+      return { path: d.path, startLine: d.startLine, endLine: d.endLine, content: d.content, score };
+    })
+    .filter((h) => h.score > 0);
+
+  scored.sort((a, b) => b.score - a.score);
+
+  // One hit per file (best-scoring chunk).
+  const seen = new Set<string>();
+  const out: SearchHit[] = [];
+  for (const h of scored) {
+    if (out.length >= k) break;
+    if (seen.has(h.path)) continue;
+    seen.add(h.path);
+    out.push(h);
+  }
+  return out;
+}
+
+/**
+ * BM25 keyword search over already-indexed chunks stored in SQLite.
+ * Synchronous — no embedding call, no I/O beyond the initial DB read.
+ * Returns [] if the index is empty.
+ */
+export function bm25Search(workspaceId: string, query: string, k = 5): SearchHit[] {
+  const root = workspacePath(workspaceId);
+  if (!fs.existsSync(root)) return [];
+  const db = openDb(workspaceId);
+  const count = (db.prepare("SELECT COUNT(*) AS n FROM chunks").get() as { n: number }).n;
+  if (count === 0) return [];
+
+  const rows = db.prepare(
+    "SELECT path, start_line, end_line, content FROM chunks",
+  ).all() as Array<{ path: string; start_line: number; end_line: number; content: string }>;
+
+  const docs: DocEntry[] = rows.map((r) => ({
+    path: r.path, startLine: r.start_line, endLine: r.end_line, content: r.content,
+  }));
+  return scoreBM25(docs, query, k);
+}
+
+/**
+ * BM25 keyword search that reads source files directly from disk — no SQLite
+ * index required. Used as a cold-start fallback when the embedding index is
+ * not yet ready (turn 1 of a new workspace).
+ *
+ * Capped at 300 files to stay fast enough for a real-time request.
+ */
+export function bm25SearchFromDisk(workspaceId: string, query: string, k = 5): SearchHit[] {
+  const root = workspacePath(workspaceId);
+  if (!fs.existsSync(root)) return [];
+
+  const files = walkWorkspace(root).slice(0, 300);
+  const docs: DocEntry[] = [];
+
+  for (const f of files) {
+    let buf: Buffer;
+    try { buf = fs.readFileSync(f.absPath); } catch { continue; }
+    if (looksBinary(buf)) continue;
+    const text = buf.toString("utf8");
+    for (const c of chunkFile(text)) {
+      docs.push({ path: f.relPath, startLine: c.startLine, endLine: c.endLine, content: c.content });
+    }
+    // Keep memory bounded — roughly 200 KB of chunk text is plenty for BM25.
+    if (docs.length > 2000) break;
+  }
+
+  return scoreBM25(docs, query, k);
+}
+
+// ---------------------------------------------------------------------------
+// Hybrid search: BM25 + Semantic via Reciprocal Rank Fusion
+// ---------------------------------------------------------------------------
+
+const RRF_K = 60; // standard RRF constant — insensitive to rank-list length
+
+/**
+ * Minimum cosine-similarity score a semantic hit must reach to participate in
+ * RRF fusion. Chunks below this are almost certainly off-topic — excluding
+ * them prevents low-confidence semantic results from artificially inflating
+ * the RRF score of an otherwise-weak keyword match.
+ */
+const MIN_SEMANTIC_COSINE = 0.20;
+
+/**
+ * BM25 relative threshold: a hit's raw BM25 score must be at least this
+ * fraction of the top BM25 score to enter RRF fusion. Removes long-tail
+ * keyword matches that share only a common stop-word with the query.
+ * e.g. 0.10 means anything scoring < 10 % of the top hit is filtered.
+ */
+const MIN_BM25_RELATIVE = 0.10;
+
+/**
+ * For cold-start (BM25-from-disk only): a hit's BM25 score must be at least
+ * this fraction of the top score to be returned. Same spirit as
+ * MIN_BM25_RELATIVE but applied without the semantic ranker to compensate.
+ */
+const MIN_BM25_COLDSTART_RELATIVE = 0.08;
+
+/**
+ * Combine BM25 keyword search and semantic vector search via Reciprocal Rank
+ * Fusion and return the top-K deduplicated hits.
+ *
+ * Pre-RRF relevance gates (applied before fusion, not after):
+ *   - Semantic hits with cosine score < MIN_SEMANTIC_COSINE are excluded from
+ *     the semantic ranker entirely (they may still appear via BM25).
+ *   - BM25 hits with score < MIN_BM25_RELATIVE * top_bm25_score are excluded.
+ *
+ * These gates are the primary noise filter. Because RRF scores cluster in a
+ * narrow band (1/61–1/81 per ranker), applying a threshold to the fused score
+ * cannot meaningfully separate relevant from irrelevant; the input lists must
+ * be pruned first.
+ *
+ * Behaviour:
+ *   - Cold start (no embedding index): BM25-from-disk only with a relative
+ *     threshold, so even turn 1 gets relevant snippets.
+ *   - Index ready: parallel BM25 (SQLite) + semantic, then RRF fusion.
+ */
+export async function hybridSearch(
+  workspaceId: string,
+  query: string,
+  k = 5,
+): Promise<SearchHit[]> {
+  const root = workspacePath(workspaceId);
+  if (!fs.existsSync(root)) return [];
+
+  const stats = workspaceIndexStats(workspaceId);
+  const hasIndex = stats.exists && stats.chunks > 0;
+
+  if (!hasIndex) {
+    // Cold start — kick off background indexing (for next turn) and return
+    // BM25-from-disk results immediately so turn 1 always gets snippets.
+    indexWorkspace(workspaceId).catch(() => {});
+    const diskHits = bm25SearchFromDisk(workspaceId, query, k * 4);
+    if (diskHits.length === 0) return [];
+    const topScore = diskHits[0].score;
+    const minScore = topScore * MIN_BM25_COLDSTART_RELATIVE;
+    return diskHits.filter((h) => h.score >= minScore).slice(0, k);
+  }
+
+  // Run both rankers in parallel — BM25 is synchronous so wrap in resolve.
+  const CANDIDATE_K = Math.max(k * 4, 20);
+  const [rawBm25, rawSemantic] = await Promise.all([
+    Promise.resolve(bm25Search(workspaceId, query, CANDIDATE_K)),
+    search(workspaceId, query, CANDIDATE_K),
+  ]);
+
+  // ── Pre-RRF relevance gates ───────────────────────────────────────────────
+  // Gate 1: semantic cosine threshold
+  const semanticHits = rawSemantic.filter((h) => h.score >= MIN_SEMANTIC_COSINE);
+
+  // Gate 2: BM25 relative threshold (top-score anchored)
+  const topBm25Score = rawBm25[0]?.score ?? 0;
+  const bm25Hits =
+    topBm25Score > 0
+      ? rawBm25.filter((h) => h.score >= topBm25Score * MIN_BM25_RELATIVE)
+      : [];
+
+  if (bm25Hits.length === 0 && semanticHits.length === 0) return [];
+
+  // ── Reciprocal Rank Fusion ────────────────────────────────────────────────
+  type Entry = { hit: SearchHit; rrfScore: number };
+  const hitKey = (h: SearchHit) => `${h.path}:${h.startLine}`;
+  const fused = new Map<string, Entry>();
+
+  const addRank = (hits: SearchHit[], rank: number) => {
+    const h = hits[rank];
+    const k_ = hitKey(h);
+    const s = 1 / (RRF_K + rank + 1);
+    const prev = fused.get(k_);
+    fused.set(k_, { hit: prev?.hit ?? h, rrfScore: (prev?.rrfScore ?? 0) + s });
+  };
+
+  for (let i = 0; i < bm25Hits.length; i++) addRank(bm25Hits, i);
+  for (let i = 0; i < semanticHits.length; i++) addRank(semanticHits, i);
+
+  // Sort by RRF score and deduplicate by file path.
+  const sorted = [...fused.values()].sort((a, b) => b.rrfScore - a.rrfScore);
+
+  const seen = new Set<string>();
+  const out: SearchHit[] = [];
+  for (const { hit, rrfScore } of sorted) {
+    if (out.length >= k) break;
+    if (seen.has(hit.path)) continue;
+    seen.add(hit.path);
+    out.push({ ...hit, score: rrfScore });
+  }
+  return out;
+}
+
 /** Cheap stats for admin UI. Does NOT trigger model load. */
 export function workspaceIndexStats(workspaceId: string): {
   exists: boolean;

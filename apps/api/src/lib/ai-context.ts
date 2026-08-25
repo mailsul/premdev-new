@@ -7,11 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { workspacePath } from "./runtime.js";
 import { config } from "./config.js";
-import {
-  search as semanticSearch,
-  indexWorkspace,
-  workspaceIndexStats,
-} from "./semantic-search.js";
+import { hybridSearch } from "./semantic-search.js";
 import type { ChatMsg } from "./ai-prompt.js";
 
 // ---------------------------------------------------------------------------
@@ -539,20 +535,17 @@ export const SEARCH_TOP_K = 5;
 const SEARCH_MAX_SNIPPET_CHARS = 1500;
 
 /**
- * Inject the top-K most semantically relevant code chunks for the user's
- * latest message into the system prompt. This is the lumen-style token
- * optimisation — instead of letting the model issue dozens of follow-up
- * `bash:run cat <file>` calls (each one duplicating the file contents into
- * chat history forever), we pre-compute the relevant excerpts ONCE and ship
- * them as part of the workspace snapshot.
+ * Inject the top-K most relevant code chunks for the user's latest message
+ * into the system prompt using hybrid search (BM25 + semantic via RRF).
  *
- * Returns "" on any failure (model not loaded, index empty, search error)
- * — the chat handler MUST keep working even when search is dead.
+ * Improvements over the old semantic-only approach:
+ *   - Cold start (no index): BM25-from-disk runs immediately — turn 1 always
+ *     gets snippets instead of returning "".
+ *   - Exact-name matches (e.g. "ai-context.ts") reliably surface via BM25.
+ *   - RRF threshold filters out low-relevance chunks (reduces prompt noise).
  *
- * Side effect: if the index is empty for this workspace, we kick off a
- * background `indexWorkspace()` so the *next* chat turn has hits. The
- * current turn still returns "" — we don't block the user waiting for an
- * index to build.
+ * Returns "" only when the query is too short or all hits fall below the
+ * relevance threshold. The chat handler must keep working either way.
  */
 export async function buildRelevantSnippets(
   workspaceId: string,
@@ -569,13 +562,10 @@ export async function buildRelevantSnippets(
   query = query.trim();
   if (query.length < 8) return "";
 
-  const stats = workspaceIndexStats(workspaceId);
-  if (!stats.exists || stats.chunks === 0) {
-    indexWorkspace(workspaceId).catch(() => {});
-    return "";
-  }
-
-  const hits = await semanticSearch(workspaceId, query, SEARCH_TOP_K);
+  // hybridSearch handles cold-start internally (BM25-from-disk) and kicks
+  // off background indexing for subsequent turns — no need for the old
+  // "return early" guard.
+  const hits = await hybridSearch(workspaceId, query, SEARCH_TOP_K).catch(() => []);
   if (hits.length === 0) return "";
 
   const formatted = hits
@@ -584,9 +574,9 @@ export async function buildRelevantSnippets(
         h.content.length > SEARCH_MAX_SNIPPET_CHARS
           ? h.content.slice(0, SEARCH_MAX_SNIPPET_CHARS) + "\n… (truncated)"
           : h.content;
-      return `### ${h.path} (lines ${h.startLine}-${h.endLine}, score ${h.score.toFixed(2)})\n\`\`\`\n${snippet}\n\`\`\``;
+      return `### ${h.path} (lines ${h.startLine}-${h.endLine}, score ${h.score.toFixed(3)})\n\`\`\`\n${snippet}\n\`\`\``;
     })
     .join("\n\n");
 
-  return `\n\n--- Relevant code snippets (semantic search; pre-fetched, do NOT re-read these files unless changed) ---\n${formatted}`;
+  return `\n\n--- Relevant code snippets (hybrid search; pre-fetched, do NOT re-read these files unless they have since changed) ---\n${formatted}`;
 }
