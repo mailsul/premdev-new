@@ -1431,12 +1431,10 @@ export function AIChat({
   // Returns { plan: true } if the message looks like a review/analysis request,
   // which causes a plan-first prefix to be injected automatically.
   // ---------------------------------------------------------------------------
-  function detectMessageIntent(text: string): { plan: boolean } {
-    const t = text.toLowerCase();
-    const planRe = /\b(rencanakan|rencana|rancang|desain|analisis|analyze|review|jelaskan|explain|apa(\s+itu)?|bagaimana|gimana|kenapa|mengapa|cek\s+dulu|bandingkan|compare|saran|suggest|audit|periksa|list\s+semua|apa\s+saja)\b/;
-    const actionRe = /\b(buatkan|bikin|buat|kerjain|implement|tambah(kan)?|add|fix|perbaiki|hapus|delete|ganti|ubah|refactor|create|make|build|setup|install|deploy|jalankan|run|generate|integrasikan|connect|hubungkan|inisialisasi|init)\b/;
-    const looksLikePlan = planRe.test(t) && !actionRe.test(t);
-    return { plan: looksLikePlan };
+  function detectMessageIntent(_text: string): { plan: boolean } {
+    // Auto plan-detection removed — too many false positives (e.g. "apa" in casual questions).
+    // Plan mode is no longer triggered automatically; user's intent is taken at face value.
+    return { plan: false };
   }
   // Snippet library (Batch A #23): user-saved prompt templates persisted in
   // localStorage. Snippets are global per browser, not per-workspace, since
