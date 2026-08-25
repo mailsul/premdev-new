@@ -127,10 +127,21 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       activeFileBlock = `\n\n--- Currently open in editor: ${body.activeFile.path} (${rawLines.length} lines total) ---\n\`\`\`${ext}\n${preview}\n\`\`\``;
     }
 
+    // Server-side iteration cap: count how many autonomous "Tool results:"
+    // continuations are already in the history. If the session has run ≥ 40
+    // tool-result turns, instruct the model to stop and summarise — regardless
+    // of what the client's localStorage cap says.
+    const toolResultTurns = (body.messages as ChatMsg[]).filter(
+      (m) => m.role === "user" && m.content.startsWith("Tool results:"),
+    ).length;
+    const iterCapBlock = toolResultTurns >= 40
+      ? "\n\n⚠️ SERVER CAP: Sesi otonom ini sudah mencapai 40 iterasi. HENTIKAN loop sekarang — kirim SATU pesan ringkasan singkat (max 5 baris) tanpa action blocks. Jangan lanjutkan aksi apapun."
+      : "";
+
     const messages: ChatMsg[] = [
       {
         role: "system",
-        content: `${sys}\n\n--- Workspace snapshot ---\n${ctx}${snippetsBlock}${memoryBlock}${aiMemoryBlock}${activeFileBlock}${continuationBlock}`,
+        content: `${sys}\n\n--- Workspace snapshot ---\n${ctx}${snippetsBlock}${memoryBlock}${aiMemoryBlock}${activeFileBlock}${continuationBlock}${iterCapBlock}`,
       },
       ...trimmed,
     ];
@@ -627,8 +638,13 @@ Rules:
   });
 
   // POST /web-fetch  — used by the AI's `web:fetch` action (full page text via Jina reader).
+  // Supports pagination via `offset` so the AI can read long docs in 12 KB pages:
+  //   first call:  { url, offset: 0 }     → chars 0..12000
+  //   second call: { url, offset: 12000 } → chars 12000..24000
+  //   etc.  The response includes `hasMore` and `totalLength` for context.
   const WebFetchBody = z.object({
     url: z.string().url().max(2000),
+    offset: z.number().int().min(0).optional().default(0),
   });
   app.post("/web-fetch", async (req, reply) => {
     const u = await requireUser(req, reply);
@@ -648,9 +664,19 @@ Rules:
       clearTimeout(t);
       if (!r.ok) return reply.code(502).send({ ok: false, error: `HTTP ${r.status} from Jina reader` });
       const raw = await r.text();
-      // Cap at ~12 KB to avoid bloating the context window.
-      const content = raw.slice(0, 12_000);
-      return reply.send({ ok: true, url: body.url, content });
+      const PAGE = 12_000;
+      const offset = body.offset ?? 0;
+      const content = raw.slice(offset, offset + PAGE);
+      const hasMore = offset + PAGE < raw.length;
+      return reply.send({
+        ok: true,
+        url: body.url,
+        content,
+        offset,
+        nextOffset: hasMore ? offset + PAGE : null,
+        hasMore,
+        totalLength: raw.length,
+      });
     } catch (e: any) {
       return reply.code(502).send({ ok: false, error: e?.message ?? "Fetch failed" });
     }

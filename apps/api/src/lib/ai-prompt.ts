@@ -40,6 +40,7 @@ GOLDEN RULES (memorize these; they override everything else):
 3. **NEVER self-narrate.** Never write about your own process ("I accidentally triggered...", "The chat keeps truncating...", "I keep reading files..."). Just fix things silently.
 4. **After all actions succeed → 2-3 line summary max.** The user cares about the result, not what you did to get there.
 5. **NEVER ask the user to paste or send file contents.** You have full workspace access — always read files yourself with \`bash:run cat <path>\` (or \`sed -n '1,80p' <path>\` for large files). Asking the user to "tempel kedua file itu" or "bisa paste isi file?" or "kirim isi file" is FORBIDDEN. Just emit the bash:run action and read it.
+6. **PLAN FIRST on multi-step tasks.** When a task requires 3+ steps or touches multiple files, emit a \`plan:\` block as your FIRST action (before any file/bash block). The orchestrator injects the plan into every subsequent iteration so you never lose track. Format: numbered steps with file targets. Skip the plan block for simple single-step tasks.
 
 A "Workspace snapshot" section below shows the current working directory inside the user's container and a listing of files there. Trust it as ground truth — do not ask the user where files live or what the working directory is. All shell commands run with cwd=/workspace inside a Linux container that already has bash, zsh, git, unzip, zip, curl, wget, jq, ripgrep, tree, vim, nano, sqlite3, mysql/postgres clients, and runtimes for Node 20, Python 3, PHP, Ruby, Java 21, Go, and Rust pre-installed. Reference files using their workspace-relative paths (e.g. \`src/main.ts\`, not \`/workspace/src/main.ts\`).
 
@@ -99,6 +100,7 @@ ACTION BLOCKS (use the most specific one for each task):
 - \`\`\`workspace:setEnv\` then KEY=value lines (one per line), close with \`\`\`  (safely MERGES into the "env" object of \`.premdev\`)
 - \`\`\`workspace:restart\` then close with \`\`\`  (stops the current process and respawns it using the resolved run command — this is how you "Run" the project)
 - \`\`\`workspace:checkpoint message="why"\` then close with \`\`\`
+- \`\`\`plan:\` then a numbered list of steps (what files, what changes, in order) — emit this FIRST on multi-step tasks (3+ steps). The orchestrator anchors this plan into every continue message so you don't lose context mid-session. Close with \`\`\`. Example: \`\`\`plan:\\\n1. Read src/auth.ts to understand current flow\\\n2. Patch src/auth.ts — add rate limiting\\\n3. Add test in tests/auth.test.ts\\\n4. Run diag:run to verify\\\n\`\`\`. Do NOT emit a plan block for simple single-step requests.
 - \`\`\`db:query\` then one or more SQL statements (semicolon-terminated; only ONE statement per block — multipleStatements is OFF), close with \`\`\`  (runs against the workspace's own MySQL database — host/user/password/db name are auto-injected as env vars DB_HOST, DB_USER, DB_PASSWORD, DATABASE_NAME, see "Workspace database" section below. SELECT/SHOW/DESCRIBE return rows; INSERT/UPDATE/DELETE/CREATE TABLE return affectedRows. Up to 200 rows shown.)
 
 CRITICAL RULES:
@@ -223,28 +225,50 @@ export function clampMessage(content: string): string {
 
 /**
  * Compress an old "Tool results:" message so it takes up fewer tokens.
- * Strips the bash/output code-fence blocks — keeps only the numbered
- * action lines (e.g. "1. bash:run `ls` — OK") so the model still knows
- * what actions ran and whether they succeeded, without the full stdout dump.
- * Applied to Tool results messages that are NOT among the 4 most recent.
+ * Strips code-fence blocks for successful actions — but KEEPS the full
+ * fence content for ERROR actions so the model can debug across iterations.
+ * Applied to Tool results messages that are NOT among the recent verbatim window.
  */
 function compressToolResults(content: string): string {
   if (!content.startsWith("Tool results:")) return content;
   const lines = content.split("\n");
   const out: string[] = [];
   let inFence = false;
+  let keepFence = false; // true when the surrounding action line is an ERROR
   for (const line of lines) {
-    if (line === "```") { inFence = !inFence; continue; }
-    if (inFence) continue;
-    out.push(line);
+    if (line === "```") {
+      if (!inFence) {
+        // Opening fence — check if the most recent non-empty numbered line is an ERROR
+        const prevLabel = out.filter(l => /^\d+\./.test(l.trim())).pop() ?? "";
+        keepFence = prevLabel.includes("— ERROR") || prevLabel.includes("FAILED");
+        inFence = true;
+        if (keepFence) out.push(line); // keep the opening fence for errors
+      } else {
+        // Closing fence
+        if (keepFence) out.push(line);
+        inFence = false;
+        keepFence = false;
+      }
+      continue;
+    }
+    if (inFence) {
+      if (keepFence) out.push(line); // keep error output verbatim
+      // else: drop success output to save tokens
+    } else {
+      out.push(line);
+    }
   }
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**
  * Sliding-window history: keep the most recent messages that fit under the
- * char + count budget. Tool results messages older than 4 turns are compressed
- * (bash output stripped) to save tokens while preserving action/outcome labels.
+ * char + count budget.
+ * - Last 6 messages are always kept verbatim.
+ * - Messages 7–10 are verbatim if they contain an ERROR (so the model can
+ *   reference recent failures without losing the details).
+ * - Older messages have success output stripped (bash fences removed) to
+ *   save tokens while preserving action/outcome labels.
  * Each message is also clamped individually so a single huge paste cannot
  * starve the rest of the history.
  */
@@ -253,13 +277,16 @@ export function trimHistory(msgs: ChatMsg[]): ChatMsg[] {
   const MAX_HISTORY_MESSAGES = _rt.MAX_HISTORY_MESSAGES;
   let total = 0;
   const out: ChatMsg[] = [];
-  const recentCutoff = msgs.length - 4; // last 4 messages kept verbatim
+  const alwaysVerbatim = msgs.length - 6;  // last 6 messages: always verbatim
+  const errorVerbatim  = msgs.length - 10; // messages 7-10: verbatim if they have errors
   for (let i = msgs.length - 1; i >= 0 && out.length < MAX_HISTORY_MESSAGES; i--) {
     const original = msgs[i];
-    // Compress old tool-result blobs to save tokens
-    const content = i < recentCutoff
-      ? compressToolResults(clampMessage(original.content))
-      : clampMessage(original.content);
+    const hasError = original.content.includes("— ERROR") || original.content.includes("FAILED");
+    // Keep verbatim if: within last 6 turns, OR within last 10 turns and has an error
+    const useVerbatim = i >= alwaysVerbatim || (hasError && i >= errorVerbatim);
+    const content = useVerbatim
+      ? clampMessage(original.content)
+      : compressToolResults(clampMessage(original.content));
     const clamped: ChatMsg = { ...original, content };
     const len = clamped.content.length;
     if (total + len > MAX_HISTORY_CHARS && out.length > 0) break;

@@ -765,6 +765,52 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   });
 
   const ExecBody = z.object({ command: z.string().min(1).max(4000) });
+  /**
+   * Parse raw terminal output from common build/lint/test tools into a
+   * compact, high-signal summary. Only summarises SUCCESS output — errors
+   * are always kept verbatim so the AI has full context to debug.
+   * Returns the original string unchanged when no tool is recognised.
+   */
+  function parseStructuredOutput(cmd: string, output: string, exitCode: number): string {
+    const c = cmd.toLowerCase();
+
+    // ── TypeScript compiler ──────────────────────────────────────────────────
+    if (c.includes("tsc")) {
+      const errors = output.match(/^.+\.tsx?\(\d+,\d+\): error TS\d+:.+$/gm) ?? [];
+      if (exitCode !== 0 || errors.length > 0) return output; // keep verbatim on error
+      return "✓ TypeScript: 0 errors";
+    }
+
+    // ── ESLint ───────────────────────────────────────────────────────────────
+    if (c.includes("eslint")) {
+      const problems = output.match(/^\s+\d+:\d+\s+(error|warning)\s+.+$/gm) ?? [];
+      if (problems.length === 0 && exitCode === 0) return "✓ ESLint: 0 problems";
+      if (exitCode !== 0) return output; // keep verbatim
+      // summarise: file names + problem lines only
+      const summary = output.match(/^[^\s].+\n((?:\s+.+\n)*)/gm)
+        ?.map((b) => b.trim()).join("\n\n") ?? output;
+      return summary.length < output.length ? summary : output;
+    }
+
+    // ── Jest / Vitest ────────────────────────────────────────────────────────
+    if (c.includes("jest") || c.includes("vitest") || c.includes("npm test")) {
+      if (exitCode !== 0) return output; // keep verbatim so AI sees failure details
+      // Success: extract summary lines (Tests:, Test Suites:, Time:)
+      const summaryLines = output.match(/(Tests?|Test Suites?|Snapshots?|Time):.*$/gm) ?? [];
+      if (summaryLines.length > 0) return "✓ " + summaryLines.join(" · ");
+      return output.slice(-800); // tail is usually the summary
+    }
+
+    // ── pytest ───────────────────────────────────────────────────────────────
+    if (c.includes("pytest")) {
+      if (exitCode !== 0) return output; // keep verbatim
+      const summary = output.match(/=+ .+passed.+ =+/)?.[0] ?? "";
+      return summary ? "✓ " + summary : output.slice(-400);
+    }
+
+    return output;
+  }
+
   app.post("/:id/exec", async (req, reply) => {
     const u = await requireUser(req, reply);
     if (!u) return;
@@ -774,7 +820,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     const body = ExecBody.parse(req.body);
     try {
       const r = await runOneOff(id, body.command, 120_000);
-      return { output: r.output, exitCode: r.exitCode };
+      const structured = parseStructuredOutput(body.command, r.output, r.exitCode);
+      return { output: structured, exitCode: r.exitCode };
     } catch (e: any) {
       return reply.code(500).send({ error: e.message });
     }

@@ -283,7 +283,7 @@ type Action =
   | { kind: "diag" }
   | { kind: "test"; command?: string }
   | { kind: "web"; query: string }
-  | { kind: "webFetch"; url: string }
+  | { kind: "webFetch"; url: string; offset?: number }
   | { kind: "memorySave"; content: string }
   | { kind: "setRun"; command: string }
   | { kind: "setEnv"; vars: Record<string, string> }
@@ -466,9 +466,12 @@ async function runAction(
       return { ok: true, output: `Web search "${action.query}":\n\n${fmt}` };
     }
     if (action.kind === "webFetch") {
-      const r = await fetchJson("POST", `/ai/web-fetch`, { url: action.url });
+      const r = await fetchJson("POST", `/ai/web-fetch`, { url: action.url, offset: action.offset ?? 0 });
       if (!r.ok) return { ok: false, output: r.error || "Fetch failed" };
-      return { ok: true, output: `Content of ${action.url}:\n\n${r.content}` };
+      const pageInfo = r.hasMore
+        ? `\n\n[Page offset=${r.offset}, chars ${r.offset}–${(r.offset ?? 0) + (r.content?.length ?? 0)} of ${r.totalLength}. To read next page: web:fetch with offset=${r.nextOffset}]`
+        : "";
+      return { ok: true, output: `Content of ${action.url}:\n\n${r.content}${pageInfo}` };
     }
     if (action.kind === "memorySave") {
       const lines = action.content.split("\n").length;
@@ -699,7 +702,7 @@ function filterStreamAnnotations(text: string): string {
 // per-fence walk lives in parseActions() below; copying the entire bracket
 // stack here would just be redundant.
 function hasUnclosedActionFence(text: string): boolean {
-  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "db", "open"]);
+  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "db", "open", "plan", "memory"]);
   const lines = text.split("\n");
   let i = 0;
   while (i < lines.length) {
@@ -724,11 +727,12 @@ function hasUnclosedActionFence(text: string): boolean {
   return false;
 }
 
-function parseActions(text: string): { actions: Action[]; cleaned: string } {
-  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "db", "open"]);
+function parseActions(text: string): { actions: Action[]; cleaned: string; plan?: string } {
+  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "db", "open", "plan", "memory"]);
   const actions: Action[] = [];
   const lines = text.split("\n");
   const kept: string[] = [];
+  let planStr: string | undefined;
 
   let i = 0;
   while (i < lines.length) {
@@ -874,7 +878,20 @@ function parseActions(text: string): { actions: Action[]; cleaned: string } {
       if (!first) {
         kept.push(`> Empty web:fetch body — provide a URL.`);
       } else {
-        actions.push({ kind: "webFetch", url: first });
+        // Support "https://example.com offset=12000" for paginated fetching
+        const offsetMatch = first.match(/^(.+?)\s+offset=(\d+)$/);
+        const url    = offsetMatch ? offsetMatch[1].trim() : first;
+        const offset = offsetMatch ? parseInt(offsetMatch[2], 10) : undefined;
+        actions.push({ kind: "webFetch", url, ...(offset != null ? { offset } : {}) });
+      }
+    } else if (kind === "plan" && (header === "" || header === "run")) {
+      // plan: block — not executed, stored as anchor for the orchestrator.
+      // Rendered inline as a blockquote so the user can see the AI's plan.
+      const planContent = body.join("\n").trim();
+      if (planContent) {
+        planStr = planContent;
+        const quotedLines = planContent.split("\n").map((l) => `> ${l}`).join("\n");
+        kept.push(`\n> 📋 **Rencana:**\n${quotedLines}\n`);
       }
     } else if (kind === "memory" && header === "save") {
       const content = body.join("\n").trim();
@@ -923,7 +940,7 @@ function parseActions(text: string): { actions: Action[]; cleaned: string } {
     }
     i = j;
   }
-  return { actions, cleaned: kept.join("\n") };
+  return { actions, cleaned: kept.join("\n"), ...(planStr ? { plan: planStr } : {}) };
 }
 
 /* ===========================  Markdown render  =========================== */
@@ -1513,6 +1530,10 @@ export function AIChat({
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
   const iterationRef = useRef<number>(0);
   const stoppedRef = useRef<boolean>(false);
+  // Stores the most recent plan: block emitted by the AI. Injected as an
+  // anchor into every "Tool results:" continue message so the AI keeps track
+  // of its plan across many iterations even after history compression.
+  const planRef = useRef<string | null>(null);
   const sessionStartRef = useRef<number>(0);       // wall-clock ms when current session started
   const sessionActionsRef = useRef<number>(0);     // total actions run this session
   const sessionCheckpointRef = useRef<string | null>(null); // checkpoint created at start of this session
@@ -2351,6 +2372,7 @@ export function AIChat({
     sessionActionsRef.current = 0;
     sessionCheckpointRef.current = null;
     batchHistoryRef.current = [];
+    planRef.current = null;
     setAutoManagedBatches(new Set());
     // Clear any pending mid-run queue from the PREVIOUS AI turn so the
     // newly typed message starts fresh. Queue items are only valid for the
@@ -2504,6 +2526,7 @@ export function AIChat({
     processedBatchesRef.current = new Set();
     batchHistoryRef.current = [];
     iterationRef.current = 0;
+    planRef.current = null;
     lastAutoSavedTurnRef.current = 0;
     try { localStorage.removeItem(TAB_MSGS_KEY(workspaceId, activeTabId)); } catch {}
   }
@@ -2525,6 +2548,7 @@ export function AIChat({
     processedBatchesRef.current = new Set();
     batchHistoryRef.current = [];
     iterationRef.current = 0;
+    planRef.current = null;
   }
   function switchTab(id: string) {
     if (id === activeTabId) return;
@@ -2535,6 +2559,7 @@ export function AIChat({
     processedBatchesRef.current = new Set();
     batchHistoryRef.current = [];
     iterationRef.current = 0;
+    planRef.current = null;
   }
   function renameTab(id: string) {
     const cur = tabs.find((t) => t.id === id);
@@ -2574,7 +2599,11 @@ export function AIChat({
     const lastIdx = msgs.length - 1;
     const last = msgs[lastIdx];
     if (!last || last.role !== "assistant") return;
-    const acts = parseActions(last.content).actions;
+    const parsed = parseActions(last.content);
+    const acts = parsed.actions;
+    // If AI emitted a plan: block, store it so we can re-inject it as an
+    // anchor in every subsequent "Tool results:" continuation message.
+    if (parsed.plan) planRef.current = parsed.plan;
 
     // ── Text-content loop detection ─────────────────────────────────────────
     // Detects "stuck" state: AI sending the same text (no actions or same
@@ -2797,9 +2826,14 @@ export function AIChat({
       if (stoppedRef.current) return;
       if (iterationRef.current >= MAX_AUTO_ITERATIONS) return;
       iterationRef.current += 1;
+      // Re-inject the active plan as an anchor so the AI doesn't lose track
+      // of its plan even after history compression has stripped old messages.
+      const planAnchor = planRef.current
+        ? `[ANCHOR — Rencana aktif, lanjutkan sesuai rencana ini]\n${planRef.current}\n\n`
+        : "";
       // Pass `toRun` (not `acts`) so the AI receives results for injected
       // verification steps too (diag output, curl response).
-      await sendRaw(formatToolResults(toRun, results));
+      await sendRaw(planAnchor + formatToolResults(toRun, results));
     })().catch(() => {
       setAutoExecuting(false);
       actionAbortRef.current = null;
