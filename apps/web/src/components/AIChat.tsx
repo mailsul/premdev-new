@@ -2537,6 +2537,31 @@ export function AIChat({
     const last = msgs[lastIdx];
     if (!last || last.role !== "assistant") return;
     const acts = parseActions(last.content).actions;
+
+    // ── Text-content loop detection ─────────────────────────────────────────
+    // Detects "stuck" state: AI sending the same text (no actions or same
+    // text body) in 2+ consecutive assistant turns. Compare cleaned text of
+    // the last 2 assistant messages (first 300 chars is a reliable signature).
+    const assistantMsgs = msgs.filter((m) => m.role === "assistant" && !m.synthetic);
+    if (assistantMsgs.length >= 2) {
+      const sig = (m: Msg) => parseActions(m.content).cleaned.trim().slice(0, 300);
+      const last2 = sig(assistantMsgs[assistantMsgs.length - 1]);
+      const prev2 = sig(assistantMsgs[assistantMsgs.length - 2]);
+      if (last2 && prev2 && last2 === prev2) {
+        stoppedRef.current = true;
+        setMsgs((prev) => [
+          ...prev,
+          {
+            role: "assistant" as const,
+            content: "⚠️ **Loop teks terdeteksi** — AI mengirim respons yang sama dua kali berturut-turut. Sesi dihentikan otomatis. Coba ubah perintah atau mulai chat baru.",
+            synthetic: true,
+            sentAt: Date.now(),
+          },
+        ]);
+        return;
+      }
+    }
+
     if (acts.length === 0) return; // AI ended naturally — loop stops
     if (processedBatchesRef.current.has(lastIdx)) return;
     processedBatchesRef.current.add(lastIdx);
@@ -3504,6 +3529,18 @@ function Bubble({
     isAssistant && isLast && !isStreaming &&
     (cleanText.trim() === "..." || cleanText.trim() === "…" || cleanText.trim() === "");
 
+  // Detect within-message text repetition — model repeated the same paragraph/
+  // sentence 2+ times in one response (common sign of a confused/looping model).
+  const hasInternalRepeat = isAssistant && !isStreaming && (() => {
+    const lines = cleanText.split(/\n+/).map(l => l.trim()).filter(l => l.length > 25);
+    const seen = new Set<string>();
+    for (const l of lines) {
+      if (seen.has(l)) return true;
+      seen.add(l);
+    }
+    return false;
+  })();
+
   // Tool-result messages get a compact borderless layout; no role badge needed.
   if (isToolResults) {
     return (
@@ -3566,7 +3603,15 @@ function Bubble({
           </button>
         </div>
       ) : isAssistant ? (
-        <Markdown text={cleanText || (isLast && isStreaming ? "" : cleanText)} isStreaming={isStreaming} />
+        <>
+          {hasInternalRepeat && (
+            <div className="mb-1.5 flex items-center gap-1.5 rounded border border-warning/30 bg-warning/10 px-2 py-1 text-[11px] text-warning">
+              <AlertTriangle size={11} />
+              <span>Model mengulangi teks yang sama — kemungkinan bingung atau model kurang kapabel. Coba ganti model atau ubah perintah.</span>
+            </div>
+          )}
+          <Markdown text={cleanText || (isLast && isStreaming ? "" : cleanText)} isStreaming={isStreaming} />
+        </>
       ) : (
         <div className="whitespace-pre-wrap leading-relaxed">{cleanText}</div>
       )}
