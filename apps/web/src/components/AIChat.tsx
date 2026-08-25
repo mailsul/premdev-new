@@ -679,7 +679,7 @@ function formatToolResults(actions: Action[], results: ActionResult[]): string {
 // Conservative default — still allows long multi-step sessions but stops
 // clearly-runaway loops before they burn thousands of tokens. Configurable
 // at runtime: localStorage.setItem("premdev:ai:maxIterations", "30").
-const MAX_AUTO_ITERATIONS_DEFAULT = 20;
+const MAX_AUTO_ITERATIONS_DEFAULT = 60;
 
 /**
  * Strip backend routing annotations injected by the auto-model router.

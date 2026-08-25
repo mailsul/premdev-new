@@ -133,11 +133,29 @@ app.get("/api/health", async () => ({ ok: true, version: "0.1.0", time: Date.now
 // Serve built frontend in production
 const webDist = path.resolve(__dirname, "../../web/dist");
 if (fs.existsSync(webDist)) {
-  await app.register(fastifyStatic, { root: webDist, prefix: "/", wildcard: false });
+  await app.register(fastifyStatic, {
+    root: webDist,
+    prefix: "/",
+    wildcard: false,
+    // Hashed assets (Vite adds content hash to filename) get long cache.
+    // index.html itself must never be cached so deploys take effect immediately.
+    setHeaders(res, filePath) {
+      if (filePath.endsWith("index.html")) {
+        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
+      } else {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    },
+  });
   app.setNotFoundHandler((req, reply) => {
     if (req.url.startsWith("/api") || req.url.startsWith("/ws")) {
       return reply.code(404).send({ error: "Not found" });
     }
+    reply.header("Cache-Control", "no-cache, no-store, must-revalidate");
+    reply.header("Pragma", "no-cache");
+    reply.header("Expires", "0");
     return reply.sendFile("index.html");
   });
 }
