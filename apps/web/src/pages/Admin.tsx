@@ -2212,6 +2212,7 @@ type CustomProviderRow = {
   docs_url: string;
   enabled: boolean;
   configured: boolean;
+  key_count: number;
   created_at: number;
 };
 
@@ -2283,7 +2284,9 @@ function CustomProvidersSection() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium">{p.name}</span>
                       {p.configured ? (
-                        <span className="rounded-full bg-success/15 px-2 py-0.5 text-[10px] text-success">API key tersimpan</span>
+                        <span className="rounded-full bg-success/15 px-2 py-0.5 text-[10px] text-success">
+                          {p.key_count > 1 ? `${p.key_count} API keys (rotasi)` : "API key tersimpan"}
+                        </span>
                       ) : (
                         <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">API key belum diset</span>
                       )}
@@ -2365,14 +2368,31 @@ function CustomProviderForm({
 }) {
   const [name, setName] = useState(provider?.name ?? "");
   const [baseUrl, setBaseUrl] = useState(provider?.base_url ?? "");
-  const [apiKey, setApiKey] = useState("");
-  const [showKey, setShowKey] = useState(false);
+  // Multi-key support: each entry is one new API key being typed.
+  // Empty entries are ignored on save. If all empty on edit → keys unchanged.
+  const [newKeys, setNewKeys] = useState<string[]>([""]);
+  const [showKeys, setShowKeys] = useState<boolean[]>([false]);
   const [defaultModel, setDefaultModel] = useState(provider?.default_model ?? "");
   const [modelsRaw, setModelsRaw] = useState(provider?.models.join(", ") ?? "");
   const [docsUrl, setDocsUrl] = useState(provider?.docs_url ?? "");
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+
+  function addKeySlot() {
+    setNewKeys((k) => [...k, ""]);
+    setShowKeys((s) => [...s, false]);
+  }
+  function removeKeySlot(i: number) {
+    setNewKeys((k) => k.filter((_, idx) => idx !== i));
+    setShowKeys((s) => s.filter((_, idx) => idx !== i));
+  }
+  function updateKey(i: number, val: string) {
+    setNewKeys((k) => k.map((v, idx) => (idx === i ? val : v)));
+  }
+  function toggleShowKey(i: number) {
+    setShowKeys((s) => s.map((v, idx) => (idx === i ? !v : v)));
+  }
 
   async function save() {
     if (!name.trim() || !baseUrl.trim()) {
@@ -2383,15 +2403,18 @@ function CustomProviderForm({
     setErr("");
     try {
       const models = modelsRaw.split(",").map((m) => m.trim()).filter(Boolean);
-      const body = {
+      const filledKeys = newKeys.map((k) => k.trim()).filter(Boolean);
+      const body: Record<string, unknown> = {
         name: name.trim(),
         base_url: baseUrl.trim(),
-        api_key: apiKey,
         default_model: defaultModel.trim(),
         models,
         docs_url: docsUrl.trim(),
         enabled,
       };
+      // Only send api_keys when the user actually typed something —
+      // an empty array means "don't touch stored keys" on the backend.
+      if (filledKeys.length > 0) body.api_keys = filledKeys;
       if (provider?.id) {
         await API.put(`/admin/custom-providers/${provider.id}`, body);
       } else {
@@ -2444,29 +2467,72 @@ function CustomProviderForm({
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-medium text-text-muted">
-              API Key{" "}
-              {provider?.configured
-                ? <span className="font-normal text-success">(tersimpan — kosongkan untuk tidak ubah)</span>
-                : <span className="font-normal text-text-muted">(opsional — bisa diisi user nanti)</span>}
-            </label>
-            <div className="flex gap-2">
-              <input
-                className="input flex-1 font-mono text-sm"
-                type={showKey ? "text" : "password"}
-                placeholder={provider?.configured ? "••••••••••••" : "sk-… / bearer token / kosong"}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
+            <div className="mb-1 flex items-center justify-between">
+              <label className="text-xs font-medium text-text-muted">
+                API Keys
+                {provider?.configured && (
+                  <span className="ml-1.5 font-normal text-success">
+                    ({provider.key_count} tersimpan — biarkan kosong untuk tidak mengubah)
+                  </span>
+                )}
+                {!provider?.configured && (
+                  <span className="ml-1.5 font-normal text-text-muted">(opsional — bisa diisi user nanti)</span>
+                )}
+              </label>
               <button
-                className="btn-ghost px-2"
-                onClick={() => setShowKey((v) => !v)}
-                title={showKey ? "Sembunyikan" : "Tampilkan"}
                 type="button"
+                className="btn-secondary text-[11px] py-0.5 px-2"
+                onClick={addKeySlot}
+                title="Tambah key lagi"
               >
-                {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                <Plus size={11} /> Tambah key
               </button>
             </div>
+            <div className="space-y-2">
+              {newKeys.map((k, i) => (
+                <div key={i} className="flex gap-2 items-center">
+                  <input
+                    className="input flex-1 font-mono text-sm"
+                    type={showKeys[i] ? "text" : "password"}
+                    placeholder={
+                      provider?.configured
+                        ? `Key ${i + 1} baru (kosong = tidak ubah)`
+                        : `sk-… / bearer token (key ${i + 1})`
+                    }
+                    value={k}
+                    onChange={(e) => updateKey(i, e.target.value)}
+                  />
+                  <button
+                    className="btn-ghost px-2 shrink-0"
+                    onClick={() => toggleShowKey(i)}
+                    title={showKeys[i] ? "Sembunyikan" : "Tampilkan"}
+                    type="button"
+                  >
+                    {showKeys[i] ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                  {newKeys.length > 1 && (
+                    <button
+                      className="btn-ghost px-1.5 text-danger shrink-0"
+                      onClick={() => removeKeySlot(i)}
+                      title="Hapus slot key ini"
+                      type="button"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {newKeys.filter(k => k.trim()).length > 1 && (
+              <p className="mt-1 text-[10px] text-info">
+                ✓ {newKeys.filter(k => k.trim()).length} keys — akan dirotasi acak setiap request (load balancing / rate-limit avoidance)
+              </p>
+            )}
+            {provider?.configured && newKeys.filter(k => k.trim()).length > 0 && (
+              <p className="mt-1 text-[10px] text-warning">
+                ⚠ Keys yang diisi akan MENGGANTI semua {provider.key_count} key lama yang tersimpan
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">

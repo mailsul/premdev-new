@@ -3,7 +3,7 @@
  * Extracted from apps/api/src/routes/ai.ts for maintainability.
  */
 
-import { getAIKey, getAIKeys, getCustomProviderKey, listCustomProviders } from "./ai-settings.js";
+import { getAIKey, getAIKeys, getCustomProviderKeys, listCustomProviders } from "./ai-settings.js";
 import { config } from "./config.js";
 import type { Provider, ChatMsg } from "./ai-prompt.js";
 
@@ -415,8 +415,8 @@ export async function* streamCustomProvider(
     yield `(Custom provider "${customId}" tidak ditemukan atau dinonaktifkan)`;
     return;
   }
-  const key = getCustomProviderKey(customId);
-  if (!key) {
+  const keys = getCustomProviderKeys(customId);
+  if (keys.length === 0) {
     yield `(API key untuk "${prov.name}" belum diset — buka Admin → Custom Providers untuk isi)`;
     return;
   }
@@ -427,9 +427,14 @@ export async function* streamCustomProvider(
   const resolvedModel = model === "auto"
     ? (prov.default_model || (prov.models[0] ?? "gpt-4o-mini"))
     : model;
+  // Pass all keys — streamOpenAICompat will try them in order on 429/401/403.
+  // Shuffle so load is distributed across keys when multiple are configured.
+  const shuffled = keys.length > 1
+    ? [...keys].sort(() => Math.random() - 0.5)
+    : keys;
   yield* streamOpenAICompat({
     url,
-    keys: [key],
+    keys: shuffled,
     providerLabel: prov.name,
     model: resolvedModel,
     messages,

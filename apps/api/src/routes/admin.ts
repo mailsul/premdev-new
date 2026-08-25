@@ -12,7 +12,7 @@ import { config } from "../lib/config.js";
 import {
   listAIKeysMasked, setAIKey, isEncryptionKeyWeak,
   getAllRtSettings, getRtSetting, setRtSetting, RT_DEFAULTS,
-  listCustomProviders, getCustomProviderKey, upsertCustomProvider, deleteCustomProvider,
+  listCustomProviders, getCustomProviderKeys, upsertCustomProvider, deleteCustomProvider,
   type RtSettingKey,
 } from "../lib/ai-settings.js";
 import { clientIp, loginLimiter, apiLimiter, aiLimiter } from "../lib/rate-limit.js";
@@ -696,6 +696,9 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
   const CustomProviderBody = z.object({
     name: z.string().min(1).max(100),
     base_url: z.string().min(1).max(500),
+    // api_keys: array of plaintext keys (preferred multi-key form)
+    api_keys: z.array(z.string().max(500)).max(20).optional(),
+    // legacy single-key field still accepted for backward compat
     api_key: z.string().max(500).optional().default(""),
     models: z.array(z.string().max(200)).max(100).optional().default([]),
     default_model: z.string().max(200).optional().default(""),
@@ -718,7 +721,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     const id = upsertCustomProvider({
       name: body.name,
       base_url: body.base_url,
-      api_key: body.api_key,
+      api_keys: body.api_keys ?? (body.api_key ? [body.api_key] : []),
       models: body.models,
       default_model: body.default_model,
       docs_url: body.docs_url,
@@ -740,7 +743,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       id,
       name: body.name,
       base_url: body.base_url,
-      api_key: body.api_key,
+      api_keys: body.api_keys ?? (body.api_key ? [body.api_key] : undefined),
       models: body.models,
       default_model: body.default_model,
       docs_url: body.docs_url,
@@ -762,15 +765,28 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, providers: listCustomProviders() };
   });
 
-  // Get masked API key for a custom provider (admin-only)
+  // Get masked API keys for a custom provider (admin-only) — returns list
+  app.get("/custom-providers/:id/keys", async (req, reply) => {
+    const a = await requireAdmin(req, reply);
+    if (!a) return;
+    const { id } = req.params as { id: string };
+    const keys = getCustomProviderKeys(id);
+    const mask = (s: string) =>
+      s.length <= 8 ? "*".repeat(s.length)
+        : s.slice(0, 4) + "•".repeat(Math.min(s.length - 8, 16)) + s.slice(-4);
+    return { keys: keys.map(mask), count: keys.length };
+  });
+
+  // Keep the old single-key endpoint for backward compat
   app.get("/custom-providers/:id/key", async (req, reply) => {
     const a = await requireAdmin(req, reply);
     if (!a) return;
     const { id } = req.params as { id: string };
-    const key = getCustomProviderKey(id);
+    const keys = getCustomProviderKeys(id);
     const mask = (s: string) =>
       s.length <= 8 ? "*".repeat(s.length)
         : s.slice(0, 4) + "•".repeat(Math.min(s.length - 8, 16)) + s.slice(-4);
-    return { masked: key ? mask(key) : "", configured: !!key };
+    const key = keys[0] ?? "";
+    return { masked: key ? mask(key) : "", configured: keys.length > 0 };
   });
 };
