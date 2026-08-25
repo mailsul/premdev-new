@@ -685,7 +685,8 @@ export async function* streamOpenAICompat(opts: {
     model: opts.model,
     messages: apiMessages,
     stream: true,
-    ...(opts.omitMaxTokens ? {} : { max_tokens: opts.maxTokens }),
+    // 0 = unlimited: omit max_tokens so the model uses its own context limit.
+    ...(opts.omitMaxTokens || opts.maxTokens === 0 ? {} : { max_tokens: opts.maxTokens }),
     ...(opts.extraBody ?? {}),
   });
 
@@ -796,7 +797,9 @@ export async function* streamAnthropic(
     });
   const reqBody = JSON.stringify({
     model,
-    max_tokens: maxTokens,
+    // Anthropic requires max_tokens; use 100 000 as the "unlimited" sentinel
+    // (the model will stop at its own context limit before that anyway).
+    max_tokens: maxTokens === 0 ? 100_000 : maxTokens,
     stream: true,
     system: sys,
     messages: msgs,
@@ -976,7 +979,8 @@ export async function* streamGoogleSingle(
       body: JSON.stringify({
         contents,
         systemInstruction: sys ? { parts: [{ text: sys }] } : undefined,
-        generationConfig: { maxOutputTokens: maxTokens },
+        // 0 = unlimited: omit maxOutputTokens so Gemini uses its full window.
+        generationConfig: maxTokens === 0 ? {} : { maxOutputTokens: maxTokens },
       }),
       signal,
     },

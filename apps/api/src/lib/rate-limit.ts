@@ -26,6 +26,8 @@ export class RateLimiter {
     this.buckets.clear();
   }
   take(key: string, n = 1): boolean {
+    // capacity === 0 means "unlimited" — always pass.
+    if (this.capacity === 0) return true;
     const now = Date.now();
     const b = this.buckets.get(key) ?? { tokens: this.capacity, lastRefillMs: now };
     const elapsed = (now - b.lastRefillMs) / 1000;

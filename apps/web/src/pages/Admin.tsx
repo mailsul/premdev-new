@@ -1877,21 +1877,23 @@ function VFSSection() {
 type RtSettings = Record<string, number>;
 type RtResponse = { settings: RtSettings; defaults: RtSettings };
 
-const BUDGET_FIELDS: { key: string; label: string; hint: string; min: number; max: number; step: number }[] = [
+type SettingField = { key: string; label: string; hint: string; min: number; max: number; step: number; unlimitedAllowed?: boolean };
+
+const BUDGET_FIELDS: SettingField[] = [
   { key: "ai.budget.maxHistoryChars",        label: "Max chars riwayat",           hint: "Total karakter riwayat chat yang dikirim ke AI setiap request (makin besar = lebih mahal)", min: 2000,  max: 80000, step: 1000 },
   { key: "ai.budget.maxHistoryMessages",     label: "Max pesan riwayat",           hint: "Maksimum jumlah pesan (user+assistant) yang masuk ke konteks AI",                           min: 4,     max: 100,   step: 1    },
   { key: "ai.budget.maxSingleMessageChars",  label: "Max chars per pesan",         hint: "Pesan lebih panjang dari ini dipotong head+tail — cegah 1 paste besar menghabiskan kuota",  min: 500,   max: 32000, step: 500  },
-  { key: "ai.budget.maxTokensDefault",       label: "Max token output (normal)",   hint: "Batas token output AI per giliran di mode chat biasa (non-autopilot)",                      min: 512,   max: 32768, step: 256  },
-  { key: "ai.budget.maxTokensAutopilot",     label: "Max token output (autopilot)",hint: "Batas token output AI per giliran di mode Otonom — harus lebih besar dari normal",         min: 1024,  max: 65536, step: 512  },
+  { key: "ai.budget.maxTokensDefault",       label: "Max token output (normal)",   hint: "Batas token output AI per giliran di mode chat biasa. 0 = tidak dibatasi (model tentukan sendiri)", min: 512, max: 32768, step: 256, unlimitedAllowed: true },
+  { key: "ai.budget.maxTokensAutopilot",     label: "Max token output (autopilot)",hint: "Batas token output AI per giliran di mode Otonom. 0 = tidak dibatasi",               min: 1024,  max: 65536, step: 512, unlimitedAllowed: true },
 ];
 
-const RATE_FIELDS: { key: string; label: string; hint: string; min: number; max: number; step: number }[] = [
-  { key: "ai.rate.aiCapacity",        label: "AI limiter — burst",         hint: "Jumlah request AI yang diizinkan sekaligus sebelum ada yang ditolak (per IP)",             min: 1,  max: 500, step: 1   },
-  { key: "ai.rate.aiRefillPerSec",    label: "AI limiter — isi ulang/detik",hint: "Seberapa cepat token AI diisi ulang. 0.2 = 1 token per 5 detik",                          min: 0.01, max: 10, step: 0.01 },
-  { key: "ai.rate.apiCapacity",       label: "API limiter — burst",        hint: "Burst cap untuk semua endpoint /api/ non-AI",                                               min: 10, max: 2000, step: 10  },
-  { key: "ai.rate.apiRefillPerSec",   label: "API limiter — isi ulang/detik",hint: "Isi ulang token API per detik. 2 = 2 request/detik sustained",                           min: 0.1, max: 100, step: 0.1 },
-  { key: "ai.rate.loginCapacity",     label: "Login limiter — burst",      hint: "Maksimum percobaan login bersamaan per IP",                                                 min: 1,  max: 100, step: 1   },
-  { key: "ai.rate.loginRefillPerSec", label: "Login limiter — isi ulang/detik",hint: "0.1 = 1 percobaan per 10 detik (anti-brute-force)",                                   min: 0.01, max: 5, step: 0.01 },
+const RATE_FIELDS: SettingField[] = [
+  { key: "ai.rate.aiCapacity",        label: "AI limiter — burst",         hint: "Request AI per IP sekaligus. 0 = tidak ada rate limit AI",             min: 1,  max: 500, step: 1, unlimitedAllowed: true },
+  { key: "ai.rate.aiRefillPerSec",    label: "AI limiter — isi ulang/detik",hint: "Seberapa cepat token AI diisi ulang. 0.2 = 1 token per 5 detik. (Abaikan jika burst = 0)", min: 0.01, max: 10, step: 0.01 },
+  { key: "ai.rate.apiCapacity",       label: "API limiter — burst",        hint: "Burst cap untuk semua endpoint /api/ non-AI. 0 = tidak ada rate limit",  min: 10, max: 2000, step: 10, unlimitedAllowed: true },
+  { key: "ai.rate.apiRefillPerSec",   label: "API limiter — isi ulang/detik",hint: "Isi ulang token API per detik. 2 = 2 request/detik sustained",         min: 0.1, max: 100, step: 0.1 },
+  { key: "ai.rate.loginCapacity",     label: "Login limiter — burst",      hint: "Maksimum percobaan login per IP (jangan di-unlimited — anti brute-force)", min: 1,  max: 100, step: 1   },
+  { key: "ai.rate.loginRefillPerSec", label: "Login limiter — isi ulang/detik",hint: "0.1 = 1 percobaan per 10 detik (anti-brute-force)",                  min: 0.01, max: 5, step: 0.01 },
 ];
 
 function AIRuntimeSettingsSection() {
@@ -2607,25 +2609,32 @@ function SettingRow({
   defaultValue,
   onChange,
 }: {
-  field: { key: string; label: string; hint: string; min: number; max: number; step: number };
+  field: SettingField;
   value: number;
   defaultValue: number;
   onChange: (v: number) => void;
 }) {
+  const isUnlimited = field.unlimitedAllowed && value === 0;
   const isModified = value !== defaultValue;
   return (
     <div className="grid grid-cols-[1fr_auto] items-start gap-3">
       <div>
         <div className="flex items-center gap-2 text-sm">
           <span className="font-medium">{field.label}</span>
-          {isModified && (
+          {isUnlimited && (
+            <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-[10px] font-semibold text-success">∞ unlimited</span>
+          )}
+          {isModified && !isUnlimited && (
+            <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold text-warning">ubah</span>
+          )}
+          {isModified && isUnlimited && (
             <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold text-warning">ubah</span>
           )}
         </div>
         <div className="text-xs text-text-muted">{field.hint}</div>
         <div className="mt-0.5 text-[10px] font-mono text-text-muted opacity-60">
           default: {defaultValue} · min: {field.min} · max: {field.max}
-          {field.key.includes("RefillPerSec") && (
+          {field.key.includes("RefillPerSec") && !isUnlimited && (
             <span className="ml-2 text-info opacity-80">
               = {(value * 60).toFixed(1)} req/menit
             </span>
@@ -2633,16 +2642,31 @@ function SettingRow({
         </div>
       </div>
       <div className="flex items-center gap-2">
+        {field.unlimitedAllowed && (
+          <button
+            type="button"
+            title={isUnlimited ? "Klik untuk set batas" : "Klik untuk unlimited (∞)"}
+            onClick={() => onChange(isUnlimited ? defaultValue : 0)}
+            className={`shrink-0 rounded px-2 py-1 text-[11px] font-semibold transition-colors ${
+              isUnlimited
+                ? "bg-success/20 text-success hover:bg-success/30"
+                : "bg-bg-hover text-text-muted hover:bg-bg-border"
+            }`}
+          >
+            ∞
+          </button>
+        )}
         <input
           type="number"
-          className="input w-28 text-right font-mono text-sm"
-          min={field.min}
+          className={`input w-28 text-right font-mono text-sm ${isUnlimited ? "opacity-40 pointer-events-none" : ""}`}
+          min={0}
           max={field.max}
           step={field.step}
-          value={value}
+          value={isUnlimited ? 0 : value}
+          disabled={isUnlimited}
           onChange={(e) => {
             const v = parseFloat(e.target.value);
-            if (!isNaN(v)) onChange(v);
+            if (!isNaN(v) && v >= 0) onChange(v);
           }}
         />
       </div>

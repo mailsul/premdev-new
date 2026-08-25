@@ -594,7 +594,8 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     for (const [k, v] of Object.entries(body)) {
       if (!validKeys.has(k)) continue;
       const n = Number(v);
-      if (isNaN(n) || n <= 0) continue;
+      // 0 is allowed — it signals "unlimited" for token caps and rate limiters.
+      if (isNaN(n) || n < 0) continue;
       setRtSetting(k as RtSettingKey, n);
       saved[k] = n;
     }
