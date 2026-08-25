@@ -2730,14 +2730,18 @@ export function AIChat({
       setAutoExecuting(true);
       // Create a session-level checkpoint before the FIRST batch of actions.
       // This lets the user roll back ALL AI changes in one click.
+      // Note: fetchJson is scoped inside runAction so we use fetch directly here.
       if (iterationRef.current === 0 && sessionCheckpointRef.current === null) {
         try {
-          const ckRes = await fetchJson("POST", `/workspaces/${workspaceId}/checkpoints`, {
-            message: "Auto: início de sessão AI",
-          });
+          const ckRes = await fetch(`/api/workspaces/${workspaceId}/checkpoints`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ message: "Auto: sebelum sesi AI" }),
+          }).then((r) => r.ok ? r.json() : null);
           sessionCheckpointRef.current = ckRes?.checkpoint?.id ?? null;
         } catch {
-          // Non-fatal: checkpoint creation failure must not block AI execution.
+          // Non-fatal — checkpoint failure must not block AI execution.
         }
       }
       const results: ActionResult[] = [];
