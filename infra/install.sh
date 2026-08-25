@@ -463,7 +463,7 @@ docker pull "$GHCR_IMAGE" 2>&1 | tail -5 || warn "Pull failed — you may need t
 step "Starting stack"
 cd "$INSTALL_DIR"
 docker compose pull 2>&1 | tail -10 || true
-docker compose up -d
+docker compose up -d --force-recreate
 sleep 5
 
 # ----- Health check -----
