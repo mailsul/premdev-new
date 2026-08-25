@@ -936,6 +936,7 @@ type MdNode =
   | { type: "heading"; level: number; text: string }
   | { type: "list"; items: string[] }
   | { type: "quote"; text: string }
+  | { type: "table"; headers: string[]; rows: string[][] }
   // Placeholder shown in chat WHILE an AI action block is still streaming
   // (the parseActions() pass strips closed action blocks for us; anything
   // left in `cleaned` whose fence header looks like an action kind is, by
@@ -1021,6 +1022,20 @@ function parseMarkdown(text: string): MdNode[] {
     if (/^>\s+/.test(line)) {
       out.push({ type: "quote", text: line.replace(/^>\s+/, "") });
       i++; continue;
+    }
+    // Markdown table: starts with a pipe-separated row, followed by a separator row (|---|)
+    if (/^\|.+\|/.test(line) && i + 1 < lines.length && /^\|[\s|:-]+\|/.test(lines[i + 1])) {
+      const parseRow = (l: string) =>
+        l.split("|").slice(1, -1).map(c => c.trim());
+      const headers = parseRow(line);
+      i += 2; // skip header + separator
+      const rows: string[][] = [];
+      while (i < lines.length && /^\|.+\|/.test(lines[i])) {
+        rows.push(parseRow(lines[i]));
+        i++;
+      }
+      out.push({ type: "table", headers, rows });
+      continue;
     }
     if (line.trim() === "") { i++; continue; }
     // Paragraph: gather consecutive non-empty, non-special lines
@@ -1200,6 +1215,32 @@ function Markdown({ text, isStreaming = false }: { text: string; isStreaming?: b
           return (
             <blockquote key={i} className="border-l-2 border-bg-border pl-2 text-text-muted"
               dangerouslySetInnerHTML={{ __html: renderInline(n.text) }} />
+          );
+        }
+        if (n.type === "table") {
+          return (
+            <div key={i} className="overflow-x-auto">
+              <table className="w-full border-collapse text-[12px]">
+                <thead>
+                  <tr className="border-b border-bg-border bg-bg-subtle">
+                    {n.headers.map((h, k) => (
+                      <th key={k} className="px-3 py-1.5 text-left font-semibold text-text"
+                        dangerouslySetInnerHTML={{ __html: renderInline(h) }} />
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {n.rows.map((row, r) => (
+                    <tr key={r} className={`border-b border-bg-border ${r % 2 === 1 ? "bg-bg-subtle/50" : ""}`}>
+                      {row.map((cell, c) => (
+                        <td key={c} className="px-3 py-1.5 text-text-muted"
+                          dangerouslySetInnerHTML={{ __html: renderInline(cell) }} />
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           );
         }
         return (
