@@ -3152,6 +3152,7 @@ export function AIChat({
               isLast={i === msgs.length - 1 && !streaming}
               isStreaming={i === msgs.length - 1 && streaming}
               autoPilot={autoPilot}
+              autonomous={autonomous}
               autoManaged={autoManagedBatches.has(i)}
               actionResults={actionResults.get(i)}
               provider={provider}
