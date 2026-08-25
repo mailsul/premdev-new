@@ -72,6 +72,12 @@ const Body = z.object({
     content: z.string(),
     images: z.array(ImageDataUrl).max(4).optional(),
   })),
+  // File currently open in the editor — injected into system prompt so the
+  // AI knows exactly what the user is looking at without needing bash:run cat.
+  activeFile: z.object({
+    path: z.string().max(500),
+    content: z.string().max(120_000),
+  }).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -109,10 +115,22 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       : "";
     const continuationBlock = body.continuation ? CONT_TRUNC_INSTRUCTION : "";
 
+    // Inject the currently open file so the AI can see exactly what the user
+    // is looking at without needing a bash:run cat round-trip. Content is
+    // truncated to 200 lines (~8 KB) to keep prompt size bounded.
+    let activeFileBlock = "";
+    if (body.activeFile?.path && body.activeFile.content) {
+      const rawLines = body.activeFile.content.split("\n");
+      const truncated = rawLines.length > 200;
+      const preview = truncated ? rawLines.slice(0, 200).join("\n") + "\n… (truncated at 200 lines)" : body.activeFile.content;
+      const ext = body.activeFile.path.split(".").pop() ?? "";
+      activeFileBlock = `\n\n--- Currently open in editor: ${body.activeFile.path} (${rawLines.length} lines total) ---\n\`\`\`${ext}\n${preview}\n\`\`\``;
+    }
+
     const messages: ChatMsg[] = [
       {
         role: "system",
-        content: `${sys}\n\n--- Workspace snapshot ---\n${ctx}${snippetsBlock}${memoryBlock}${aiMemoryBlock}${continuationBlock}`,
+        content: `${sys}\n\n--- Workspace snapshot ---\n${ctx}${snippetsBlock}${memoryBlock}${aiMemoryBlock}${activeFileBlock}${continuationBlock}`,
       },
       ...trimmed,
     ];

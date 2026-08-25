@@ -1041,6 +1041,11 @@ export default function EditorPage() {
               <Panel defaultSize={compactLayout ? 30 : 30} minSize={compactLayout ? 18 : 20}>
                 <AIChat
                   workspaceId={id!}
+                  activeFile={
+                    activePath && !isImageFile(activePath) && content
+                      ? { path: activePath, content }
+                      : undefined
+                  }
                   onWorkspaceMutated={() => qc.invalidateQueries({ queryKey: ["workspace", id] })}
                   onFilesMutated={() => qc.invalidateQueries({ queryKey: ["files", id] })}
                 />

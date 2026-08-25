@@ -1287,10 +1287,14 @@ function loadTabMsgs(wsid: string, tabId: string): Msg[] {
 
 export function AIChat({
   workspaceId,
+  activeFile,
   onWorkspaceMutated,
   onFilesMutated,
 }: {
   workspaceId: string;
+  /** File currently open in the editor — injected into the AI system prompt
+   *  so the model can reference the exact code the user is looking at. */
+  activeFile?: { path: string; content: string };
   onWorkspaceMutated?: () => void;
   onFilesMutated?: () => void;
 }) {
@@ -1973,6 +1977,8 @@ export function AIChat({
           // genuine fence-truncation detection.
           continuation: opts?.continuation === true,
           messages: next.slice(0, -1),
+          // Currently open file — lets AI see exactly what the user is editing.
+          activeFile: activeFile ?? undefined,
         }),
       });
       if (!startRes.ok) {

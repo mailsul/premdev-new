@@ -199,7 +199,8 @@ export function buildWorkspaceContext(
   const schemaFiles = detectSchemaFiles(root);
   const dbBlock = sniffDatabaseSchema(root);
   const wsDb = buildWorkspaceDbHint(username, workspaceName, schemaFiles);
-  return `Working directory: /workspace\nFiles:\n${body}${truncated}${hintBlock}${dbBlock}${wsDb}`;
+  const projectIndex = buildProjectIndex(workspaceId);
+  return `Working directory: /workspace\nFiles:\n${body}${truncated}${hintBlock}${dbBlock}${wsDb}${projectIndex}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +398,137 @@ export function detectProjectHints(root: string, lines: string[]): string[] {
     out.push("Static site, serve: python3 -m http.server 5000");
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Project index builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a structured project index that gives the AI actionable orientation:
+ * npm scripts, top dependencies, detected React Router route files, and
+ * Fastify route-prefix registrations.
+ *
+ * Returns "" when nothing useful is found (non-Node workspace, empty project).
+ */
+export function buildProjectIndex(workspaceId: string): string {
+  const root = workspacePath(workspaceId);
+  if (!fs.existsSync(root)) return "";
+
+  const parts: string[] = [];
+
+  // ── 1. package.json: scripts + top dependencies ──────────────────────────
+  try {
+    const pkgPath = path.join(root, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      const scripts: Record<string, string> = pkg.scripts ?? {};
+      const scriptKeys = Object.keys(scripts);
+      if (scriptKeys.length > 0) {
+        const items = scriptKeys.map((k) => `${k}: ${scripts[k]}`).join("; ");
+        parts.push(`npm scripts: ${items}`);
+      }
+      const deps: Record<string, string> = {
+        ...pkg.dependencies,
+        ...pkg.devDependencies,
+      };
+      const topDeps = Object.keys(deps).slice(0, 12);
+      if (topDeps.length > 0) {
+        parts.push(`key dependencies: ${topDeps.join(", ")}`);
+      }
+    }
+  } catch { /* ignore */ }
+
+  // ── 2. React Router: find files with route definitions ───────────────────
+  const routeFiles = findReactRouteFiles(root);
+  if (routeFiles.length > 0) {
+    parts.push(`React route files: ${routeFiles.join(", ")}`);
+  }
+
+  // ── 3. Fastify: extract registered route prefixes ────────────────────────
+  const fastifyPrefixes = findFastifyRoutePrefixes(root);
+  if (fastifyPrefixes.length > 0) {
+    parts.push(`API route prefixes: ${fastifyPrefixes.join(", ")}`);
+  }
+
+  if (parts.length === 0) return "";
+  return `\n\nProject index:\n${parts.map((p) => `- ${p}`).join("\n")}`;
+}
+
+/**
+ * Scan src/ directories for files that define React Router routes.
+ * Matches <Route, createBrowserRouter, useRoutes, Routes patterns.
+ */
+function findReactRouteFiles(root: string): string[] {
+  const ROUTE_PATTERN = /<Route\b|createBrowserRouter|useRoutes|<Routes\b/;
+  const SRC_EXTS = /\.(tsx|jsx|ts|js)$/;
+  const results: string[] = [];
+
+  function scanDir(dir: string, rel: string, depth: number) {
+    if (depth > 5 || results.length >= 8) return;
+    let items: fs.Dirent[];
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of items) {
+      if (SKIP_DIRS.has(e.name) || e.name.startsWith(".")) continue;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        scanDir(path.join(dir, e.name), childRel, depth + 1);
+      } else if (e.isFile() && SRC_EXTS.test(e.name)) {
+        try {
+          const src = fs.readFileSync(path.join(dir, e.name), "utf8");
+          if (ROUTE_PATTERN.test(src)) results.push(childRel);
+        } catch { /* skip */ }
+      }
+    }
+  }
+
+  // Prefer src/ first, then root
+  const srcDir = path.join(root, "src");
+  if (fs.existsSync(srcDir)) scanDir(srcDir, "src", 0);
+  if (results.length === 0) scanDir(root, "", 0);
+
+  return results;
+}
+
+/**
+ * Scan backend source files for Fastify .register() calls with a prefix
+ * (the canonical pattern for grouping routes in Fastify).
+ */
+function findFastifyRoutePrefixes(root: string): string[] {
+  // Match: fastify.register(..., { prefix: '/api/...' }) or prefix: '/...'
+  const PREFIX_RE = /prefix\s*:\s*['"`](\/[^'"`]*?)['"`]/g;
+  const SRC_EXTS = /\.(ts|js|mjs)$/;
+  const prefixes = new Set<string>();
+
+  function scanDir(dir: string, depth: number) {
+    if (depth > 5) return;
+    let items: fs.Dirent[];
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of items) {
+      if (SKIP_DIRS.has(e.name) || e.name.startsWith(".")) continue;
+      if (e.isDirectory()) {
+        scanDir(path.join(dir, e.name), depth + 1);
+      } else if (e.isFile() && SRC_EXTS.test(e.name)) {
+        try {
+          const src = fs.readFileSync(path.join(dir, e.name), "utf8");
+          let m: RegExpExecArray | null;
+          PREFIX_RE.lastIndex = 0;
+          while ((m = PREFIX_RE.exec(src)) !== null) {
+            prefixes.add(m[1]);
+            if (prefixes.size >= 12) return;
+          }
+        } catch { /* skip */ }
+      }
+    }
+  }
+
+  // Scan src/ (both apps/api/src and src/) where Fastify routes typically live
+  for (const candidate of ["apps/api/src", "src", "routes", "server"]) {
+    const dir = path.join(root, candidate);
+    if (fs.existsSync(dir)) scanDir(dir, 0);
+  }
+
+  return [...prefixes].sort();
 }
 
 // ---------------------------------------------------------------------------
