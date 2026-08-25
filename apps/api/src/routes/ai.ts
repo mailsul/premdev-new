@@ -548,6 +548,84 @@ Rules:
     }
   });
 
+  // POST /memory/compact  — merge a new note into existing AI memory via a
+  // lightweight, non-streaming AI call. Used when the AI emits a memorySave
+  // action mid-session so inline notes are merged rather than blindly appended.
+  // Falls back to raw append if the AI call fails or existing memory is empty.
+  const MemoryCompactBody = z.object({
+    workspaceId: z.string().min(1).max(64),
+    newNote: z.string().min(1).max(4000),
+    provider: z.string().min(1).max(200),
+    model: z.string().optional(),
+  });
+  app.post("/memory/compact", async (req, reply) => {
+    const u = await requireUser(req, reply);
+    if (!u) return;
+    const body = MemoryCompactBody.parse(req.body);
+    if (body.workspaceId !== "__global__") {
+      const w = db
+        .prepare("SELECT id FROM workspaces WHERE id = ? AND user_id = ?")
+        .get(body.workspaceId, u.id);
+      if (!w) return reply.code(404).send({ error: "Workspace not found" });
+    }
+
+    const existing = loadAIMemory(body.workspaceId);
+    if (!existing) {
+      // No existing memory — raw append is safe (nothing to deduplicate).
+      appendAIMemory(body.workspaceId, body.newNote);
+      return reply.send({ ok: true, compacted: false });
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const compactSystem = `You are a memory compactor for PremDev IDE. Merge the EXISTING MEMORY with the NEW NOTE into a single clean memory file, deduplicating and resolving contradictions (prefer the NEW NOTE when they conflict).
+
+Output ONLY the merged file — no preamble, no fences.
+
+Format (keep existing section headers):
+# Memori AI
+*Diperbarui: ${today}. Edit .premdev-data/memory.md untuk ubah manual.*
+
+Rules:
+- Max 80 lines total
+- Merge duplicate facts; remove stale/contradicted entries
+- Keep every unique important fact from both sources
+- Omit empty sections entirely`;
+
+    const messages: ChatMsg[] = [
+      { role: "system", content: compactSystem },
+      {
+        role: "user",
+        content: `EXISTING MEMORY:\n${existing}\n\nNEW NOTE TO MERGE:\n${body.newNote}`,
+      },
+    ];
+
+    const model = body.model || DEFAULT_MODELS[body.provider];
+    const { MAX_TOKENS_DEFAULT } = getAIBudgets();
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 30_000);
+    let result = "";
+    try {
+      const stream = streamProvider(
+        body.provider,
+        model,
+        messages,
+        Math.min(MAX_TOKENS_DEFAULT, 2048),
+        ac.signal,
+      );
+      for await (const chunk of stream) result += chunk;
+      clearTimeout(t);
+      result = result.trim();
+      if (!result || result.length < 20) throw new Error("empty");
+      writeAIMemory(body.workspaceId, result);
+      return reply.send({ ok: true, compacted: true });
+    } catch {
+      clearTimeout(t);
+      // Graceful degradation: fall back to raw append so the note is never lost.
+      appendAIMemory(body.workspaceId, body.newNote);
+      return reply.send({ ok: true, compacted: false });
+    }
+  });
+
   // POST /web-fetch  — used by the AI's `web:fetch` action (full page text via Jina reader).
   const WebFetchBody = z.object({
     url: z.string().url().max(2000),

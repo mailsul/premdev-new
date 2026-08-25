@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ConfirmDialog } from "./ConfirmDialog";
 import {
   Send, Square, Sparkles, Bot, User, Play, Save, RotateCw,
   Check, X, FileEdit, Copy, Pencil, ImagePlus, Paperclip,
@@ -288,10 +289,13 @@ type ActionResult = { ok: boolean; output: string };
 // Pass `signal` so Stop can abort the in-flight HTTP request — without this,
 // the orchestrator's `await runAction(...)` blocks until the server's own
 // timeout (~120s for /exec) and Stop appears to do nothing.
+// `opts.provider` / `opts.model` are used by the memorySave handler to call
+// the compact endpoint (merge-dedup) instead of raw append.
 async function runAction(
   workspaceId: string,
   action: Action,
   signal?: AbortSignal,
+  opts?: { provider?: string; model?: string },
 ): Promise<ActionResult> {
   async function fetchJson(method: string, path: string, body?: unknown) {
     const res = await fetch(`/api${path}`, {
@@ -469,12 +473,31 @@ async function runAction(
       return { ok: true, output: `Content of ${action.url}:\n\n${r.content}` };
     }
     if (action.kind === "memorySave") {
+      const lines = action.content.split("\n").length;
+      if (opts?.provider) {
+        // Use compact endpoint: merges + deduplicates with existing memory via AI.
+        // Falls back to raw append on the server side if the AI call fails.
+        const r = await fetchJson("POST", `/ai/memory/compact`, {
+          workspaceId,
+          newNote: action.content,
+          provider: opts.provider,
+          model: opts.model,
+        });
+        if (!r.ok) return { ok: false, output: r.error || "Memory compact failed" };
+        return {
+          ok: true,
+          output: r.compacted
+            ? `Memory compacted + saved (${lines} lines merged into .premdev-data/memory.md)`
+            : `Memory saved (${lines} lines appended → .premdev-data/memory.md)`,
+        };
+      }
+      // Fallback: raw append (no provider available for compaction).
       const r = await fetchJson("POST", `/ai/memory/append`, {
         workspaceId,
         content: action.content,
       });
       if (!r.ok) return { ok: false, output: r.error || "Memory save failed" };
-      return { ok: true, output: `Memory saved (${action.content.split("\n").length} lines → .premdev-data/memory.md)` };
+      return { ok: true, output: `Memory saved (${lines} lines → .premdev-data/memory.md)` };
     }
     if (action.kind === "open") {
       window.dispatchEvent(new CustomEvent("premdev:open-file", { detail: { path: action.path } }));
@@ -487,6 +510,26 @@ async function runAction(
     }
     return { ok: false, output: e?.message ?? String(e) };
   }
+}
+
+/**
+ * Risk classification for actions in autonomous mode.
+ *   "high"   — destructive / irreversible: delete, setEnv, destructive SQL.
+ *              Always requires user confirmation even in Otonom mode.
+ *   "medium" — side-effects but recoverable: restart, checkpoint.
+ *              Allowed to run automatically in Otonom mode.
+ *   "low"    — everything else.
+ */
+type ActionRisk = "high" | "medium" | "low";
+const DESTRUCTIVE_SQL = /\b(DROP|DELETE|TRUNCATE|UPDATE)\b/i;
+
+function getActionRisk(action: Action): ActionRisk {
+  if (action.kind === "delete") return "high";
+  if (action.kind === "setEnv") return "high";
+  if (action.kind === "db" && DESTRUCTIVE_SQL.test(action.sql)) return "high";
+  if (action.kind === "restart") return "medium";
+  if (action.kind === "checkpoint") return "medium";
+  return "low";
 }
 
 /**
@@ -1497,6 +1540,20 @@ export function AIChat({
   // Rolling history of action fingerprints for loop detection.
   // Each entry = array of fingerprints for one executed batch.
   const batchHistoryRef = useRef<string[][]>([]);
+  // Risk confirmation dialog: shown before high-risk actions in Otonom mode.
+  // Uses a Promise-resolver pattern so the async orchestrator can await the user's choice.
+  const [riskConfirmOpen, setRiskConfirmOpen] = useState(false);
+  const [riskConfirmAction, setRiskConfirmAction] = useState<Action | null>(null);
+  const riskConfirmResolverRef = useRef<((v: boolean) => void) | null>(null);
+
+  function requestRiskConfirm(action: Action): Promise<boolean> {
+    return new Promise((resolve) => {
+      riskConfirmResolverRef.current = resolve;
+      setRiskConfirmAction(action);
+      setRiskConfirmOpen(true);
+    });
+  }
+
   // Mirror of the latest committed `msgs` state, kept in sync via the
   // useEffect below. Needed because `sendRaw()` recursively re-invokes
   // itself for auto-continuation; the recursive call would otherwise
@@ -2591,9 +2648,27 @@ export function AIChat({
       const results: ActionResult[] = [];
       for (let i = 0; i < toRun.length; i++) {
         if (stoppedRef.current) break;
+
+        // Permission gate: high-risk actions require explicit user approval
+        // even when Otonom mode is active. The orchestrator pauses and awaits
+        // the user's decision via a modal dialog.
+        if (getActionRisk(toRun[i]) === "high") {
+          const confirmed = await requestRiskConfirm(toRun[i]);
+          if (!confirmed) {
+            results[i] = { ok: false, output: "Dibatalkan user (action berisiko tinggi)" };
+            setActionResults((prev) => {
+              const n = new Map(prev);
+              n.set(lastIdx, results.slice());
+              return n;
+            });
+            if (stoppedRef.current) break;
+            continue;
+          }
+        }
+
         const ac = new AbortController();
         actionAbortRef.current = ac;
-        const r = await runAction(workspaceId, toRun[i], ac.signal);
+        const r = await runAction(workspaceId, toRun[i], ac.signal, { provider, model });
         actionAbortRef.current = null;
         results[i] = r;
         // Audit each action with the provider/model that triggered it. Fire
@@ -3232,6 +3307,38 @@ export function AIChat({
           )}
         </div>
       </div>
+      {/* Risk confirmation dialog — shown before executing high-risk autonomous actions */}
+      {riskConfirmOpen && riskConfirmAction && (
+        <ConfirmDialog
+          open={riskConfirmOpen}
+          options={{
+            title: `⚠️ Action berisiko: ${actionLabel(riskConfirmAction)}`,
+            message: `Action ini bersifat destruktif dan tidak dapat dibatalkan. Lanjutkan?\n\n${
+              riskConfirmAction.kind === "delete"
+                ? `Hapus: ${riskConfirmAction.path}`
+                : riskConfirmAction.kind === "setEnv"
+                ? `Set env vars: ${Object.keys(riskConfirmAction.vars).join(", ")}`
+                : riskConfirmAction.kind === "db"
+                ? `SQL: ${riskConfirmAction.sql.slice(0, 200)}`
+                : actionLabel(riskConfirmAction)
+            }`,
+            confirmLabel: "Jalankan",
+            cancelLabel: "Batalkan",
+            danger: true,
+          }}
+          onConfirm={() => {
+            setRiskConfirmOpen(false);
+            riskConfirmResolverRef.current?.(true);
+            riskConfirmResolverRef.current = null;
+          }}
+          onCancel={() => {
+            setRiskConfirmOpen(false);
+            riskConfirmResolverRef.current?.(false);
+            riskConfirmResolverRef.current = null;
+          }}
+        />
+      )}
+
       {attachPickerOpen && (
         <AIFilePicker
           workspaceId={workspaceId}
@@ -3629,7 +3736,7 @@ function ActionCard({
       action;
     const ac = new AbortController();
     manualAbortRef.current = ac;
-    const r = await runAction(workspaceId, eff, ac.signal);
+    const r = await runAction(workspaceId, eff, ac.signal, { provider, model });
     manualAbortRef.current = null;
     setOutput(r.output);
     setState(r.ok ? "ok" : "error");
@@ -3737,6 +3844,11 @@ function ActionCard({
         title={collapsed ? "Klik untuk lihat detail" : "Klik untuk tutup"}
       >
         {meta.icon}
+        {getActionRisk(action) === "high" && (
+          <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold bg-danger/15 text-danger">
+            ⚠ Berisiko
+          </span>
+        )}
         <span className="min-w-0 flex-1 truncate text-left">{meta.label}</span>
         {statusBadge}
         <ChevronDown
