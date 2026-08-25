@@ -2218,6 +2218,7 @@ export function AIChat({
     setInput("");
     stoppedRef.current = false;
     batchHistoryRef.current = [];
+    planRef.current = null;
 
     const configuredProviders = providers?.providers.filter((p) => p.configured) ?? [];
     const members = councilMembers.length >= 2
@@ -2414,6 +2415,7 @@ export function AIChat({
       iterationRef.current = 0;
       processedBatchesRef.current = new Set();
       batchHistoryRef.current = [];
+      planRef.current = null;
       setAutoManagedBatches(new Set());
       await sendRaw(queued, []);
     }

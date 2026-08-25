@@ -301,7 +301,10 @@ function compressToolResults(content: string): string {
       if (!inFence) {
         // Opening fence — check if the most recent non-empty numbered line is an ERROR
         const prevLabel = out.filter(l => /^\d+\./.test(l.trim())).pop() ?? "";
-        keepFence = prevLabel.includes("— ERROR") || prevLabel.includes("FAILED");
+        // Only check for the exact em-dash format that formatToolResults emits
+        // ("1. bash:run ... — ERROR"). Never check output body text — words like
+        // "FAILED" or "error" appear in normal success output (pytest names, etc.).
+        keepFence = prevLabel.includes("— ERROR");
         inFence = true;
         if (keepFence) out.push(line); // keep the opening fence for errors
       } else {
@@ -342,7 +345,10 @@ export function trimHistory(msgs: ChatMsg[]): ChatMsg[] {
   const errorVerbatim  = msgs.length - 10; // messages 7-10: verbatim if they have errors
   for (let i = msgs.length - 1; i >= 0 && out.length < MAX_HISTORY_MESSAGES; i--) {
     const original = msgs[i];
-    const hasError = original.content.includes("— ERROR") || original.content.includes("FAILED");
+    // Only match the exact em-dash format from formatToolResults ("— ERROR").
+    // Never use broad "FAILED" — that word appears in pytest/jest success output
+    // (e.g. "FAILED test_login") and would wrongly extend the verbatim window.
+    const hasError = original.content.includes("— ERROR");
     // Keep verbatim if: within last 6 turns, OR within last 10 turns and has an error
     const useVerbatim = i >= alwaysVerbatim || (hasError && i >= errorVerbatim);
     const content = useVerbatim
