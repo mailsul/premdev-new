@@ -3461,6 +3461,7 @@ function Bubble({
   isLast,
   isStreaming,
   autoPilot,
+  autonomous,
   autoManaged,
   actionResults,
   provider,
@@ -3474,6 +3475,7 @@ function Bubble({
   isLast: boolean;
   isStreaming: boolean;
   autoPilot: boolean;
+  autonomous: boolean;
   autoManaged: boolean;
   actionResults?: ActionResult[];
   provider: string;
@@ -3578,6 +3580,7 @@ function Bubble({
               workspaceId={workspaceId}
               presetResult={autoManaged ? actionResults?.[i] : undefined}
               autoManaged={autoManaged}
+              autonomous={autonomous}
               provider={provider}
               model={model}
               onWorkspaceMutated={onWorkspaceMutated}
@@ -3688,6 +3691,7 @@ function ActionCard({
   workspaceId,
   presetResult,
   autoManaged = false,
+  autonomous = false,
   provider,
   model,
   onWorkspaceMutated,
@@ -3701,6 +3705,9 @@ function ActionCard({
   // True when this card is part of an autonomous batch — hides manual buttons
   // and shows a "Queued (otonom)…" placeholder while results stream in.
   autoManaged?: boolean;
+  // True when the Otonom toggle is enabled — suppresses Approve/Skip buttons
+  // even before the orchestrator marks this card as autoManaged.
+  autonomous?: boolean;
   // Provider+model that produced this suggestion — recorded in the audit log
   // when the user approves it manually.
   provider: string;
@@ -3892,7 +3899,13 @@ function ActionCard({
               onChange={(e) => setEditedCommand(e.target.value)}
             />
           )}
-          {effectiveState === "idle" ? (
+          {effectiveState === "idle" && autonomous ? (
+            // Otonom mode: action is queued for auto-execution — never show Approve/Skip.
+            <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
+              <Loader2 size={11} className="animate-spin" />
+              Menunggu eksekusi otonom…
+            </div>
+          ) : effectiveState === "idle" ? (
             <div className="flex flex-wrap gap-2">
               <button className="btn-primary text-xs" onClick={execute}>
                 <Check size={12} /> Approve

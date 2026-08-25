@@ -697,7 +697,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     name: z.string().min(1).max(100),
     base_url: z.string().min(1).max(500),
     // api_keys: array of plaintext keys (preferred multi-key form)
-    api_keys: z.array(z.string().max(500)).max(20).optional(),
+    api_keys: z.array(z.string().max(500)).optional(),
     // legacy single-key field still accepted for backward compat
     api_key: z.string().max(500).optional().default(""),
     models: z.array(z.string().max(200)).max(100).optional().default([]),
