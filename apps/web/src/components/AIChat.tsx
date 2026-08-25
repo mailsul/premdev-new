@@ -5,9 +5,9 @@ import {
   Check, X, FileEdit, Copy, Pencil, ImagePlus, Paperclip,
   Trash2, FolderPlus, Move, Search, Stethoscope, Globe, Diff,
   Plus, MessageSquare, Mic, MicOff, Bookmark, FlaskConical,
-  ListChecks, Clock, Zap, ChevronDown, Loader2, Brain,
+  Clock, Zap, ChevronDown, Loader2, Brain,
   Terminal, BookOpen, PenLine, Wrench, RefreshCw,
-  Users, GitMerge, ChevronRight,
+  Users, GitMerge, ChevronRight, Shield, AlertTriangle,
 } from "lucide-react";
 import { API } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
@@ -1367,16 +1367,11 @@ export function AIChat({
   const [streaming, setStreaming] = useState(false);
   // Always ON — AI proposes approve-able action blocks.
   const [autoPilot] = useState(true);
-  // Autonomous: always ON by default (like Replit agent — auto-execute, no Approve needed).
-  // User can still override via manual toggle if needed.
-  const [autonomous, setAutonomous] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem("premdev:ai:autonomous");
-      return saved === null ? true : saved === "1";
-    } catch { return true; }
-  });
-  // Plan mode: auto-detected from message keywords. Not persisted — resets
-  // each send based on what the user typed.
+  // Autonomous: always ON — AI auto-executes all actions.
+  // Becomes false only when the user's FIRST message in a new chat contains
+  // "konfirmasi dulu" / "confirm first" / "tanya dulu" (detected in send()).
+  const [autonomous, setAutonomous] = useState(true);
+  // Plan mode: auto-detected from message keywords only (no manual toggle).
   const [planMode, setPlanMode] = useState(false);
 
   // ---------------------------------------------------------------------------
@@ -1569,15 +1564,7 @@ export function AIChat({
   const actionAbortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    try { localStorage.setItem("premdev:ai:autonomous", autonomous ? "1" : "0"); }
-    catch {}
-  }, [autonomous]);
-
-  useEffect(() => {
-    try { localStorage.setItem("premdev:ai:planMode", planMode ? "1" : "0"); }
-    catch {}
-  }, [planMode]);
+  // (autonomous no longer persisted — always starts true, reset each new chat)
 
   useEffect(() => {
     try { localStorage.setItem("premdev:ai:snippets", JSON.stringify(snippets)); }
@@ -2289,11 +2276,17 @@ export function AIChat({
     // Strip any in-flight voice interim marker before sending.
     let txt = input.replace(/\s*⟨[^⟩]*⟩\s*$/, "").trim();
 
-    // Auto-detect intent from the message and inject plan prefix if needed.
+    // If this is the user's FIRST message and it asks for confirmation, switch to
+    // manual mode (require Approve on every action) for the whole session.
+    const isFirstUserMsg = msgs.filter((m) => m.role === "user" && !m.synthetic).length === 0;
+    if (isFirstUserMsg && /konfirmasi\s*dulu|confirm\s*first|tanya\s*dulu|minta\s*persetujuan|approve\s*dulu/i.test(txt)) {
+      setAutonomous(false);
+    }
+
+    // Auto-detect plan intent from message keywords (no manual toggle).
     const intent = detectMessageIntent(txt);
     if (intent.plan || planMode) {
       txt = `[PLAN MODE — JANGAN emit action blocks. Tampilkan rencana terstruktur dulu (numbered steps + file targets + risiko), tunggu konfirmasi user.]\n\n${txt}`;
-      // Show plan badge only while this message is active; reset after send.
       setPlanMode(false);
     }
     const imgs = pendingImages;
@@ -2899,58 +2892,14 @@ export function AIChat({
               );
             })}
           </select>
-          <div
-            className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-              autonomous ? "bg-success/15 text-success" : "bg-bg-hover text-text-muted"
-            }`}
-            title={autonomous ? "Otonom aktif — AI akan eksekusi otomatis tanpa perlu Approve. Klik untuk nonaktifkan." : "Otonom nonaktif — aksi butuh Approve manual. Klik untuk aktifkan."}
-            style={{ cursor: "pointer" }}
-            onClick={() => setAutonomous((v) => !v)}
-          >
-            <Zap size={9} />
-            {autonomous ? "Otonom" : "Manual"}
-          </div>
-          <div
-            className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-              planMode ? "bg-accent/15 text-accent" : "bg-bg-hover text-text-muted"
-            }`}
-            title="Plan: AI tampilkan rencana dulu sebelum eksekusi. Auto-aktif untuk kata 'rencanakan/review/jelaskan/analisis'."
-            style={{ cursor: "pointer" }}
-            onClick={() => setPlanMode((v) => !v)}
-          >
-            <ListChecks size={9} />
-            Plan
-          </div>
-          <button
-            className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
-              memorySaved
-                ? "bg-success/15 text-success"
-                : "bg-bg-hover text-text-muted hover:text-text"
-            }`}
-            title={`Simpan memori sesi ini (${globalMemory ? "Global — lintas workspace" : "Lokal — workspace ini saja"}). AI akan mengingat preferensi, tech stack, dan pola dari percakapan ini untuk sesi berikutnya.`}
-            onClick={() => saveMemory()}
-            disabled={savingMemory || msgs.filter(m => !m.synthetic).length < 2}
-          >
-            {savingMemory ? <Loader2 size={9} className="animate-spin" /> : memorySaved ? <Check size={9} /> : <Brain size={9} />}
-            {savingMemory ? "Menyimpan…" : memorySaved ? "Tersimpan!" : "Memori"}
-          </button>
-          {/* Global memory toggle */}
-          <div
-            className={`flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
-              globalMemory ? "bg-success/10 text-success" : "bg-bg-hover text-text-muted hover:text-text"
-            }`}
-            title={globalMemory
-              ? "Memori Global AKTIF — disimpan lintas semua workspace. Klik untuk beralih ke Memori Lokal."
-              : "Memori Lokal — hanya workspace ini. Klik untuk aktifkan Memori Global (lintas workspace)."}
-            onClick={() => setGlobalMemory((v) => {
-              const next = !v;
-              try { localStorage.setItem("premdev:ai:globalMemory", next ? "1" : "0"); } catch {}
-              return next;
-            })}
-          >
-            <Globe size={9} />
-            {globalMemory ? "Global" : "Lokal"}
-          </div>
+          {/* Otonom/Plan/Memori/Lokal buttons removed — always auto-execute.
+              Manual confirm mode activates automatically when first message contains "konfirmasi dulu". */}
+          {!autonomous && (
+            <div className="flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-medium text-warning">
+              <Shield size={9} />
+              Konfirmasi aktif
+            </div>
+          )}
           <div
             className={`flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
               councilMode ? "bg-purple-500/15 text-purple-400" : "bg-bg-hover text-text-muted hover:text-text"
