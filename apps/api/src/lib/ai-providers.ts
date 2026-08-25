@@ -427,12 +427,24 @@ export async function* streamCustomProvider(
   const resolvedModel = model === "auto"
     ? (prov.default_model || (prov.models[0] ?? "gpt-4o-mini"))
     : model;
+
+  // Always log custom provider requests so debugging is possible via
+  // `docker logs premdev-app-1 2>&1 | grep "\[CUSTOM\]"` without needing
+  // AI_DEBUG_LOG. Shows URL, model, messages count, and system prompt length.
+  const sysMsg = messages.find((m) => m.role === "system");
+  console.error(
+    `[CUSTOM] provider=${prov.name} model=${resolvedModel} url=${url} ` +
+    `msgs=${messages.length} sysLen=${sysMsg?.content.length ?? 0} ` +
+    `hasSysPrompt=${!!sysMsg} sysPreview=${(sysMsg?.content ?? "").slice(0, 120).replace(/\n/g, "↵")}`
+  );
+
   // Pass all keys — streamOpenAICompat will try them in order on 429/401/403.
   // Shuffle so load is distributed across keys when multiple are configured.
   const shuffled = keys.length > 1
     ? [...keys].sort(() => Math.random() - 0.5)
     : keys;
-  yield* streamOpenAICompat({
+  let yielded = false;
+  for await (const chunk of streamOpenAICompat({
     url,
     keys: shuffled,
     providerLabel: prov.name,
@@ -440,7 +452,22 @@ export async function* streamCustomProvider(
     messages,
     signal,
     maxTokens,
-  });
+  })) {
+    yielded = true;
+    yield chunk;
+  }
+  // If the provider returned nothing at all (empty SSE stream), surface a
+  // diagnostic message so the user sees it in the chat bubble instead of
+  // a silent "~0 tok".
+  if (!yielded) {
+    console.error(`[CUSTOM] provider=${prov.name} model=${resolvedModel} — stream returned 0 bytes`);
+    yield `⚠️ **${prov.name} tidak mengembalikan respons** (0 byte dari server).\n` +
+      `Kemungkinan penyebab:\n` +
+      `- Context terlalu panjang untuk model ini\n` +
+      `- API key tidak valid atau quota habis\n` +
+      `- URL endpoint salah: \`${url}\`\n\n` +
+      `Cek log server: \`docker logs premdev-app-1 2>&1 | grep "\\[CUSTOM\\]"\``;
+  }
 }
 
 export async function* streamProvider(
