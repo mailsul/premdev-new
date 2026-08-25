@@ -5,7 +5,7 @@ import {
   Check, X, FileEdit, Copy, Pencil, ImagePlus, Paperclip,
   Trash2, FolderPlus, Move, Search, Stethoscope, Globe, Diff,
   Plus, MessageSquare, Mic, MicOff, Bookmark, FlaskConical,
-  Clock, Zap, ChevronDown, Loader2, Brain,
+  Clock, Zap, ChevronDown, ChevronUp, Loader2, Brain,
   Terminal, BookOpen, PenLine, Wrench, RefreshCw,
   Users, GitMerge, ChevronRight, Shield, AlertTriangle, RotateCcw,
 } from "lucide-react";
@@ -35,6 +35,9 @@ type Msg = {
   // For session-end summary messages: the checkpoint ID that was created
   // at the start of this session (so user can rollback).
   sessionCheckpointId?: string;
+  // For session-end summary messages: ordered list of action labels run
+  // during this session (used to render the "Show more/less" activity log).
+  sessionActionLog?: string[];
   // Provenance: which provider/model produced this assistant reply,
   // captured at SEND time so historical bubbles keep showing the model
   // that actually generated them even after the user later switches the
@@ -1537,6 +1540,7 @@ export function AIChat({
   const sessionStartRef = useRef<number>(0);       // wall-clock ms when current session started
   const sessionActionsRef = useRef<number>(0);     // total actions run this session
   const sessionCheckpointRef = useRef<string | null>(null); // checkpoint created at start of this session
+  const sessionActionLogRef = useRef<string[]>([]); // ordered action labels run this session (for activity log)
   // Per-message action results: msgIdx -> [results]. Filled sequentially by
   // the autonomous orchestrator below; ActionCard reads from this map to
   // display the outcome without ever running the action itself.
@@ -2372,6 +2376,7 @@ export function AIChat({
     sessionStartRef.current = Date.now();
     sessionActionsRef.current = 0;
     sessionCheckpointRef.current = null;
+    sessionActionLogRef.current = [];
     batchHistoryRef.current = [];
     planRef.current = null;
     setAutoManagedBatches(new Set());
@@ -2416,6 +2421,7 @@ export function AIChat({
       processedBatchesRef.current = new Set();
       batchHistoryRef.current = [];
       planRef.current = null;
+      sessionActionLogRef.current = [];
       setAutoManagedBatches(new Set());
       await sendRaw(queued, []);
     }
@@ -2639,6 +2645,7 @@ export function AIChat({
         const secs = elapsed % 60;
         const timeStr = mins > 0 ? `${mins} mnt ${secs} dtk` : `${secs} dtk`;
         const ckId = sessionCheckpointRef.current ?? undefined;
+        const actionLog = sessionActionLogRef.current.slice();
         setMsgs((prev) => [
           ...prev,
           {
@@ -2647,6 +2654,7 @@ export function AIChat({
             synthetic: true,
             sentAt: Date.now(),
             ...(ckId ? { sessionCheckpointId: ckId } : {}),
+            ...(actionLog.length > 0 ? { sessionActionLog: actionLog } : {}),
           },
         ]);
       }
@@ -2764,13 +2772,38 @@ export function AIChat({
       // Note: fetchJson is scoped inside runAction so we use fetch directly here.
       if (iterationRef.current === 0 && sessionCheckpointRef.current === null) {
         try {
+          const ckTimestamp = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta", hour12: false });
           const ckRes = await fetch(`/api/workspaces/${workspaceId}/checkpoints`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             credentials: "include",
             body: JSON.stringify({ message: "Auto: sebelum sesi AI" }),
           }).then((r) => r.ok ? r.json() : null);
-          sessionCheckpointRef.current = ckRes?.checkpoint?.id ?? null;
+          const ckId = ckRes?.checkpoint?.id ?? null;
+          sessionCheckpointRef.current = ckId;
+
+          // Notify user in chat that checkpoint was created.
+          setMsgs((prev) => [
+            ...prev,
+            {
+              role: "assistant" as const,
+              content: `🔐 **Checkpoint dibuat** — ${ckTimestamp}${ckId ? ` · ID: \`${ckId}\`` : ""}\nKlik **Rollback sesi ini** di akhir sesi untuk membatalkan semua perubahan.`,
+              synthetic: true,
+              sentAt: Date.now(),
+              ...(ckId ? { sessionCheckpointId: ckId } : {}),
+            },
+          ]);
+
+          // Write checkpoint info to a log file via exec so it's auditable later.
+          const logEntry = `## ${ckTimestamp}\\n- Checkpoint ID: ${ckId ?? "(gagal)"}\\n- Sesi: ${new Date().toISOString()}\\n`;
+          fetch(`/api/workspaces/${workspaceId}/exec`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              command: `mkdir -p .premdev-data && printf '%b\\n' "${logEntry}" >> .premdev-data/checkpoint-log.md`,
+            }),
+          }).catch(() => {});
         } catch {
           // Non-fatal — checkpoint failure must not block AI execution.
         }
@@ -2802,6 +2835,8 @@ export function AIChat({
         actionAbortRef.current = null;
         results[i] = r;
         sessionActionsRef.current += 1;
+        // Track action label for the session activity log.
+        sessionActionLogRef.current.push(actionLabel(toRun[i]));
         // Audit each action with the provider/model that triggered it. Fire
         // and forget — never block on the network here.
         logAudit({
@@ -3159,13 +3194,48 @@ export function AIChat({
               <div key={i} className="mx-1 my-1">
                 <div className="rounded-md border border-bg-border bg-bg-subtle/60 px-3 py-2 text-xs text-text-muted">
                   <Markdown text={m.content} />
+                  {/* Activity log — collapsible "Show more / Show less" list */}
+                  {m.sessionActionLog && m.sessionActionLog.length > 0 && (
+                    <details className="mt-2 group" open>
+                      <summary className="flex cursor-pointer select-none list-none items-center gap-1 text-[11px] text-accent hover:text-accent/80">
+                        <ChevronUp size={11} className="group-open:block hidden" />
+                        <ChevronDown size={11} className="group-open:hidden block" />
+                        <span className="group-open:hidden">Lihat {m.sessionActionLog.length} aksi</span>
+                        <span className="group-open:block hidden">Sembunyikan aksi</span>
+                      </summary>
+                      <div className="mt-1.5 flex flex-col gap-0.5 border-l-2 border-bg-border pl-2">
+                        {m.sessionActionLog.map((label, li) => {
+                          // Pick an icon prefix based on the action kind
+                          const icon =
+                            label.startsWith("file:")    ? "📄" :
+                            label.startsWith("patch:")   ? "✏️" :
+                            label.startsWith("delete:")  ? "🗑️" :
+                            label.startsWith("bash:")    ? ">_" :
+                            label.startsWith("diag:")    ? "🔍" :
+                            label.startsWith("test:")    ? "🧪" :
+                            label.startsWith("web:")     ? "🌐" :
+                            label.startsWith("memory:")  ? "🧠" :
+                            label.startsWith("workspace:")? "⚙️" :
+                            label.startsWith("db:")      ? "🗃️" :
+                            "•";
+                          return (
+                            <div key={li} className="flex items-start gap-1.5 text-[11px] leading-tight text-text-muted">
+                              <span className="mt-px shrink-0 font-mono text-[10px]">{icon}</span>
+                              <span className="truncate">{label.replace(/^[^:]+:\s*/, "")}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  )}
+                  {/* Rollback button — shown on checkpoint-notification and completion messages */}
                   {m.sessionCheckpointId && (
                     <button
                       className="mt-2 flex items-center gap-1 rounded border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-warning hover:bg-warning/20"
                       onClick={async () => {
                         if (!confirm("Rollback semua perubahan file sejak sesi ini dimulai?")) return;
                         try {
-                          await fetch(`/api/workspaces/${workspaceId}/checkpoints/${m.sessionCheckpointId}/restore`, { method: "POST" });
+                          await fetch(`/api/workspaces/${workspaceId}/checkpoints/${m.sessionCheckpointId}/restore`, { method: "POST", credentials: "include" });
                           alert("✅ Rollback selesai — workspace dikembalikan ke kondisi sebelum sesi AI ini.");
                         } catch {
                           alert("❌ Rollback gagal.");

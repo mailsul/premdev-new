@@ -149,6 +149,19 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     const { MAX_TOKENS_DEFAULT, MAX_TOKENS_AUTOPILOT } = getAIBudgets();
     const maxTokens = body.autoPilot ? MAX_TOKENS_AUTOPILOT : MAX_TOKENS_DEFAULT;
 
+    // ── DEBUG LOGGING (opt-in: set AI_DEBUG_LOG=1 in environment) ──────────
+    if (process.env.AI_DEBUG_LOG === "1") {
+      const sysContent = messages[0]?.content ?? "(no system message!)";
+      const msgRoles = messages.map((m) => m.role).join(", ");
+      console.error(
+        `[AI-DEBUG] provider=${body.provider} model=${model} autoPilot=${body.autoPilot}\n` +
+        `[AI-DEBUG] messages count=${messages.length} roles=[${msgRoles}]\n` +
+        `[AI-DEBUG] system prompt (first 400 chars):\n${sysContent.slice(0, 400)}\n` +
+        `[AI-DEBUG] system prompt (last 200 chars):\n...${sysContent.slice(-200)}`
+      );
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     const job = createJob({
       workspaceId: body.workspaceId,
       tabId: body.tabId,
