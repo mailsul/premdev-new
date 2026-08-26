@@ -1541,6 +1541,9 @@ export function AIChat({
   const sessionActionsRef = useRef<number>(0);     // total actions run this session
   const sessionCheckpointRef = useRef<string | null>(null); // checkpoint created at start of this session
   const sessionActionLogRef = useRef<string[]>([]); // ordered action labels run this session (for activity log)
+  // Counts how many times we've nudged the model to use action blocks instead of planning text.
+  // Reset on every new user message. Caps at 2 to prevent infinite nudge loops.
+  const planNudgeRef = useRef<number>(0);
   // Per-message action results: msgIdx -> [results]. Filled sequentially by
   // the autonomous orchestrator below; ActionCard reads from this map to
   // display the outcome without ever running the action itself.
@@ -1550,6 +1553,9 @@ export function AIChat({
   // True while the autonomous orchestrator is running an action batch (so
   // Stop stays visible even when the model isn't streaming).
   const [autoExecuting, setAutoExecuting] = useState(false);
+  // Real-time activity label shown in the status bar while streaming or executing.
+  // Cleared when idle. Examples: "💭 Berpikir...", "✏️ Mengedit index.php"
+  const [currentActivity, setCurrentActivity] = useState<string | null>(null);
   // Ref to track how many AI turns we've auto-saved memory at, so we don't re-fire.
   const lastAutoSavedTurnRef = useRef(0);
   // msgIdx values whose action batch we've already orchestrated. Prevents the
@@ -2079,6 +2085,7 @@ export function AIChat({
     msgsRef.current = next;
     setMsgs(next);
     setStreaming(true);
+    setCurrentActivity("💭 Berpikir…");
 
     const ac = new AbortController();
     abortRef.current = ac;
@@ -2184,6 +2191,7 @@ export function AIChat({
       }
     } finally {
       setStreaming(false);
+      setCurrentActivity(null);
       abortRef.current = null;
       activeJobIdRef.current = null;
       try { localStorage.removeItem(JOB_KEY(workspaceId, activeTabId)); } catch {}
@@ -2379,6 +2387,7 @@ export function AIChat({
     sessionActionLogRef.current = [];
     batchHistoryRef.current = [];
     planRef.current = null;
+    planNudgeRef.current = 0;
     setAutoManagedBatches(new Set());
     // Clear any pending mid-run queue from the PREVIOUS AI turn so the
     // newly typed message starts fresh. Queue items are only valid for the
@@ -2638,6 +2647,24 @@ export function AIChat({
     }
 
     if (acts.length === 0) {
+      // ── Orchestrator nudge ────────────────────────────────────────────────
+      // Model gave ONLY text (no action blocks) and no actions have run yet in
+      // this session → likely a "planning text" turn from a weaker model.
+      // Nudge it (up to 2×) to emit action blocks instead of describing plans.
+      // This is the primary fix for "agent stops after saying 'saya akan…'".
+      if (autonomous && sessionActionsRef.current === 0 && !stoppedRef.current &&
+          planNudgeRef.current < 2) {
+        planNudgeRef.current += 1;
+        processedBatchesRef.current.add(lastIdx);
+        await sendRaw(
+          "Langsung eksekusi sekarang dengan action blocks. Jangan jelaskan rencana terlebih dahulu.",
+          undefined,
+          { synthetic: true, continuation: false },
+        );
+        return;
+      }
+      // ──────────────────────────────────────────────────────────────────────
+
       // AI ended naturally — show session summary if we ran at least 1 action.
       if (autonomous && sessionActionsRef.current > 0) {
         const elapsed = Math.round((Date.now() - sessionStartRef.current) / 1000);
@@ -2832,6 +2859,8 @@ export function AIChat({
 
         const ac = new AbortController();
         actionAbortRef.current = ac;
+        // Show realtime activity label in the status bar while action runs.
+        setCurrentActivity(actionLabel(toRun[i]));
         const r = await runAction(workspaceId, toRun[i], ac.signal, { provider, model });
         actionAbortRef.current = null;
         results[i] = r;
@@ -2861,6 +2890,7 @@ export function AIChat({
         if (stoppedRef.current) break;
       }
       setAutoExecuting(false);
+      setCurrentActivity(null);
       if (stoppedRef.current) return;
       if (iterationRef.current >= MAX_AUTO_ITERATIONS) return;
       iterationRef.current += 1;
@@ -2874,6 +2904,7 @@ export function AIChat({
       await sendRaw(planAnchor + formatToolResults(toRun, results));
     })().catch(() => {
       setAutoExecuting(false);
+      setCurrentActivity(null);
       actionAbortRef.current = null;
     });
   }, [msgs, autonomous, streaming, autoExecuting]);
@@ -3279,6 +3310,68 @@ export function AIChat({
             melanjutkan output… (round {continuationCountRef.current})
           </div>
         )}
+        {/* ── Real-time activity indicator (like Replit's tool status) ────────
+            Shows what the agent is currently doing: "💭 Berpikir…" when the
+            model is generating, or the action label (e.g. "✏️ Mengedit x.php")
+            while an action is being executed. Disappears when idle. */}
+        {(streaming || autoExecuting) && currentActivity && (
+          <div className="mx-1 my-0.5 flex items-center gap-1.5 rounded-md border border-accent/20 bg-accent/5 px-2.5 py-1.5 text-[11px] text-text-muted">
+            <Loader2 size={10} className="animate-spin shrink-0 text-accent" />
+            <span className="min-w-0 truncate">{currentActivity}</span>
+          </div>
+        )}
+        {/* ── Provider error recovery ──────────────────────────────────────────
+            When the last assistant message is a provider error (rate-limit,
+            invalid key, server error, empty stream), show retry buttons:
+            • "Coba lagi" → re-send the same request (backend will try the
+              NEXT API key first before falling back to an error)
+            • "Ganti model" → shows the model dropdown so user can switch */}
+        {!streaming && !autoExecuting && (() => {
+          const lastAssistant = [...msgs].reverse().find(
+            (m) => m.role === "assistant" && !m.synthetic,
+          );
+          if (!lastAssistant) return null;
+          const c = lastAssistant.content;
+          const isProviderError =
+            c.startsWith("⚠️ **") ||
+            c.startsWith("🔑 **") ||
+            c.startsWith("💳 **") ||
+            c.includes("rate-limit") ||
+            c.includes("API key tidak valid") ||
+            c.includes("tidak mengembalikan respons") ||
+            c.includes("server error");
+          if (!isProviderError) return null;
+          // Find the last real user message for retry
+          const lastUser = [...msgs].reverse().find(
+            (m) => m.role === "user" && !m.synthetic,
+          );
+          if (!lastUser) return null;
+          return (
+            <div className="mx-1 my-1 flex flex-wrap items-center gap-1.5 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-[11px]">
+              <span className="mr-1 text-warning font-medium">Provider error —</span>
+              <button
+                className="flex items-center gap-1 rounded border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-warning hover:bg-warning/20"
+                onClick={() => {
+                  // Remove the error assistant message and retry.
+                  // Backend will rotate to next API key automatically.
+                  setMsgs((prev) => {
+                    const idx = [...prev].map((m, i) => ({ m, i }))
+                      .reverse()
+                      .find(({ m }) => m.role === "assistant" && !m.synthetic)?.i;
+                    if (idx === undefined) return prev;
+                    const next = prev.slice(0, idx);
+                    msgsRef.current = next;
+                    return next;
+                  });
+                  setTimeout(() => sendRaw(lastUser.content, lastUser.images), 0);
+                }}
+              >
+                <RotateCcw size={10} /> Coba lagi (rotasi token)
+              </button>
+              <span className="text-text-muted">atau ganti model di dropdown atas</span>
+            </div>
+          );
+        })()}
         {queuedCount > 0 && (
           // Mid-run queue indicator: shows when user typed a message while AI
           // was still running. The queued message(s) will fire as full AI
