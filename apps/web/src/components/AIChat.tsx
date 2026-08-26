@@ -2656,11 +2656,14 @@ export function AIChat({
           planNudgeRef.current < 2) {
         planNudgeRef.current += 1;
         processedBatchesRef.current.add(lastIdx);
-        await sendRaw(
-          "Langsung eksekusi sekarang dengan action blocks. Jangan jelaskan rencana terlebih dahulu.",
-          undefined,
-          { synthetic: true, continuation: false },
-        );
+        // useEffect callback is synchronous — wrap in IIFE so we can await sendRaw.
+        void (async () => {
+          await sendRaw(
+            "Langsung eksekusi sekarang dengan action blocks. Jangan jelaskan rencana terlebih dahulu.",
+            undefined,
+            { synthetic: true, continuation: false },
+          );
+        })();
         return;
       }
       // ──────────────────────────────────────────────────────────────────────
