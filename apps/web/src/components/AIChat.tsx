@@ -315,6 +315,8 @@ async function logAudit(opts: {
 
 function formatToolResults(actions: Action[], results: ActionResult[]): string {
   const lines: string[] = ["Tool results:"];
+  const errorActions: Array<{ label: string; output: string }> = [];
+
   actions.forEach((a, i) => {
     const r = results[i];
     if (!r) {
@@ -356,7 +358,28 @@ function formatToolResults(actions: Action[], results: ActionResult[]): string {
       lines.push(snippet);
       lines.push("```");
     }
+
+    // Collect errors for structured analysis injection below.
+    if (!ok) {
+      errorActions.push({ label: actionLabel(a), output: trimmed.slice(0, 400) });
+    }
   });
+
+  // ── Structured error analysis prompt ─────────────────────────────────
+  // When any action in this batch failed, inject a mandatory analysis
+  // protocol BEFORE the AI emits its next fix attempt. This forces the
+  // AI to reason about root cause instead of blindly retrying — the
+  // primary driver of "same error 3× in a row" situations.
+  if (errorActions.length > 0) {
+    lines.push("");
+    lines.push("⚠️ ERROR TERDETEKSI — wajib analisis sebelum menulis fix:");
+    lines.push("Tulis 3 baris ini (singkat) SEBELUM action block apapun:");
+    lines.push("  Kategori: [syntax | import/require | koneksi | permission | logic | command | port | lainnya]");
+    lines.push("  Root cause: [1 kalimat — apa yang sebenarnya salah berdasarkan output di atas]");
+    lines.push("  Fix plan: [spesifik — file mana / baris mana / apa yang diubah]");
+    lines.push("Jika fix plan SAMA dengan yang sudah dicoba sebelumnya → GANTI pendekatan. Jangan ulangi hal yang sama.");
+  }
+
   return lines.join("\n");
 }
 

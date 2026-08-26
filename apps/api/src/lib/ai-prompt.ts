@@ -138,10 +138,22 @@ CRITICAL RULES:
 
 AUTONOMOUS LOOP: After your action blocks run, you may receive a follow-up user message titled "Tool results" listing the outcome (exit codes, file writes, errors) of each block. Treat it like an automatic test report:
 - If the result shows success and the original task is fully complete, end with a concise summary (NO more action blocks).
-- If the result shows an error or partial success, fix it: emit the next action block(s) needed to recover or continue.
-- Do NOT repeat the same failing command — read the error output and adjust (install missing deps, change port, fix path, READ the relevant file with \`bash:run cat …\` first if you don't know what it contains).
-- If a server you set with \`workspace:setRun\` returned 404, do NOT keep restarting — open the file with \`bash:run cat <path>\` and figure out the real document root or routing first.
+- If the result shows an error or partial success, follow the DEBUG PROTOCOL below before emitting any fix.
 - Keep going until the user's request is satisfied, then stop emitting blocks so the loop ends naturally.
+
+DEBUG PROTOCOL (wajib ikuti setiap kali ada ERROR di tool results):
+1. **ANALISIS** — Tulis 3 baris ini SEBELUM action block:
+   - \`Kategori:\` [syntax | import/require | koneksi | permission | logic | command-not-found | port | lainnya]
+   - \`Root cause:\` [1 kalimat spesifik — baris/file mana yang salah dan kenapa]
+   - \`Fix plan:\` [spesifik — file, baris, perubahan yang akan dilakukan]
+2. **GANTI PENDEKATAN** jika fix plan kamu persis sama dengan yang sudah dicoba — jangan ulangi hal yang sama.
+3. **BACA FILE DULU** jika tidak yakin isi file: \`bash:run sed -n '1,60p' path/to/file\` SEBELUM nulis patch/fix.
+4. **JANGAN RESTART TERUS** jika server 404/500 — baca file entry dulu, cari root cause, fix kode, baru restart.
+5. **STOP** jika error identik muncul 3x berturut-turut: emit 1 pesan diagnostik (error exact + apa yang dicoba + apa yang user harus cek manual). TIDAK boleh lanjut loop.
+
+PRE-FLIGHT CONTEXT: Jika ada blok "--- Pre-flight orientation ---" di system prompt kamu, itu adalah snapshot live workspace (stack, proses, port, memory) yang di-capture SEBELUM sesi dimulai. Gunakan ini sebagai ground truth — TIDAK PERLU emit \`bash:run cat .premdev\` atau \`ps aux\` di turn pertama karena datanya sudah ada. Jika pre-flight menunjukkan proses berjalan di port X, kamu sudah tahu stack-nya.
+
+FINAL VERIFICATION: Di akhir sesi, sistem akan otomatis cek apakah app masih berjalan dan ada error di log. Jika ada masalah, kamu akan terima pesan "Final verification" — tangani seperti tool result biasa: analisis, fix, verifikasi.
 
 FULL-APP BUILD PROTOCOL — follow this sequence whenever the user asks to "buat aplikasi", "build a [type] app", or a task spans 5+ files:
 1. **ORIENT** (1 batch): \`bash:run cat .premdev 2>/dev/null; echo '---'; ls -la; echo '---'; cat package.json 2>/dev/null | head -20 || cat requirements.txt 2>/dev/null | head -10\` — know the stack, entry point, and port before touching anything.
