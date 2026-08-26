@@ -736,6 +736,18 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     const w = db.prepare("SELECT * FROM workspaces WHERE id = ? AND user_id = ?").get(id, u.id) as DbWorkspace | undefined;
     if (!w) return reply.code(404).send({ error: "Not found" });
     const body = DbQueryBody.parse(req.body);
+
+    // Block irreversible DDL that cannot be recovered via workspace checkpoint.
+    // Tar-gz checkpoints cover only filesystem files — MySQL data is NOT included,
+    // so DROP TABLE / TRUNCATE / DROP DATABASE are permanently destructive.
+    // UPDATE and DELETE are allowed (can be re-run with corrected data).
+    const IRREVERSIBLE_DDL = /\b(DROP\s+(TABLE|DATABASE|SCHEMA|INDEX|VIEW|PROCEDURE|FUNCTION|TRIGGER|EVENT)|TRUNCATE(\s+TABLE)?)\b/i;
+    if (IRREVERSIBLE_DDL.test(body.sql)) {
+      return reply.code(400).send({
+        error: "⛔ Blocked by PremDev safety guard: DROP TABLE, DROP DATABASE, and TRUNCATE are permanently irreversible — workspace checkpoints do NOT back up MySQL data. If you genuinely need to drop or truncate, the user must run it manually in phpMyAdmin or a terminal MySQL session. Suggest an alternative approach (e.g. rename the table, add a column instead of rebuilding the schema).",
+      });
+    }
+
     const userRow = db.prepare("SELECT username FROM users WHERE id = ?").get(w.user_id) as { username?: string } | undefined;
     const username = userRow?.username;
     if (!username) return reply.code(400).send({ error: "Workspace owner has no username" });

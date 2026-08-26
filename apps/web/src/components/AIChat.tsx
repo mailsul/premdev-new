@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ConfirmDialog } from "./ConfirmDialog";
 import {
   Send, Square, Sparkles, Bot, User, Play, Save, RotateCw,
   Check, X, FileEdit, Copy, Pencil, ImagePlus, Paperclip,
@@ -130,6 +129,13 @@ function modelSupportsVision(provider: string, model: string): boolean {
     // Snifox is OpenRouter-style — every modern OpenAI/Claude/Gemini model
     // accepts images. Match those families plus a generic "vision" tag.
     return /vision|gpt-4o|gpt-5|claude-(opus|sonnet)|gemini-(2|3)/.test(m);
+  }
+  // Custom providers: id starts with "custom:". Apply generous heuristics —
+  // most custom endpoints are OpenAI-compat wrappers of multimodal models.
+  // Err on the side of allowing images; the server will reject if unsupported.
+  if (id.startsWith("custom:") || !(id in PROVIDER_LABELS)) {
+    if (!m) return false; // no model name → can't guess; assume text-only
+    return /vision|gpt-4o|gpt-4\.1|claude-(3|sonnet|opus|haiku|4)|gemini-(1\.5|2)|llava|pixtral|llama-3\.2.*vision|qwen.*vl|intern.*vl|minicpm.*v/.test(m);
   }
   return false;
 }
@@ -518,20 +524,18 @@ async function runAction(
 
 /**
  * Risk classification for actions in autonomous mode.
- *   "high"   — destructive / irreversible: delete, setEnv, destructive SQL.
- *              Always requires user confirmation even in Otonom mode.
- *   "medium" — side-effects but recoverable: restart, checkpoint.
- *              Allowed to run automatically in Otonom mode.
- *   "low"    — everything else.
+ *   "medium" — visible side-effects: restart, env var changes. Badge shown, no blocking dialog.
+ *   "low"    — everything else (file edits, bash, db:query, etc.).
+ *
+ * NOTE: db:query destructive DDL (DROP TABLE, TRUNCATE, DROP DATABASE) is blocked
+ * server-side in /api/workspaces/:id/db/query, not via a client dialog, because
+ * MySQL data is NOT included in tar-gz checkpoints — those operations are truly
+ * irreversible even with rollback.
  */
-type ActionRisk = "high" | "medium" | "low";
-const DESTRUCTIVE_SQL = /\b(DROP|DELETE|TRUNCATE|UPDATE)\b/i;
+type ActionRisk = "medium" | "low";
 
 function getActionRisk(action: Action): ActionRisk {
-  // Rollback is always available, so no actions require a blocking approval gate.
-  // "high" risk level triggers a confirmation dialog — removed to allow uninterrupted
-  // autonomous execution. File deletions are covered by checkpoint/rollback.
-  if (action.kind === "setEnv") return "medium";   // env var changes: medium (visible badge, no block)
+  if (action.kind === "setEnv") return "medium";
   if (action.kind === "restart") return "medium";
   return "low";
 }
@@ -1620,19 +1624,6 @@ export function AIChat({
   // Rolling history of action fingerprints for loop detection.
   // Each entry = array of fingerprints for one executed batch.
   const batchHistoryRef = useRef<string[][]>([]);
-  // Risk confirmation dialog: shown before high-risk actions in Otonom mode.
-  // Uses a Promise-resolver pattern so the async orchestrator can await the user's choice.
-  const [riskConfirmOpen, setRiskConfirmOpen] = useState(false);
-  const [riskConfirmAction, setRiskConfirmAction] = useState<Action | null>(null);
-  const riskConfirmResolverRef = useRef<((v: boolean) => void) | null>(null);
-
-  function requestRiskConfirm(action: Action): Promise<boolean> {
-    return new Promise((resolve) => {
-      riskConfirmResolverRef.current = resolve;
-      setRiskConfirmAction(action);
-      setRiskConfirmOpen(true);
-    });
-  }
 
   // Mirror of the latest committed `msgs` state, kept in sync via the
   // useEffect below. Needed because `sendRaw()` recursively re-invokes
@@ -2841,23 +2832,6 @@ export function AIChat({
       for (let i = 0; i < toRun.length; i++) {
         if (stoppedRef.current) break;
 
-        // Permission gate: high-risk actions require explicit user approval
-        // even when Otonom mode is active. The orchestrator pauses and awaits
-        // the user's decision via a modal dialog.
-        if (getActionRisk(toRun[i]) === "high") {
-          const confirmed = await requestRiskConfirm(toRun[i]);
-          if (!confirmed) {
-            results[i] = { ok: false, output: "Dibatalkan user (action berisiko tinggi)" };
-            setActionResults((prev) => {
-              const n = new Map(prev);
-              n.set(lastIdx, results.slice());
-              return n;
-            });
-            if (stoppedRef.current) break;
-            continue;
-          }
-        }
-
         const ac = new AbortController();
         actionAbortRef.current = ac;
         // Show realtime activity label in the status bar while action runs.
@@ -3593,38 +3567,6 @@ export function AIChat({
           )}
         </div>
       </div>
-      {/* Risk confirmation dialog — shown before executing high-risk autonomous actions */}
-      {riskConfirmOpen && riskConfirmAction && (
-        <ConfirmDialog
-          open={riskConfirmOpen}
-          options={{
-            title: `⚠️ Action berisiko: ${actionLabel(riskConfirmAction)}`,
-            message: `Action ini bersifat destruktif dan tidak dapat dibatalkan. Lanjutkan?\n\n${
-              riskConfirmAction.kind === "delete"
-                ? `Hapus: ${riskConfirmAction.path}`
-                : riskConfirmAction.kind === "setEnv"
-                ? `Set env vars: ${Object.keys(riskConfirmAction.vars).join(", ")}`
-                : riskConfirmAction.kind === "db"
-                ? `SQL: ${riskConfirmAction.sql.slice(0, 200)}`
-                : actionLabel(riskConfirmAction)
-            }`,
-            confirmLabel: "Jalankan",
-            cancelLabel: "Batalkan",
-            danger: true,
-          }}
-          onConfirm={() => {
-            setRiskConfirmOpen(false);
-            riskConfirmResolverRef.current?.(true);
-            riskConfirmResolverRef.current = null;
-          }}
-          onCancel={() => {
-            setRiskConfirmOpen(false);
-            riskConfirmResolverRef.current?.(false);
-            riskConfirmResolverRef.current = null;
-          }}
-        />
-      )}
-
       {attachPickerOpen && (
         <AIFilePicker
           workspaceId={workspaceId}
@@ -4157,9 +4099,9 @@ function ActionCard({
         title={collapsed ? "Klik untuk lihat detail" : "Klik untuk tutup"}
       >
         {meta.icon}
-        {getActionRisk(action) === "high" && (
-          <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold bg-danger/15 text-danger">
-            ⚠ Berisiko
+        {getActionRisk(action) === "medium" && (
+          <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold bg-warning/15 text-warning">
+            ⚡ Side-effect
           </span>
         )}
         <span className="min-w-0 flex-1 truncate text-left">{meta.label}</span>
