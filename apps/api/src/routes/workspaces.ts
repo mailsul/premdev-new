@@ -28,6 +28,7 @@ import { config } from "../lib/config.js";
 import { closeWorkspaceDb } from "../lib/semantic-search.js";
 import { createProjectDb, dropProjectDb, ensureMysqlUser, ensureWorkspaceAdminUser, warmupMysqlUserCache, runWorkspaceQuery } from "../lib/mysql.js";
 import { createCheckpoint, listCheckpoints, listCheckpointFiles, restoreCheckpoint, deleteCheckpoint, deleteAllCheckpointsFor } from "../lib/checkpoints.js";
+import { checkSqlReadOnly } from "../lib/sql-safety.js";
 
 export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req, reply) => {
@@ -728,6 +729,9 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   const DbQueryBody = z.object({
     sql: z.string().min(1).max(20_000),
     rowLimit: z.number().int().positive().max(1000).optional(),
+    // When true (sent by the autonomous orchestrator), SQL is restricted to
+    // read-only statements. Human users via the Query tab can write freely.
+    autonomous: z.boolean().optional(),
   });
   app.post<{ Params: { id: string } }>("/:id/db/query", async (req, reply) => {
     const u = await requireUser(req, reply);
@@ -737,15 +741,17 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     if (!w) return reply.code(404).send({ error: "Not found" });
     const body = DbQueryBody.parse(req.body);
 
-    // Block irreversible DDL that cannot be recovered via workspace checkpoint.
-    // Tar-gz checkpoints cover only filesystem files — MySQL data is NOT included,
-    // so DROP TABLE / TRUNCATE / DROP DATABASE are permanently destructive.
-    // UPDATE and DELETE are allowed (can be re-run with corrected data).
-    const IRREVERSIBLE_DDL = /\b(DROP\s+(TABLE|DATABASE|SCHEMA|INDEX|VIEW|PROCEDURE|FUNCTION|TRIGGER|EVENT)|TRUNCATE(\s+TABLE)?)\b/i;
-    if (IRREVERSIBLE_DDL.test(body.sql)) {
-      return reply.code(400).send({
-        error: "⛔ Blocked by PremDev safety guard: DROP TABLE, DROP DATABASE, and TRUNCATE are permanently irreversible — workspace checkpoints do NOT back up MySQL data. If you genuinely need to drop or truncate, the user must run it manually in phpMyAdmin or a terminal MySQL session. Suggest an alternative approach (e.g. rename the table, add a column instead of rebuilding the schema).",
-      });
+    // Autonomous mode: restrict to read-only SQL (SELECT/SHOW/EXPLAIN/DESCRIBE).
+    // sql-safety.ts blocks writes, DDL, admin commands, and multi-statements.
+    // Non-autonomous (human user in Query tab): no restrictions.
+    if (body.autonomous) {
+      const reason = checkSqlReadOnly(body.sql);
+      if (reason) {
+        return reply.code(403).send({
+          error: `Autonomous mode is read-only: ${reason}. To run writes, INSERT, UPDATE, or DDL, ask the user to execute the query manually in the phpMyAdmin panel or a terminal MySQL session.`,
+          database: "n/a",
+        });
+      }
     }
 
     const userRow = db.prepare("SELECT username FROM users WHERE id = ?").get(w.user_id) as { username?: string } | undefined;
@@ -770,7 +776,9 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       username,
       dbName,
       sql: body.sql,
-      rowLimit: body.rowLimit,
+      // Cap autonomous queries to 50 rows — prevent the AI from accidentally
+      // pulling huge result sets into its context window.
+      rowLimit: body.autonomous ? Math.min(body.rowLimit ?? 50, 50) : body.rowLimit,
     });
     if (!r.ok) return reply.code(400).send({ error: r.error, database: dbName });
     return { ...r, database: dbName };
