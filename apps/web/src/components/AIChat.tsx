@@ -528,11 +528,11 @@ type ActionRisk = "high" | "medium" | "low";
 const DESTRUCTIVE_SQL = /\b(DROP|DELETE|TRUNCATE|UPDATE)\b/i;
 
 function getActionRisk(action: Action): ActionRisk {
-  if (action.kind === "delete") return "high";
-  if (action.kind === "setEnv") return "high";
-  if (action.kind === "db" && DESTRUCTIVE_SQL.test(action.sql)) return "high";
+  // Rollback is always available, so no actions require a blocking approval gate.
+  // "high" risk level triggers a confirmation dialog — removed to allow uninterrupted
+  // autonomous execution. File deletions are covered by checkpoint/rollback.
+  if (action.kind === "setEnv") return "medium";   // env var changes: medium (visible badge, no block)
   if (action.kind === "restart") return "medium";
-  if (action.kind === "checkpoint") return "medium";
   return "low";
 }
 
@@ -1423,8 +1423,14 @@ export function AIChat({
   const [attachedFiles, setAttachedFiles] = useState<{ path: string; content: string }[]>([]);
   const [attachPickerOpen, setAttachPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [provider, setProvider] = useState<string>("openai");
-  const [model, setModel] = useState<string>("");
+  // Persist last-used provider/model in localStorage so a page refresh keeps
+  // the user's selection instead of resetting to the default.
+  const [provider, setProvider] = useState<string>(() => {
+    try { return localStorage.getItem("premdev:ai:provider") ?? "openai"; } catch { return "openai"; }
+  });
+  const [model, setModel] = useState<string>(() => {
+    try { return localStorage.getItem("premdev:ai:model") ?? ""; } catch { return ""; }
+  });
   const [streaming, setStreaming] = useState(false);
   // Always ON — AI proposes approve-able action blocks.
   const [autoPilot] = useState(true);
@@ -1541,9 +1547,6 @@ export function AIChat({
   const sessionActionsRef = useRef<number>(0);     // total actions run this session
   const sessionCheckpointRef = useRef<string | null>(null); // checkpoint created at start of this session
   const sessionActionLogRef = useRef<string[]>([]); // ordered action labels run this session (for activity log)
-  // Counts how many times we've nudged the model to use action blocks instead of planning text.
-  // Reset on every new user message. Caps at 2 to prevent infinite nudge loops.
-  const planNudgeRef = useRef<number>(0);
   // Per-message action results: msgIdx -> [results]. Filled sequentially by
   // the autonomous orchestrator below; ActionCard reads from this map to
   // display the outcome without ever running the action itself.
@@ -2035,8 +2038,11 @@ export function AIChat({
 
   function changeProvider(id: string) {
     setProvider(id);
+    try { localStorage.setItem("premdev:ai:provider", id); } catch {}
     const p = providers?.providers.find((x) => x.id === id);
-    setModel(p?.defaultModel ?? "");
+    const m = p?.defaultModel ?? "";
+    setModel(m);
+    try { localStorage.setItem("premdev:ai:model", m); } catch {}
   }
 
   useEffect(() => {
@@ -2387,7 +2393,6 @@ export function AIChat({
     sessionActionLogRef.current = [];
     batchHistoryRef.current = [];
     planRef.current = null;
-    planNudgeRef.current = 0;
     setAutoManagedBatches(new Set());
     // Clear any pending mid-run queue from the PREVIOUS AI turn so the
     // newly typed message starts fresh. Queue items are only valid for the
@@ -2647,27 +2652,6 @@ export function AIChat({
     }
 
     if (acts.length === 0) {
-      // ── Orchestrator nudge ────────────────────────────────────────────────
-      // Model gave ONLY text (no action blocks) and no actions have run yet in
-      // this session → likely a "planning text" turn from a weaker model.
-      // Nudge it (up to 2×) to emit action blocks instead of describing plans.
-      // This is the primary fix for "agent stops after saying 'saya akan…'".
-      if (autonomous && sessionActionsRef.current === 0 && !stoppedRef.current &&
-          planNudgeRef.current < 2) {
-        planNudgeRef.current += 1;
-        processedBatchesRef.current.add(lastIdx);
-        // useEffect callback is synchronous — wrap in IIFE so we can await sendRaw.
-        void (async () => {
-          await sendRaw(
-            "Langsung eksekusi sekarang dengan action blocks. Jangan jelaskan rencana terlebih dahulu.",
-            undefined,
-            { synthetic: true, continuation: false },
-          );
-        })();
-        return;
-      }
-      // ──────────────────────────────────────────────────────────────────────
-
       // AI ended naturally — show session summary if we ran at least 1 action.
       if (autonomous && sessionActionsRef.current > 0) {
         const elapsed = Math.round((Date.now() - sessionStartRef.current) / 1000);
@@ -3061,7 +3045,10 @@ export function AIChat({
           <select
             className="min-w-0 max-w-[180px] truncate rounded-md border border-bg-border bg-bg-subtle px-2 py-1 text-xs"
             value={model}
-            onChange={(e) => setModel(e.target.value)}
+            onChange={(e) => {
+              setModel(e.target.value);
+              try { localStorage.setItem("premdev:ai:model", e.target.value); } catch {}
+            }}
           >
             {currentProvider?.models.map((m) => {
               const textOnly = currentProvider?.textOnlyModels?.includes(m);
