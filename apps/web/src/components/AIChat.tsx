@@ -830,14 +830,23 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
       let findIdx = -1, sepIdx = -1, endIdx = -1;
       for (let k = 0; k < body.length; k++) {
         const t = body[k].trim();
-        if (findIdx === -1) { if (t === "<<<FIND") findIdx = k; }
-        else if (sepIdx === -1) { if (t === "===") sepIdx = k; }
-        else if (endIdx === -1) { if (t === ">>>") { endIdx = k; break; } }
+        // Accept fuzzy variants so weaker models don't fail silently:
+        //   <<<FIND  → also <<<find, <<< FIND, etc.
+        //   ===      → also ====, =====, ======= (git conflict style)
+        //   >>>      → also >>>> 
+        if (findIdx === -1) { if (/^<<<\s*FIND$/i.test(t)) findIdx = k; }
+        else if (sepIdx === -1) { if (/^={3,}$/.test(t)) sepIdx = k; }
+        else if (endIdx === -1) { if (/^>{3,}$/.test(t)) { endIdx = k; break; } }
       }
       if (!path) {
         kept.push(`> Invalid patch header: missing path.`);
       } else if (findIdx === -1 || sepIdx === -1 || endIdx === -1) {
-        kept.push(`> Invalid patch:${path} body — need three anchor lines: \`<<<FIND\`, \`===\`, \`>>>\` (each on its own line).`);
+        const missing = [
+          findIdx === -1 ? "`<<<FIND`" : null,
+          sepIdx === -1  ? "`===`"     : null,
+          endIdx === -1  ? "`>>>`"     : null,
+        ].filter(Boolean).join(", ");
+        kept.push(`> Invalid patch:${path} — missing delimiter line(s): ${missing}. Format must be:\n> \`\`\`patch:${path}\n> <<<FIND\n> (exact lines to find)\n> ===\n> (replacement)\n> >>>\n> \`\`\``);
       } else {
         const find = body.slice(findIdx + 1, sepIdx).join("\n");
         const replace = body.slice(sepIdx + 1, endIdx).join("\n");
