@@ -1300,6 +1300,13 @@ export function AIChat({
   // Rolling history of action fingerprints for loop detection.
   // Each entry = array of fingerprints for one executed batch.
   const loopStateRef = useRef(createLoopState());
+  // Pre-flight workspace orientation: fetched once before the first AI turn
+  // of each autonomous session and sent to the server as `preFlight`.
+  // Cleared after sendRaw() picks it up so continuation turns don't re-send it.
+  const preFlightRef = useRef<string | null>(null);
+  // Final verification: set to true once we've run the end-of-session verify
+  // so a subsequent "no action blocks" turn shows ✅ instead of re-verifying.
+  const finalVerifyDoneRef = useRef<boolean>(false);
 
   // Mirror of the latest committed `msgs` state, kept in sync via the
   // useEffect below. Needed because `sendRaw()` recursively re-invokes
@@ -1787,6 +1794,11 @@ export function AIChat({
       // builds the prompt and creates the job), THEN check
       // `stoppedRef.current` and explicitly abort the job we now know
       // the id of.
+      // Consume pre-flight once — only the first turn of each autonomous
+      // session receives it. Subsequent continuation turns get null.
+      const preFlight = preFlightRef.current ?? undefined;
+      preFlightRef.current = null;
+
       const startRes = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1805,6 +1817,9 @@ export function AIChat({
           messages: next.slice(0, -1),
           // Currently open file — lets AI see exactly what the user is editing.
           activeFile: activeFile ?? undefined,
+          // Pre-flight workspace state (stack, procs, ports, memory) captured
+          // before this turn. Only present on the first turn of each session.
+          preFlight,
         }),
       });
       if (!startRes.ok) {
@@ -2069,7 +2084,42 @@ export function AIChat({
     sessionActionLogRef.current = [];
     loopStateRef.current = createLoopState();
     planRef.current = null;
+    preFlightRef.current = null;
+    finalVerifyDoneRef.current = false;
     setAutoManagedBatches(new Set());
+
+    // ── Pre-flight orientation ────────────────────────────────────────────
+    // Run once per session before the first AI turn so the model already
+    // knows the live stack, processes, ports, and memory without spending
+    // an extra tool-call round-trip on orient bash commands.
+    if (autonomous && isFirstUserMsg) {
+      const PF_CMD = [
+        "printf '=== STACK (.premdev) ===\\n'",
+        "cat .premdev 2>/dev/null || echo '(no .premdev)'",
+        "printf '\\n=== FILES ===\\n'",
+        "ls -la | head -30",
+        "printf '\\n=== PROSES BERJALAN ===\\n'",
+        "ps aux | grep -E 'php|node|python|ruby|nginx|apache|go |deno' | grep -v grep | head -10 || echo '(tidak ada)'",
+        "printf '\\n=== PORT LISTEN ===\\n'",
+        "ss -tlnp 2>/dev/null | grep LISTEN | head -8 || echo '(tidak bisa cek)'",
+        "printf '\\n=== AI MEMORY ===\\n'",
+        "cat .premdev-data/memory.md 2>/dev/null | head -30 || echo '(belum ada memory)'",
+      ].join("; ");
+      try {
+        const pfRes = await fetch(`/api/workspaces/${workspaceId}/exec`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ command: PF_CMD }),
+        });
+        if (pfRes.ok) {
+          const pfData = await pfRes.json() as { output?: string };
+          if (pfData.output?.trim()) preFlightRef.current = pfData.output.trim();
+        }
+      } catch {
+        // Non-fatal — pre-flight failure must never block the AI turn.
+      }
+    }
     // Clear any pending mid-run queue from the PREVIOUS AI turn so the
     // newly typed message starts fresh. Queue items are only valid for the
     // run they were submitted during; a new send() from the user supersedes
@@ -2333,7 +2383,50 @@ export function AIChat({
     }
 
     if (acts.length === 0) {
-      // AI ended naturally — show session summary if we ran at least 1 action.
+      // AI ended naturally — run a final verification pass ONCE per session
+      // before showing ✅ Selesai. If the verify output has red flags
+      // (fatal errors, no running process after restart, etc.) inject them
+      // back to the AI so it can fix before the session closes.
+      if (autonomous && sessionActionsRef.current > 0 && !finalVerifyDoneRef.current) {
+        finalVerifyDoneRef.current = true; // prevent re-entry on the next "done"
+        const FV_CMD = [
+          "printf '=== STATUS PROSES ===\\n'",
+          "ps aux | grep -E 'php|node|python|ruby|nginx|apache|go |deno' | grep -v grep | head -10 || echo '(tidak ada proses app)'",
+          "printf '\\n=== PORT LISTEN ===\\n'",
+          "ss -tlnp 2>/dev/null | grep LISTEN | head -8 || echo '(tidak ada)'",
+          "printf '\\n=== ERROR LOG (tail 20) ===\\n'",
+          "tail -20 .premdev-data/error.log 2>/dev/null || tail -20 logs/error.log 2>/dev/null || tail -20 storage/logs/laravel.log 2>/dev/null || echo '(tidak ada error log)'",
+        ].join("; ");
+        try {
+          const fvRes = await fetch(`/api/workspaces/${workspaceId}/exec`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ command: FV_CMD }),
+          });
+          if (fvRes.ok) {
+            const fvData = await fvRes.json() as { output?: string };
+            const fvOut = (fvData.output ?? "").trim();
+            // Detect red flags: PHP fatal, JS errors, no process at all,
+            // or uncaught exceptions in error log.
+            const RED_FLAGS = /fatal error|uncaught|exception|error:|failed to|cannot|enoent|eaddrinuse|econnrefused|tidak ada proses/i;
+            if (fvOut && RED_FLAGS.test(fvOut)) {
+              // Inject back to AI with clear framing so it knows this is
+              // the final verification, not a new user request.
+              await sendRaw(
+                `Final verification (cek otomatis setelah AI selesai):\n\`\`\`\n${fvOut.slice(0, 2000)}\n\`\`\`\n\nAda indikasi masalah di output di atas. Periksa dan perbaiki sebelum benar-benar selesai. Jika semua sudah OK, cukup tulis konfirmasi singkat (tanpa action blocks).`,
+                undefined,
+                { synthetic: true },
+              );
+              return; // don't show ✅ yet — wait for AI response
+            }
+          }
+        } catch {
+          // Non-fatal — verification failure must never block session close.
+        }
+      }
+
+      // All clear (or verify passed / not applicable) — show session summary.
       if (autonomous && sessionActionsRef.current > 0) {
         const elapsed = Math.round((Date.now() - sessionStartRef.current) / 1000);
         const mins = Math.floor(elapsed / 60);

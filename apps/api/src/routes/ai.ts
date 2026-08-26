@@ -78,6 +78,11 @@ const Body = z.object({
     path: z.string().max(500),
     content: z.string().max(120_000),
   }).optional(),
+  // Pre-flight workspace orientation — output of a shell command run by the
+  // client before the first AI turn. Injected into the system prompt so the AI
+  // already knows the stack, running processes, ports, and memory without
+  // needing to emit a bash:run cat .premdev / ps aux itself.
+  preFlight: z.string().max(8_000).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -115,6 +120,13 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       : "";
     const continuationBlock = body.continuation ? CONT_TRUNC_INSTRUCTION : "";
 
+    // Pre-flight workspace orientation — injected before the snapshot so the
+    // AI knows the live state of the workspace (stack, running processes, ports,
+    // AI memory) without burning an extra tool-call round-trip.
+    const preFlightBlock = body.preFlight
+      ? `\n\n--- Pre-flight orientation (live workspace state captured before this turn) ---\n${body.preFlight}`
+      : "";
+
     // Inject the currently open file so the AI can see exactly what the user
     // is looking at without needing a bash:run cat round-trip. Content is
     // truncated to 200 lines (~8 KB) to keep prompt size bounded.
@@ -141,7 +153,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     const messages: ChatMsg[] = [
       {
         role: "system",
-        content: `${sys}\n\n--- Workspace snapshot ---\n${ctx}${snippetsBlock}${memoryBlock}${aiMemoryBlock}${activeFileBlock}${continuationBlock}${iterCapBlock}`,
+        content: `${sys}${preFlightBlock}\n\n--- Workspace snapshot ---\n${ctx}${snippetsBlock}${memoryBlock}${aiMemoryBlock}${activeFileBlock}${continuationBlock}${iterCapBlock}`,
       },
       ...trimmed,
     ];
