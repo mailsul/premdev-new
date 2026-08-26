@@ -2621,6 +2621,11 @@ export function AIChat({
     const lastIdx = msgs.length - 1;
     const last = msgs[lastIdx];
     if (!last || last.role !== "assistant") return;
+    // Never run the orchestrator on synthetic messages (session summaries, loop
+    // warnings, status notifications) — they are injected by the orchestrator
+    // itself and contain no action blocks. Without this guard, adding a "Selesai"
+    // summary fires the effect again → acts.length===0 → another "Selesai" → ∞ loop.
+    if (last.synthetic) return;
     const parsed = parseActions(last.content);
     const acts = parsed.actions;
     // If AI emitted a plan: block, store it so we can re-inject it as an
