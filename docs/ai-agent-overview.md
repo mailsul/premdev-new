@@ -59,7 +59,7 @@ Orchestrator (AIChat.tsx) parse & eksekusi action blocks
 | `workspace:setEnv` | `POST /config/patch` | Merge (bukan overwrite) ke `env` object di `.premdev` |
 | `workspace:restart` | `POST /restart` | Stop proses + spawn ulang. Auto-inject: `sleep 2 && curl -fsSI http://localhost:$PORT/` |
 | `workspace:checkpoint` | `POST /checkpoints` | Tar-gz snapshot workspace, simpan ke SQLite, **prune ke 20/workspace** |
-| `db:query` | `POST /db/query` | MySQL workspace sendiri, max **200 rows**, output cap **12 KiB** |
+| `db:query` | `POST /db/query` | MySQL workspace sendiri, max **200 rows** (cap 50 saat autonomous), output cap **12 KiB** |
 | `open:path` | *(browser event)* | Buka file di editor, tidak ada API call ke server |
 
 ---
@@ -74,15 +74,21 @@ Loop:
   1. Tunggu streaming AI selesai
   2. Parse semua action blocks dari response terakhir
   3. autonomous=true → eksekusi semua action otomatis (tanpa Approve/Skip)
-  4. Hasil semua action → append ke history sebagai tool result
-  5. Buat "continue" message → kirim ulang ke AI
-  6. iterationRef++
-  7. Ulangi dari step 1
+  4. Loop detection (loop-detector.ts):
+       a. Fingerprint tiap action (content-sensitive hash, bukan hanya path)
+       b. Flag jika fingerprint yang sama muncul di 3 batch berturut-turut
+       c. Flag juga regression loop: action kind+target yang sama gagal lalu
+          langsung diulang di batch berikutnya
+  5. Hasil semua action → append ke history sebagai tool result
+  6. Buat "continue" message → kirim ulang ke AI
+  7. iterationRef++
+  8. Ulangi dari step 1
 
 Berhenti jika:
   - Tidak ada action block baru (AI selesai)
   - Iterasi mencapai batas max
   - User klik Stop
+  - Loop terdeteksi (step 4)
   - stoppedRef = true
 ```
 
@@ -137,13 +143,25 @@ Berhenti jika:
 
 ## 6. Database — Izin Akses
 
-### ✅ BOLEH
+### ✅ BOLEH (autonomous mode — read-only)
 
-- Query MySQL database **milik workspace sendiri**
+- SELECT, WITH, EXPLAIN, SHOW, DESCRIBE
+- Max **50 rows** per query (di-cap server-side saat `autonomous: true`)
+
+### ✅ BOLEH (human / Query tab — tidak dibatasi ke read-only)
+
 - SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, dll
-- Max 200 rows per query, output cap 12 KiB
+- Max **200 rows** per query, output cap **12 KiB**
 
-### ❌ TIDAK BOLEH
+### ❌ TIDAK BOLEH (autonomous mode — diblokir `checkSqlReadOnly`)
+
+- INSERT, UPDATE, DELETE, REPLACE, MERGE (data write)
+- CREATE, ALTER, DROP, TRUNCATE, RENAME (DDL)
+- GRANT, REVOKE, SET (admin)
+- Multi-statement (`;` separator — injection vector)
+- Comment-only queries
+
+### ❌ TIDAK BOLEH (semua mode)
 
 - Query database workspace lain (DB name di-derive server-side)
 - `multipleStatements` — hanya 1 statement per `db:query` block
@@ -185,6 +203,8 @@ Database name format: `<username>_<workspace_slug>`
 
 Semua keyed per **IP address**.
 
+Backend rate limiter bisa di-swap ke Redis (cluster/multi-node) via `setRateLimitBackend()` di startup — default in-memory sudah cukup untuk single-VPS.
+
 ---
 
 ## 9. Memory System
@@ -210,21 +230,47 @@ Max note raw append: 8.000 char, tambah separator bertanggal.
 
 ---
 
-## 10. Security Summary
+## 10. Action Risk & Badge Visual
+
+Action diberi label risiko oleh `getActionRisk()` di `action-executor.ts`:
+
+| Level | Badge | Contoh action |
+|---|---|---|
+| `high` | 🔴 ⚠ Berisiko | `delete`, bash `rm -rf`/`dd`/pipe-to-shell, SQL `DROP`/`DELETE`/`UPDATE`/`TRUNCATE`, `setEnv` key sensitif (AWS_, TOKEN, DB_HOST, dll) |
+| `medium` | 🟡 ⚡ Side-effect | `setEnv` non-sensitif, `setRun`, `restart` |
+| `low` | *(tidak ada badge)* | Baca file, `bash:run` biasa, `search`, `db:query` SELECT, dll |
+
+Badge ditampilkan di ActionCard — **tidak memblokir eksekusi**, hanya informatif.
+
+---
+
+## 11. Docker Container Limits
+
+| Container | PidsLimit | nproc (soft/hard) | nofile (soft/hard) | Memory |
+|---|---|---|---|---|
+| **Run** (`pw_*`) | **1.024** | 1.024 / 2.048 | 4.096 / 8.192 | per plan |
+| **Shell** (`pwsh_*`) | 512 | 512 / 1.024 | 4.096 / 8.192 | 1 GiB |
+| **Ephemeral exec** (`pwx_*`) | 512 | 512 / 1.024 | 4.096 / 8.192 | 1 GiB |
+
+> ⚠️ Docker exec stream di-**demux** dengan `docker.modem.demuxStream()` sehingga output bersih tanpa header bytes (karakter sampah seperti "5exec").
+
+---
+
+## 12. Security Summary
 
 | Lapisan | Mekanisme |
 |---|---|
 | **Auth** | Setiap workspace route cek authenticated user + ownership |
 | **Filesystem** | Path traversal reject + symlink mutation reject |
 | **Shell** | Bash bebas — limit 4K char input & 120s timeout (behavioral, bukan whitelist) |
-| **Database** | DB name server-derived, tidak bisa akses DB lain |
-| **Rate limit** | Per-IP, AI paling ketat (30 burst, 1 req/5 detik) |
+| **Database** | DB name server-derived; autonomous mode read-only via `checkSqlReadOnly()` |
+| **Rate limit** | Per-IP, AI paling ketat (30 burst, 1 req/5 detik); swappable ke Redis |
 | **Config** | `.premdev` tidak bisa di-overwrite langsung (blokir di parser) |
 | **Jobs** | Buffer in-memory, GC setelah 1 jam; server restart → jobs aktif hilang |
 
 ---
 
-## 11. ⚠️ Gap & Kelemahan Saat Ini
+## 13. ⚠️ Gap & Kelemahan Saat Ini
 
 | # | Gap | Risiko |
 |---|---|---|
@@ -237,7 +283,7 @@ Max note raw append: 8.000 char, tambah separator bertanggal.
 
 ---
 
-## 12. Golden Rules yang Diinjeksi ke AI
+## 14. Golden Rules yang Diinjeksi ke AI
 
 1. **ACT, DON'T ANNOUNCE** — Langsung emit action block, tanpa "Saya akan baca..."
 2. **Zero prose sebelum action block** — Maksimal 1 kalimat, langsung action
@@ -247,4 +293,4 @@ Max note raw append: 8.000 char, tambah separator bertanggal.
 
 ---
 
-*Terakhir diperbarui: 25 Agustus 2026*
+*Terakhir diperbarui: 26 Agustus 2026*

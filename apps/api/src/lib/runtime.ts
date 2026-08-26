@@ -5,6 +5,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import Docker from "dockerode";
 import { config } from "./config.js";
@@ -395,12 +396,15 @@ cd /workspace && exec bash -lc ${JSON.stringify(opts.runCommand)}`
       // I/O when it OOMs (MemorySwap == Memory means "no swap allowed").
       MemorySwap: opts.memMb * 1024 * 1024,
       NanoCpus: Math.floor(opts.cpu * 1e9),
-      PidsLimit: 512,
+      // 1024 PIDs: PHP-FPM alone spawns ~50 workers; each docker exec the AI
+      // runs adds another bash + timeout process. 512 was too tight for active
+      // workspaces running a web server + concurrent AI actions.
+      PidsLimit: 1024,
       // Cap open file descriptors and per-user processes. Without these a
       // runaway loop can fork-bomb or exhaust nofile on the host.
       Ulimits: [
         { Name: "nofile", Soft: 4096, Hard: 8192 },
-        { Name: "nproc", Soft: 512, Hard: 1024 },
+        { Name: "nproc", Soft: 1024, Hard: 2048 },
       ],
       // Cap container log volume so a chatty user app can't fill the host
       // disk with stdout/stderr. Matches docker-compose.prod.yml services.
@@ -449,18 +453,29 @@ export async function execInContainer(workspaceId: string, cmd: string[], timeou
     WorkingDir: "/workspace",
     User: "premdev",
   });
-  const stream = await exec.start({});
+  const muxStream = await exec.start({});
+
+  // Docker exec streams are MULTIPLEXED: each chunk has an 8-byte header
+  // [type(1)][0][0][0][size(4BE)] prepended. Reading raw bytes with
+  // d.toString() leaks those header bytes as garbage chars (e.g. "5exec").
+  // demuxStream properly strips the headers before we concatenate output.
   let buf = "";
   let timedOut = false;
   await new Promise<void>((resolve) => {
     const t = setTimeout(() => {
       timedOut = true;
-      try { (stream as any).destroy?.(); } catch {}
+      try { (muxStream as any).destroy?.(); } catch {}
       resolve();
     }, timeoutMs);
-    stream.on("data", (d: Buffer) => (buf += d.toString()));
-    stream.on("end", () => { clearTimeout(t); resolve(); });
-    stream.on("error", () => { clearTimeout(t); resolve(); });
+
+    const stdoutPt = new PassThrough();
+    const stderrPt = new PassThrough();
+    stdoutPt.on("data", (d: Buffer) => (buf += d.toString()));
+    stderrPt.on("data", (d: Buffer) => (buf += d.toString()));
+    (docker as any).modem.demuxStream(muxStream, stdoutPt, stderrPt);
+
+    muxStream.on("end", () => { clearTimeout(t); resolve(); });
+    muxStream.on("error", () => { clearTimeout(t); resolve(); });
   });
   if (timedOut) {
     return { output: buf + `\n[command killed after ${timeoutMs}ms timeout]`, exitCode: 124 };
@@ -526,12 +541,21 @@ export async function runOneOff(workspaceId: string, command: string, timeoutMs 
         AutoRemove: true,
         Memory: 1024 * 1024 * 1024,
         NanoCpus: 1e9,
-        PidsLimit: 256,
+        PidsLimit: 512,
+        Ulimits: [
+          { Name: "nofile", Soft: 4096, Hard: 8192 },
+          { Name: "nproc", Soft: 512, Hard: 1024 },
+        ],
       },
     });
-    const stream = await container.attach({ stream: true, stdout: true, stderr: true });
+    // container.attach() also returns a multiplexed stream — same demux fix.
+    const muxStream = await container.attach({ stream: true, stdout: true, stderr: true });
     let buf = "";
-    stream.on("data", (d: Buffer) => (buf += d.toString()));
+    const stdoutPt = new PassThrough();
+    const stderrPt = new PassThrough();
+    stdoutPt.on("data", (d: Buffer) => (buf += d.toString()));
+    stderrPt.on("data", (d: Buffer) => (buf += d.toString()));
+    (docker as any).modem.demuxStream(muxStream, stdoutPt, stderrPt);
     await container.start();
     let timedOut = false;
     const killTimer = setTimeout(async () => {
@@ -646,7 +670,9 @@ export async function ensureShellContainer(workspaceId: string): Promise<string>
       Memory: 1024 * 1024 * 1024,
       MemorySwap: 1024 * 1024 * 1024,
       NanoCpus: 1e9,
-      PidsLimit: 256,
+      // Shell container can also run AI docker exec calls in parallel with user
+      // terminal commands — bump PidsLimit to match run container.
+      PidsLimit: 512,
       Ulimits: [
         { Name: "nofile", Soft: 4096, Hard: 8192 },
         { Name: "nproc", Soft: 512, Hard: 1024 },
