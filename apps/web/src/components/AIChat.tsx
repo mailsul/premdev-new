@@ -2783,14 +2783,15 @@ export function AIChat({
           sessionCheckpointRef.current = ckId;
 
           // Notify user in chat that checkpoint was created.
+          // NOTE: no sessionCheckpointId here — rollback button appears only on
+          // the COMPLETION summary (after changes are successfully made), not at start.
           setMsgs((prev) => [
             ...prev,
             {
               role: "assistant" as const,
-              content: `🔐 **Checkpoint dibuat** — ${ckTimestamp}${ckId ? ` · ID: \`${ckId}\`` : ""}\nKlik **Rollback sesi ini** di akhir sesi untuk membatalkan semua perubahan.`,
+              content: `🔐 Checkpoint dibuat${ckId ? ` · \`${ckId.slice(0, 8)}\`` : ""} — perubahan AI bisa di-rollback setelah selesai.`,
               synthetic: true,
               sentAt: Date.now(),
-              ...(ckId ? { sessionCheckpointId: ckId } : {}),
             },
           ]);
 
@@ -3228,12 +3229,13 @@ export function AIChat({
                       </div>
                     </details>
                   )}
-                  {/* Rollback button — shown on checkpoint-notification and completion messages */}
-                  {m.sessionCheckpointId && (
+                  {/* Rollback button — ONLY on completion messages (has sessionActionLog),
+                      NOT on the checkpoint-start notification (no changes made yet). */}
+                  {m.sessionCheckpointId && m.sessionActionLog && (
                     <button
                       className="mt-2 flex items-center gap-1 rounded border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-warning hover:bg-warning/20"
                       onClick={async () => {
-                        if (!confirm("Rollback semua perubahan file sejak sesi ini dimulai?")) return;
+                        if (!confirm("Batalkan semua perubahan file di sesi ini?")) return;
                         try {
                           await fetch(`/api/workspaces/${workspaceId}/checkpoints/${m.sessionCheckpointId}/restore`, { method: "POST", credentials: "include" });
                           alert("✅ Rollback selesai — workspace dikembalikan ke kondisi sebelum sesi AI ini.");
@@ -3242,7 +3244,7 @@ export function AIChat({
                         }
                       }}
                     >
-                      <RotateCcw size={11} /> Rollback sesi ini
+                      <RotateCcw size={11} /> Batalkan perubahan sesi ini
                     </button>
                   )}
                 </div>
