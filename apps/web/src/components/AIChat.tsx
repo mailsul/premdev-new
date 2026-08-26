@@ -424,7 +424,8 @@ function hasUnclosedActionFence(text: string): boolean {
       // here only mean we MISS a continuation chance, which is safe (user
       // can still click "lanjutkan" manually). We won't false-positive
       // because a closed file: fence always has a matching bare run.
-      if (bare && bare[1].length === ticks) { closed = true; break; }
+      // Same leniency as parseActions: close on any bare fence ≥ 3 ticks.
+      if (bare && bare[1].length >= 3) { closed = true; break; }
       j++;
     }
     if (!closed) return true;
@@ -476,7 +477,15 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
           body.push(inner);
         }
       } else {
-        if (bare && bare[1].length === ticks.length) { closed = true; j++; break; }
+        // Non-`file:` actions (bash, workspace, search, diag, etc.) should
+        // always use 3 backticks per spec, but AI models sometimes emit the
+        // closing fence of the PREVIOUS block merged with the opening of the
+        // next one (e.g., ``` immediately followed by ```bash:run → 6 backticks).
+        // Guard 1: close on ANY bare fence ≥ 3 ticks (not requiring exact match).
+        // Guard 2: close implicitly when a new action opener is on the next line.
+        const nextLine = lines[j + 1] ?? "";
+        const isNextActionOpener = /^(`{3,})[a-zA-Z]+:/.test(nextLine);
+        if (bare && (bare[1].length >= 3 || isNextActionOpener)) { closed = true; j++; break; }
         body.push(inner);
       }
       j++;
