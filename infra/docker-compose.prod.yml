@@ -81,6 +81,18 @@ services:
       mysql:
         condition: service_healthy
 
+  adminer:
+    image: adminer:latest
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [premdev_net]
+    environment:
+      ADMINER_DEFAULT_SERVER: mysql
+      ADMINER_DESIGN: pepa-linha-dark
+    depends_on:
+      mysql:
+        condition: service_healthy
+
   app:
     image: ${GHCR_IMAGE:-premdev/app:local}
     build:

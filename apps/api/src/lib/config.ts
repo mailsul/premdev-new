@@ -53,6 +53,7 @@ export const config = {
   MYSQL_WORKSPACE_PASSWORD: env("MYSQL_WORKSPACE_PASSWORD", ""),
 
   PHPMYADMIN_URL: env("PHPMYADMIN_URL", "/phpmyadmin/"),
+  ADMINER_URL: env("ADMINER_URL", ""),
 
   // AI provider keys
   OPENAI_API_KEY: env("OPENAI_API_KEY", ""),

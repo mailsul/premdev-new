@@ -87,9 +87,15 @@ export async function createProjectDb(username: string, projectName: string) {
   const p = getPool();
   if (!p) return null;
   const safeUser = username.replace(/[^a-zA-Z0-9_]/g, "");
-  const safeProj = projectName.replace(/[^a-zA-Z0-9_]/g, "_");
-  const dbName = `${safeUser}_${safeProj}`;
+  const safeProj = projectName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+  const dbName = `ws_${safeProj}`;
   await p.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+  // Grant the per-user MySQL account access to this specific DB so credentials
+  // injected into workspace env vars actually work.
+  if (safeUser) {
+    await p.query(`GRANT ALL PRIVILEGES ON \`${dbName}\`.* TO ?@'%'`, [safeUser]);
+    await p.query(`FLUSH PRIVILEGES`);
+  }
   return dbName;
 }
 
@@ -97,8 +103,13 @@ export async function dropProjectDb(username: string, projectName: string) {
   const p = getPool();
   if (!p) return;
   const safeUser = username.replace(/[^a-zA-Z0-9_]/g, "");
-  const safeProj = projectName.replace(/[^a-zA-Z0-9_]/g, "_");
-  await p.query(`DROP DATABASE IF EXISTS \`${safeUser}_${safeProj}\``);
+  const safeProj = projectName.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+  // Drop new ws_ format. Also try legacy <user>_<proj> format for workspaces
+  // created before this naming change.
+  await p.query(`DROP DATABASE IF EXISTS \`ws_${safeProj}\``);
+  if (safeUser) {
+    await p.query(`DROP DATABASE IF EXISTS \`${safeUser}_${safeProj}\``);
+  }
 }
 
 /**
@@ -130,8 +141,12 @@ export async function runWorkspaceQuery(opts: {
   }
   const safeUser = opts.username.replace(/[^a-zA-Z0-9_]/g, "");
   if (!safeUser) return { ok: false, error: "Invalid workspace owner" };
-  if (!opts.dbName.startsWith(`${safeUser}_`)) {
-    return { ok: false, error: `Database "${opts.dbName}" is not owned by this workspace` };
+  // Accept new ws_* naming and legacy <user>_* naming. MySQL GRANT is the
+  // real enforcement boundary; this is a defence-in-depth sanity check.
+  const isLegacy = opts.dbName.startsWith(`${safeUser}_`);
+  const isWsNamed = opts.dbName.startsWith(`ws_`);
+  if (!isLegacy && !isWsNamed) {
+    return { ok: false, error: `Database "${opts.dbName}" is not accessible` };
   }
   const sql = opts.sql.trim();
   if (!sql) return { ok: false, error: "Empty SQL" };

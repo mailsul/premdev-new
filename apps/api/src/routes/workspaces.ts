@@ -30,6 +30,30 @@ import { createProjectDb, dropProjectDb, ensureMysqlUser, ensureWorkspaceAdminUs
 import { createCheckpoint, listCheckpoints, listCheckpointFiles, restoreCheckpoint, deleteCheckpoint, deleteAllCheckpointsFor } from "../lib/checkpoints.js";
 import { checkSqlReadOnly } from "../lib/sql-safety.js";
 
+/**
+ * Build the full set of MySQL env vars to inject into a workspace container.
+ * Provides both internal (Docker hostname) and public (VPS domain) connection
+ * strings so code inside the container and tools outside both just work.
+ */
+function buildDbEnvVars(dbName: string, ownerUsername: string): Record<string, string> {
+  const dbUser = config.MYSQL_WORKSPACE_USER || ownerUsername.replace(/[^a-zA-Z0-9_]/g, "");
+  const dbPass = config.MYSQL_WORKSPACE_PASSWORD || config.MYSQL_USER_PASSWORD;
+  const host   = config.MYSQL_HOST || "mysql";
+  const port   = config.MYSQL_PORT || 3306;
+  const pubHost = config.MYSQL_PUBLIC_HOST || config.PRIMARY_DOMAIN;
+  return {
+    DATABASE_NAME:       dbName,
+    DB_NAME:             dbName,
+    DB_HOST:             host,
+    DB_PUBLIC_HOST:      pubHost,
+    DB_PORT:             String(port),
+    DB_USER:             dbUser,
+    DB_PASS:             dbPass,
+    DATABASE_URL:        `mysql://${dbUser}:${dbPass}@${host}:${port}/${dbName}`,
+    DATABASE_PUBLIC_URL: `mysql://${dbUser}:${dbPass}@${pubHost}:${port}/${dbName}`,
+  };
+}
+
 export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req, reply) => {
     const u = await requireUser(req, reply);
@@ -202,18 +226,20 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     // (and the human reading the file) can immediately tell the language,
     // entrypoint, modules, and run command.
     try {
+      const dbEnv = dbName ? buildDbEnvVars(dbName, u.username) : {};
       ensureWorkspaceConfig(dir, {
         run: initialRunCommand ?? "",
         language: tmpl.language,
         entrypoint: tmpl.entrypoint,
         modules: tmpl.modules,
-        env: dbName ? { DATABASE_NAME: dbName } : {},
+        env: dbEnv,
       });
     } catch {}
+    const dbEnvForDb = dbName ? buildDbEnvVars(dbName, u.username) : {};
     db.prepare(`
       INSERT INTO workspaces (id, user_id, name, template, status, run_command, env_vars, created_at)
       VALUES (?, ?, ?, ?, 'stopped', ?, ?, ?)
-    `).run(id, u.id, body.name, body.template, initialRunCommand, JSON.stringify(dbName ? { DATABASE_NAME: dbName } : {}), Date.now());
+    `).run(id, u.id, body.name, body.template, initialRunCommand, JSON.stringify(dbEnvForDb), Date.now());
 
     const w = db.prepare("SELECT * FROM workspaces WHERE id = ?").get(id) as DbWorkspace;
     return { workspace: workspaceToPublic(w) };
@@ -283,10 +309,11 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     initWorkspaceGit(dir);
 
     const dbName = await createProjectDb(u.username, name).catch(() => null);
+    const dbEnvZip = dbName ? buildDbEnvVars(dbName, u.username) : {};
     db.prepare(`
       INSERT INTO workspaces (id, user_id, name, template, status, run_command, env_vars, created_at)
       VALUES (?, ?, ?, 'zip', 'stopped', NULL, ?, ?)
-    `).run(id, u.id, name, JSON.stringify(dbName ? { DATABASE_NAME: dbName } : {}), Date.now());
+    `).run(id, u.id, name, JSON.stringify(dbEnvZip), Date.now());
 
     const w = db.prepare("SELECT * FROM workspaces WHERE id = ?").get(id) as DbWorkspace;
     return { workspace: workspaceToPublic(w) };
