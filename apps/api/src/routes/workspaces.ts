@@ -372,7 +372,11 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
 
     if (processes) {
       const entries = Object.entries(processes);
-      port = entries[0][1].port; // first process = main/default port
+      // If .premdev has a top-level `port` field, use it as the main preview
+      // port regardless of process order. Without it, the first process wins.
+      const topLevelPort = (cfg?.port && Number.isInteger(cfg.port) && cfg.port > 0 && cfg.port < 65536)
+        ? cfg.port : null;
+      port = topLevelPort ?? entries[0][1].port;
       const portMap: Record<string, number> = {};
       for (const [name, proc] of entries) portMap[name] = proc.port;
       previewPortsJson = JSON.stringify(portMap);
@@ -479,7 +483,9 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     let previewPortsJson2: string | null = null;
     if (processes2) {
       const entries2 = Object.entries(processes2);
-      port2 = entries2[0][1].port;
+      const topLevelPort2 = (cfg2?.port && Number.isInteger(cfg2.port) && cfg2.port > 0 && cfg2.port < 65536)
+        ? cfg2.port : null;
+      port2 = topLevelPort2 ?? entries2[0][1].port;
       const portMap2: Record<string, number> = {};
       for (const [n, p] of entries2) portMap2[n] = p.port;
       previewPortsJson2 = JSON.stringify(portMap2);
