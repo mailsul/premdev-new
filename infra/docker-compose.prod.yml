@@ -50,7 +50,14 @@ services:
     image: mysql:8.4
     restart: unless-stopped
     logging: *default-logging
-    networks: [premdev_net]
+    networks:
+      premdev_net:
+        # Explicit alias so that ANY container on premdev_net — including
+        # workspace containers (pw_*) created via the Docker API rather than
+        # Compose — can reach MySQL as "mysql". Without this, Docker's embedded
+        # DNS only resolves the service name for other Compose-managed services
+        # in the same project; manually-created containers get NXDOMAIN (-2).
+        aliases: [mysql]
     ports:
       - "3306:3306"
     environment:
