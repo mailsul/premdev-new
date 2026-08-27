@@ -437,9 +437,36 @@ function hasUnclosedActionFence(text: string): boolean {
 function parseActions(text: string): { actions: Action[]; cleaned: string; plan?: string } {
   const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "db", "open", "plan", "memory"]);
   const actions: Action[] = [];
-  const lines = text.split("\n");
   const kept: string[] = [];
   let planStr: string | undefined;
+
+  // ── Preprocessing — normalize malformed action openers ─────────────────
+  // AI models (especially Claude via Snifox) sometimes emit:
+  //   A) Inline opener:   "Explanation text.```bash:run\ncat file.css" — ``` not at ^
+  //   B) One-liner:       "Explanation.```bash:run cat file.css"        — cmd in header
+  // Both make the parser skip the action block, causing the session to end
+  // immediately ("✅ Selesai") even though the AI still had work to do.
+  // Fix: split off any leading text and add a synthetic closing fence for
+  // single-line bash commands so the parser can process them correctly.
+  const INLINE_OPEN_RE = /^(.*?)(`{3,})((?:bash|file|workspace|patch|search|diag|test|web|db|open|plan|memory):.*)$/;
+  const preprocessedLines: string[] = [];
+  for (const rawLine of text.split("\n")) {
+    const m = rawLine.match(INLINE_OPEN_RE);
+    if (m) {
+      const [, before, ticks, kindAndRest] = m;
+      // Emit leading text as its own line so it's kept in the cleaned text.
+      if (before.trim()) preprocessedLines.push(before.trimEnd());
+      preprocessedLines.push(ticks + kindAndRest);
+      // Single-line bash: "```bash:run cat file.css" → add synthetic close.
+      // Without a closing fence the block is discarded by the parser.
+      if (/^bash:run\s+\S/.test(kindAndRest)) {
+        preprocessedLines.push(ticks.slice(0, 3));
+      }
+    } else {
+      preprocessedLines.push(rawLine);
+    }
+  }
+  const lines = preprocessedLines;
 
   let i = 0;
   while (i < lines.length) {
@@ -492,8 +519,14 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
     }
     if (!closed) { kept.push(line); i++; continue; }
 
-    if (kind === "bash" && header === "run") {
-      actions.push({ kind: "bash", command: body.join("\n").trim() });
+    if (kind === "bash" && header.startsWith("run")) {
+      // Support both canonical form (```bash:run\nCOMMAND```) and
+      // single-line form (```bash:run COMMAND```) where the command
+      // is embedded in the header after "run ".
+      const inlineCmd = header.replace(/^run\s*/, "").trim(); // "" for canonical
+      const bodyCmd   = body.join("\n").trim();
+      const command   = [inlineCmd, bodyCmd].filter(Boolean).join("\n");
+      if (command) actions.push({ kind: "bash", command });
     } else if (kind === "file" && header) {
       // Sub-commands embedded in the header: file:delete:path, file:mkdir:path,
       // file:rename:from => to. We dispatch on the first segment before the
