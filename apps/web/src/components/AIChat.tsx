@@ -2472,90 +2472,93 @@ export function AIChat({
     }
 
     if (acts.length === 0) {
-      // ── Premature-stop recovery ─────────────────────────────────────────
-      // If the AI stops without action blocks while the task is clearly
-      // still in progress (≥1 action has already run, final-verify hasn't
-      // fired, recovery not yet attempted), give it one silent nudge.
-      // This catches the case where a model emits an inline/malformed block
-      // that the parser normalised → 0 actions detected → wrong early stop.
-      if (
-        autonomous &&
-        sessionActionsRef.current >= 1 &&
-        !finalVerifyDoneRef.current &&
-        !recoveryAttemptedRef.current
-      ) {
-        recoveryAttemptedRef.current = true;
-        await sendRaw(
-          `Tidak ada action block terdeteksi di respons terakhir. Jika task belum selesai, lanjutkan sekarang dengan action blocks yang diperlukan. Pastikan setiap action block dimulai di awal baris sendiri (jangan gabung dengan teks di baris yang sama).`,
-          undefined,
-          { synthetic: true },
-        );
-        return;
-      }
-
-      // AI ended naturally — run a final verification pass ONCE per session
-      // before showing ✅ Selesai. If the verify output has red flags
-      // (fatal errors, no running process after restart, etc.) inject them
-      // back to the AI so it can fix before the session closes.
-      if (autonomous && sessionActionsRef.current > 0 && !finalVerifyDoneRef.current) {
-        finalVerifyDoneRef.current = true; // prevent re-entry on the next "done"
-        const FV_CMD = [
-          "printf '=== STATUS PROSES ===\\n'",
-          "ps aux | grep -E 'php|node|python|ruby|nginx|apache|go |deno' | grep -v grep | head -10 || echo '(tidak ada proses app)'",
-          "printf '\\n=== PORT LISTEN ===\\n'",
-          "ss -tlnp 2>/dev/null | grep LISTEN | head -8 || echo '(tidak ada)'",
-          "printf '\\n=== ERROR LOG (tail 20) ===\\n'",
-          "tail -20 .premdev-data/error.log 2>/dev/null || tail -20 logs/error.log 2>/dev/null || tail -20 storage/logs/laravel.log 2>/dev/null || echo '(tidak ada error log)'",
-        ].join("; ");
-        try {
-          const fvRes = await fetch(`/api/workspaces/${workspaceId}/exec`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "include",
-            body: JSON.stringify({ command: FV_CMD }),
-          });
-          if (fvRes.ok) {
-            const fvData = await fvRes.json() as { output?: string };
-            const fvOut = (fvData.output ?? "").trim();
-            // Detect red flags: PHP fatal, JS errors, no process at all,
-            // or uncaught exceptions in error log.
-            const RED_FLAGS = /fatal error|uncaught|exception|error:|failed to|cannot|enoent|eaddrinuse|econnrefused|tidak ada proses/i;
-            if (fvOut && RED_FLAGS.test(fvOut)) {
-              // Inject back to AI with clear framing so it knows this is
-              // the final verification, not a new user request.
-              await sendRaw(
-                `Final verification (cek otomatis setelah AI selesai):\n\`\`\`\n${fvOut.slice(0, 2000)}\n\`\`\`\n\nAda indikasi masalah di output di atas. Periksa dan perbaiki sebelum benar-benar selesai. Jika semua sudah OK, cukup tulis konfirmasi singkat (tanpa action blocks).`,
-                undefined,
-                { synthetic: true },
-              );
-              return; // don't show ✅ yet — wait for AI response
-            }
-          }
-        } catch {
-          // Non-fatal — verification failure must never block session close.
+      // Wrap in async IIFE so we can use await inside a useEffect callback.
+      void (async () => {
+        // ── Premature-stop recovery ───────────────────────────────────────
+        // If the AI stops without action blocks while the task is clearly
+        // still in progress (≥1 action has already run, final-verify hasn't
+        // fired, recovery not yet attempted), give it one silent nudge.
+        // This catches the case where a model emits an inline/malformed block
+        // that the parser normalised → 0 actions detected → wrong early stop.
+        if (
+          autonomous &&
+          sessionActionsRef.current >= 1 &&
+          !finalVerifyDoneRef.current &&
+          !recoveryAttemptedRef.current
+        ) {
+          recoveryAttemptedRef.current = true;
+          await sendRaw(
+            `Tidak ada action block terdeteksi di respons terakhir. Jika task belum selesai, lanjutkan sekarang dengan action blocks yang diperlukan. Pastikan setiap action block dimulai di awal baris sendiri (jangan gabung dengan teks di baris yang sama).`,
+            undefined,
+            { synthetic: true },
+          );
+          return;
         }
-      }
 
-      // All clear (or verify passed / not applicable) — show session summary.
-      if (autonomous && sessionActionsRef.current > 0) {
-        const elapsed = Math.round((Date.now() - sessionStartRef.current) / 1000);
-        const mins = Math.floor(elapsed / 60);
-        const secs = elapsed % 60;
-        const timeStr = mins > 0 ? `${mins} mnt ${secs} dtk` : `${secs} dtk`;
-        const ckId = sessionCheckpointRef.current ?? undefined;
-        const actionLog = sessionActionLogRef.current.slice();
-        setMsgs((prev) => [
-          ...prev,
-          {
-            role: "assistant" as const,
-            content: `✅ **Selesai** — ${timeStr} · ${sessionActionsRef.current} aksi dijalankan`,
-            synthetic: true,
-            sentAt: Date.now(),
-            ...(ckId ? { sessionCheckpointId: ckId } : {}),
-            ...(actionLog.length > 0 ? { sessionActionLog: actionLog } : {}),
-          },
-        ]);
-      }
+        // AI ended naturally — run a final verification pass ONCE per session
+        // before showing ✅ Selesai. If the verify output has red flags
+        // (fatal errors, no running process after restart, etc.) inject them
+        // back to the AI so it can fix before the session closes.
+        if (autonomous && sessionActionsRef.current > 0 && !finalVerifyDoneRef.current) {
+          finalVerifyDoneRef.current = true; // prevent re-entry on the next "done"
+          const FV_CMD = [
+            "printf '=== STATUS PROSES ===\\n'",
+            "ps aux | grep -E 'php|node|python|ruby|nginx|apache|go |deno' | grep -v grep | head -10 || echo '(tidak ada proses app)'",
+            "printf '\\n=== PORT LISTEN ===\\n'",
+            "ss -tlnp 2>/dev/null | grep LISTEN | head -8 || echo '(tidak ada)'",
+            "printf '\\n=== ERROR LOG (tail 20) ===\\n'",
+            "tail -20 .premdev-data/error.log 2>/dev/null || tail -20 logs/error.log 2>/dev/null || tail -20 storage/logs/laravel.log 2>/dev/null || echo '(tidak ada error log)'",
+          ].join("; ");
+          try {
+            const fvRes = await fetch(`/api/workspaces/${workspaceId}/exec`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ command: FV_CMD }),
+            });
+            if (fvRes.ok) {
+              const fvData = await fvRes.json() as { output?: string };
+              const fvOut = (fvData.output ?? "").trim();
+              // Detect red flags: PHP fatal, JS errors, no process at all,
+              // or uncaught exceptions in error log.
+              const RED_FLAGS = /fatal error|uncaught|exception|error:|failed to|cannot|enoent|eaddrinuse|econnrefused|tidak ada proses/i;
+              if (fvOut && RED_FLAGS.test(fvOut)) {
+                // Inject back to AI with clear framing so it knows this is
+                // the final verification, not a new user request.
+                await sendRaw(
+                  `Final verification (cek otomatis setelah AI selesai):\n\`\`\`\n${fvOut.slice(0, 2000)}\n\`\`\`\n\nAda indikasi masalah di output di atas. Periksa dan perbaiki sebelum benar-benar selesai. Jika semua sudah OK, cukup tulis konfirmasi singkat (tanpa action blocks).`,
+                  undefined,
+                  { synthetic: true },
+                );
+                return; // don't show ✅ yet — wait for AI response
+              }
+            }
+          } catch {
+            // Non-fatal — verification failure must never block session close.
+          }
+        }
+
+        // All clear (or verify passed / not applicable) — show session summary.
+        if (autonomous && sessionActionsRef.current > 0) {
+          const elapsed = Math.round((Date.now() - sessionStartRef.current) / 1000);
+          const mins = Math.floor(elapsed / 60);
+          const secs = elapsed % 60;
+          const timeStr = mins > 0 ? `${mins} mnt ${secs} dtk` : `${secs} dtk`;
+          const ckId = sessionCheckpointRef.current ?? undefined;
+          const actionLog = sessionActionLogRef.current.slice();
+          setMsgs((prev) => [
+            ...prev,
+            {
+              role: "assistant" as const,
+              content: `✅ **Selesai** — ${timeStr} · ${sessionActionsRef.current} aksi dijalankan`,
+              synthetic: true,
+              sentAt: Date.now(),
+              ...(ckId ? { sessionCheckpointId: ckId } : {}),
+              ...(actionLog.length > 0 ? { sessionActionLog: actionLog } : {}),
+            },
+          ]);
+        }
+      })();
       return;
     }
     if (processedBatchesRef.current.has(lastIdx)) return;
