@@ -143,7 +143,7 @@ export default function AdminPage() {
         {tab === "vpsfiles" && <VFSSection />}
         {tab === "ai-runtime" && <AIRuntimeSettingsSection />}
         {tab === "domains" && <DomainsSection />}
-        {tab === "custom-providers" && <CustomProvidersSection />}
+        {tab === "custom-providers" && <CustomProvidersSection onGoToAIRuntime={() => setTab("ai-runtime")} />}
 
         {tab === "users" && (
         <>
@@ -2218,7 +2218,18 @@ type CustomProviderRow = {
   created_at: number;
 };
 
-function CustomProvidersSection() {
+// Base URLs for built-in providers (shown as informational in the panel)
+const BUILTIN_BASE_URL: Record<string, string> = {
+  openai:     "https://api.openai.com/v1",
+  anthropic:  "https://api.anthropic.com/v1",
+  google:     "https://generativelanguage.googleapis.com/v1beta",
+  openrouter: "https://openrouter.ai/api/v1",
+  groq:       "https://api.groq.com/openai/v1",
+  konektika:  "https://api.konektika.id/v1",
+  snifox:     "https://core.snifoxai.com/v1",
+};
+
+function CustomProvidersSection({ onGoToAIRuntime }: { onGoToAIRuntime: () => void }) {
   const qc = useQueryClient();
   const { confirm, dialog } = useConfirm();
   const [showForm, setShowForm] = useState(false);
@@ -2227,6 +2238,12 @@ function CustomProvidersSection() {
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "custom-providers"],
     queryFn: () => API.get<{ providers: CustomProviderRow[] }>("/admin/custom-providers"),
+  });
+
+  // Also fetch built-in providers' key status so we can show them here.
+  const { data: aiKeys, isLoading: keysLoading } = useQuery({
+    queryKey: ["admin", "ai-keys"],
+    queryFn: () => API.get<{ keys: AIKeyRow[]; encryptionWeak: boolean }>("/admin/ai-keys"),
   });
 
   const deleteMut = useMutation({
@@ -2245,9 +2262,96 @@ function CustomProvidersSection() {
     if (ok) deleteMut.mutate(p.id);
   };
 
+  const loading = isLoading || keysLoading;
+
   return (
     <div className="space-y-4">
       {dialog}
+
+      {/* ── Built-in providers (read-only) ─────────────────────────────── */}
+      <section className="card p-6">
+        <div className="mb-4">
+          <h2 className="font-semibold flex items-center gap-2">
+            <Key size={16} className="text-text-muted" />
+            Provider Bawaan
+          </h2>
+          <p className="mt-1 text-xs text-text-muted">
+            Provider resmi yang sudah terintegrasi. API key diatur di tab{" "}
+            <button
+              className="text-accent underline-offset-2 hover:underline"
+              onClick={onGoToAIRuntime}
+            >
+              Pengaturan AI
+            </button>. Provider ini tidak bisa dihapus.
+          </p>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center gap-2 text-text-muted"><Loader2 size={14} className="animate-spin" /> Loading…</div>
+        ) : (
+          <div className="space-y-2">
+            {(aiKeys?.keys ?? []).map((k) => {
+              const docs = PROVIDER_DOCS[k.provider];
+              const baseUrl = BUILTIN_BASE_URL[k.provider] ?? "";
+              return (
+                <div key={k.provider} className="rounded-md border border-bg-border bg-bg-subtle/40 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm">{PROVIDER_LABEL[k.provider] ?? k.provider}</span>
+                        <span className="rounded-full bg-bg-hover px-2 py-0.5 text-[10px] text-text-muted">Bawaan</span>
+                        {k.configured ? (
+                          <span className="rounded-full bg-success/15 px-2 py-0.5 text-[10px] text-success">
+                            {k.keyCount > 1 ? `${k.keyCount} keys (rotasi)` : "key tersimpan"}
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">key belum diset</span>
+                        )}
+                        {k.source === "env" && (
+                          <span className="rounded-full bg-info/15 px-2 py-0.5 text-[10px] text-info" title="Key dibaca dari environment variable, bukan database">ENV</span>
+                        )}
+                      </div>
+                      {/* Masked key(s) */}
+                      {k.configured && (
+                        <div className="mt-1.5 space-y-0.5">
+                          {k.maskedAll.map((m, i) => (
+                            <div key={i} className="flex items-center gap-1.5">
+                              {k.maskedAll.length > 1 && (
+                                <span className="text-[10px] text-text-muted w-4 shrink-0">#{i+1}</span>
+                              )}
+                              <code className="font-mono text-xs text-text-muted">{m}</code>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {baseUrl && (
+                        <div className="mt-1 font-mono text-[11px] text-text-muted truncate" title={baseUrl}>{baseUrl}</div>
+                      )}
+                      {docs && (
+                        <a
+                          href={docs.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1 inline-flex items-center gap-1 text-xs text-accent hover:underline"
+                        >
+                          <BookOpen size={10} /> {docs.label}
+                          <ExternalLink size={10} />
+                        </a>
+                      )}
+                    </div>
+                    {/* Lock icon — not deletable */}
+                    <div className="shrink-0 text-text-muted opacity-40" title="Provider bawaan tidak bisa dihapus">
+                      <Shield size={14} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* ── Custom providers ───────────────────────────────────────────── */}
       <section className="card p-6">
         <div className="mb-4 flex items-center justify-between">
           <div>

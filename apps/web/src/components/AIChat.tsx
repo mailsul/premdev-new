@@ -952,18 +952,14 @@ function Markdown({ text, isStreaming = false }: { text: string; isStreaming?: b
           const status = n.complete
             ? `${n.lines} baris`
             : truncated
-              ? `⚠ output terpotong · ${n.lines} baris — auto-lanjut aktif (atau minta AI "lanjutkan")`
+              ? `↻ auto-lanjut...`
               : `sedang ditulis · ${n.lines} baris`;
           return (
             <div
               key={i}
-              className={`flex items-center gap-2 rounded border px-2 py-1 text-[12px] ${
-                truncated
-                  ? "border-amber-500/50 bg-amber-500/10 text-amber-200"
-                  : "border-bg-border bg-bg text-text-muted"
-              }`}
+              className="flex items-center gap-2 rounded border px-2 py-1 text-[12px] border-bg-border bg-bg text-text-muted"
               title={truncated
-                ? `${n.kind}:${n.header} — model berhenti sebelum menutup blok (kemungkinan kena batas token). Suruh AI "lanjutkan ${n.header}" atau naikkan AI_MAX_TOKENS_DEFAULT di .env.`
+                ? `${n.kind}:${n.header} — output dilanjutkan otomatis`
                 : `${n.kind}:${n.header}`}
             >
               <span>{icon}</span>
@@ -1372,6 +1368,10 @@ export function AIChat({
   // Final verification: set to true once we've run the end-of-session verify
   // so a subsequent "no action blocks" turn shows ✅ instead of re-verifying.
   const finalVerifyDoneRef = useRef<boolean>(false);
+  // Auto-recovery: set to true after we've injected one silent nudge for a
+  // mid-session premature stop (AI responded with no action blocks even though
+  // the task isn't done yet). Prevents infinite recovery loops.
+  const recoveryAttemptedRef = useRef<boolean>(false);
 
   // Mirror of the latest committed `msgs` state, kept in sync via the
   // useEffect below. Needed because `sendRaw()` recursively re-invokes
@@ -2151,6 +2151,7 @@ export function AIChat({
     planRef.current = null;
     preFlightRef.current = null;
     finalVerifyDoneRef.current = false;
+    recoveryAttemptedRef.current = false;
     setAutoManagedBatches(new Set());
 
     // ── Pre-flight orientation ────────────────────────────────────────────
@@ -2448,6 +2449,27 @@ export function AIChat({
     }
 
     if (acts.length === 0) {
+      // ── Premature-stop recovery ─────────────────────────────────────────
+      // If the AI stops without action blocks while the task is clearly
+      // still in progress (≥1 action has already run, final-verify hasn't
+      // fired, recovery not yet attempted), give it one silent nudge.
+      // This catches the case where a model emits an inline/malformed block
+      // that the parser normalised → 0 actions detected → wrong early stop.
+      if (
+        autonomous &&
+        sessionActionsRef.current >= 1 &&
+        !finalVerifyDoneRef.current &&
+        !recoveryAttemptedRef.current
+      ) {
+        recoveryAttemptedRef.current = true;
+        await sendRaw(
+          `Tidak ada action block terdeteksi di respons terakhir. Jika task belum selesai, lanjutkan sekarang dengan action blocks yang diperlukan. Pastikan setiap action block dimulai di awal baris sendiri (jangan gabung dengan teks di baris yang sama).`,
+          undefined,
+          { synthetic: true },
+        );
+        return;
+      }
+
       // AI ended naturally — run a final verification pass ONCE per session
       // before showing ✅ Selesai. If the verify output has red flags
       // (fatal errors, no running process after restart, etc.) inject them
