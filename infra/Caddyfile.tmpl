@@ -30,6 +30,12 @@ import /etc/caddy/extra/*.caddy
                 reverse_proxy phpmyadmin:80
         }
 
+        # Adminer -> adminer.<domain>
+        @adminer host adminer.${PRIMARY_DOMAIN}
+        handle @adminer {
+                reverse_proxy adminer:8080
+        }
+
         # Root domain -> static "under construction" landing page.
         # Deliberately separated from the app so the apex hostname can be
         # used for marketing later without touching the IDE on app.<domain>.
