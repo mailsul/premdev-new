@@ -96,7 +96,21 @@ RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master
     git clone --depth 1 https://github.com/zsh-users/zsh-syntax-highlighting ~/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting && \
     sed -i 's/^plugins=.*/plugins=(git zsh-autosuggestions zsh-syntax-highlighting docker)/' ~/.zshrc && \
     echo 'export PATH=$HOME/.local/bin:/usr/local/go/bin:$PATH' >> ~/.zshrc && \
-    echo 'eval "$(starship init zsh)" 2>/dev/null || true' >> ~/.zshrc
+    echo 'eval "$(starship init zsh)" 2>/dev/null || true' >> ~/.zshrc && \
+    \
+    # npm global install tanpa sudo — arahkan prefix ke ~/.local
+    npm config set prefix "$HOME/.local" && \
+    \
+    # gem install tanpa sudo — install ke user home
+    echo 'export GEM_HOME=$HOME/.local/gems' >> ~/.zshrc && \
+    echo 'export PATH=$HOME/.local/gems/bin:$PATH' >> ~/.zshrc && \
+    \
+    # Alias package manager supaya tidak perlu ketik sudo
+    echo '# Package manager — no sudo needed' >> ~/.zshrc && \
+    echo 'alias apt="sudo apt"' >> ~/.zshrc && \
+    echo 'alias apt-get="sudo apt-get"' >> ~/.zshrc && \
+    echo 'alias dpkg="sudo dpkg"' >> ~/.zshrc && \
+    echo 'alias pip="pip3"' >> ~/.zshrc
 
 # Starship prompt (precompiled binary)
 USER root
