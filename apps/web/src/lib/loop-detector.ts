@@ -35,9 +35,10 @@ function actionTarget(a: Action): string {
     case "web":        return a.query.slice(0, 200);
     case "webFetch":   return a.url.slice(0, 200);
     case "memorySave": return a.content.split("\n")[0].slice(0, 200);
-    case "setRun":     return a.command.slice(0, 200);
-    case "setEnv":     return Object.keys(a.vars).join(",");
-    case "restart":    return "";
+    case "setRun":        return a.command.slice(0, 200);
+    case "setEnv":        return Object.keys(a.vars).join(",");
+    case "setProcesses":  return Object.keys(a.processes).join(",");
+    case "restart":       return "";
     case "checkpoint": return a.message;
     case "db":         return a.sql.split("\n")[0].slice(0, 200);
     case "open":       return a.path;

@@ -700,6 +700,11 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   const PatchBody = z.object({
     run: z.string().max(2000).optional(),
     env: z.record(z.union([z.string().max(8000), z.null()])).optional(),
+    port: z.number().int().positive().max(65535).nullable().optional(),
+    processes: z.record(z.object({
+      run:  z.string().max(2000),
+      port: z.number().int().positive().max(65535),
+    })).nullable().optional(),
   });
   app.post("/:id/config/patch", async (req, reply) => {
     const u = await requireUser(req, reply);

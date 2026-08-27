@@ -19,6 +19,7 @@ export type Action =
   | { kind: "memorySave"; content: string }
   | { kind: "setRun"; command: string }
   | { kind: "setEnv"; vars: Record<string, string> }
+  | { kind: "setProcesses"; processes: Record<string, { run: string; port: number }> }
   | { kind: "restart" }
   | { kind: "checkpoint"; message: string }
   | { kind: "db"; sql: string }
@@ -73,6 +74,11 @@ export async function runAction(
         const keys = Object.keys(action.vars);
         const merged = r.config?.env ?? {};
         return { ok: true, output: `.premdev env merged (${keys.length} key${keys.length === 1 ? "" : "s"}: ${keys.join(", ")}). Total now: ${Object.keys(merged).length}.` };
+      }
+      case "setProcesses": {
+        const r = await fetchJson("POST", `/workspaces/${workspaceId}/config/patch`, { processes: action.processes });
+        const names = Object.keys(action.processes);
+        return { ok: true, output: `.premdev processes set (${names.length}: ${names.join(", ")}).\n${JSON.stringify(r.config?.processes ?? action.processes, null, 2)}` };
       }
       case "restart":
         await fetchJson("POST", `/workspaces/${workspaceId}/restart`);
@@ -207,8 +213,9 @@ export function getActionRisk(action: Action): ActionRisk {
     if (keys.some((k) => _SENSITIVE_ENV_KEYS.test(k))) return "high";
     return "medium";
   }
-  if (action.kind === "setRun") return "medium";
-  if (action.kind === "restart") return "medium";
+  if (action.kind === "setRun")       return "medium";
+  if (action.kind === "setProcesses") return "medium";
+  if (action.kind === "restart")      return "medium";
   return "low";
 }
 
@@ -232,6 +239,10 @@ export function actionLabel(a: Action): string {
     case "setEnv": {
       const keys = Object.keys(a.vars);
       return `workspace:setEnv (${keys.length}: ${keys.slice(0, 4).join(", ")}${keys.length > 4 ? ", …" : ""})`;
+    }
+    case "setProcesses": {
+      const names = Object.keys(a.processes);
+      return `workspace:setProcesses (${names.join(", ")})`;
     }
     case "restart":    return "workspace:restart";
     case "checkpoint": return `workspace:checkpoint "${a.message}"`;
@@ -267,9 +278,10 @@ export function actionFingerprint(a: Action): string {
     case "web":        return `web:${fnv1a32(a.query)}`;
     case "webFetch":   return `webFetch:${fnv1a32(a.url)}`;
     case "memorySave": return `memorySave:${fnv1a32(a.content)}`;
-    case "setRun":     return `setRun:${fnv1a32(a.command)}`;
-    case "setEnv":     return `setEnv:${fnv1a32(JSON.stringify(a.vars))}`;
-    case "checkpoint": return `checkpoint:${fnv1a32(a.message)}`;
+    case "setRun":        return `setRun:${fnv1a32(a.command)}`;
+    case "setEnv":        return `setEnv:${fnv1a32(JSON.stringify(a.vars))}`;
+    case "setProcesses":  return `setProcesses:${fnv1a32(JSON.stringify(a.processes))}`;
+    case "checkpoint":    return `checkpoint:${fnv1a32(a.message)}`;
     case "open":       return `open:${a.path}`;
     default:           return `${(a as Action).kind}:`;
   }
@@ -291,9 +303,10 @@ function _actionTarget(a: Action): string {
     case "web":        return a.query.slice(0, 200);
     case "webFetch":   return a.url.slice(0, 200);
     case "memorySave": return a.content.split("\n")[0].slice(0, 200);
-    case "setRun":     return a.command.slice(0, 200);
-    case "setEnv":     return Object.keys(a.vars).join(",");
-    case "restart":    return "";
+    case "setRun":        return a.command.slice(0, 200);
+    case "setEnv":        return Object.keys(a.vars).join(",");
+    case "setProcesses":  return Object.keys(a.processes).join(",");
+    case "restart":       return "";
     case "checkpoint": return a.message;
     case "db":         return a.sql.split("\n")[0].slice(0, 200);
     case "open":       return a.path;

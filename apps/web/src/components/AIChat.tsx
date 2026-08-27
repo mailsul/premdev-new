@@ -337,7 +337,7 @@ function formatToolResults(actions: Action[], results: ActionResult[]): string {
     const kind = a.kind;
     const isSilent = kind === "file" || kind === "patch" || kind === "mkdir" ||
       kind === "delete" || kind === "rename" || kind === "setRun" ||
-      kind === "setEnv" || kind === "restart" || kind === "checkpoint";
+      kind === "setEnv" || kind === "setProcesses" || kind === "restart" || kind === "checkpoint";
 
     if (isSilent && ok) {
       // For patch, surface fuzzy/replaceAll info if present
@@ -691,6 +691,29 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
           if (k) vars[k] = v;
         }
         if (Object.keys(vars).length > 0) actions.push({ kind: "setEnv", vars });
+      } else if (header === "setProcesses") {
+        // Parse TOML-style sections: [name] / run = "..." / port = N
+        // (no [processes.] prefix — just [name] shorthand for clarity)
+        const processes: Record<string, { run: string; port: number }> = {};
+        let curName: string | null = null;
+        for (const raw of body) {
+          const ln = raw.trim();
+          if (!ln || ln.startsWith("#")) continue;
+          const sec = ln.match(/^\[([^\]]+)\]$/);
+          if (sec) { curName = sec[1].trim(); processes[curName] = { run: "", port: 0 }; continue; }
+          if (!curName) continue;
+          const eq = ln.indexOf("=");
+          if (eq <= 0) continue;
+          const k = ln.slice(0, eq).trim();
+          let v = ln.slice(eq + 1).trim();
+          if ((v.startsWith(`"`) && v.endsWith(`"`)) || (v.startsWith(`'`) && v.endsWith(`'`))) v = v.slice(1, -1);
+          if (k === "run")  processes[curName].run  = v;
+          if (k === "port") processes[curName].port = parseInt(v, 10) || 0;
+        }
+        const valid = Object.fromEntries(
+          Object.entries(processes).filter(([, p]) => p.run && p.port > 0),
+        );
+        if (Object.keys(valid).length > 0) actions.push({ kind: "setProcesses", processes: valid });
       } else {
         kept.push(line, ...body, lines[j - 1]);
       }
@@ -2670,8 +2693,8 @@ export function AIChat({
           return n;
         });
         const k = toRun[i].kind;
-        if (k === "file" || k === "setRun" || k === "setEnv") onFilesMutated?.();
-        if (k === "restart" || k === "setRun") onWorkspaceMutated?.();
+        if (k === "file" || k === "setRun" || k === "setEnv" || k === "setProcesses") onFilesMutated?.();
+        if (k === "restart" || k === "setRun" || k === "setProcesses") onWorkspaceMutated?.();
         // If user clicked Stop mid-action, the abort propagates as a
         // "Cancelled by user" result — bail before running the rest.
         if (stoppedRef.current) break;
@@ -3809,8 +3832,8 @@ function ActionCard({
     setState(r.ok ? "ok" : "error");
     // Manual approval — record alongside autonomous actions in the audit log.
     logAudit({ workspaceId, provider, model, action: eff, result: r });
-    if (eff.kind === "file" || eff.kind === "setRun" || eff.kind === "setEnv") onFilesMutated?.();
-    if (eff.kind === "restart" || eff.kind === "setRun") onWorkspaceMutated?.();
+    if (eff.kind === "file" || eff.kind === "setRun" || eff.kind === "setEnv" || eff.kind === "setProcesses") onFilesMutated?.();
+    if (eff.kind === "restart" || eff.kind === "setRun" || eff.kind === "setProcesses") onWorkspaceMutated?.();
   }
 
   function cancelManual() {
@@ -3864,6 +3887,7 @@ function ActionCard({
     action.kind === "bash" ? action.command :
     action.kind === "setRun" ? action.command :
     action.kind === "setEnv" ? Object.entries(action.vars).map(([k, v]) => `${k}=${v}`).join("\n") :
+    action.kind === "setProcesses" ? Object.entries(action.processes).map(([n, p]) => `[${n}]\nrun  = "${p.run}"\nport = ${p.port}`).join("\n\n") :
     action.kind === "patch" ? `<<<FIND\n${action.find}\n===\n${action.replace}\n>>>` :
     action.kind === "search" ? `pattern: ${action.pattern}${action.pathGlob ? `\nin: ${action.pathGlob}` : ""}${action.regex ? `\nregex: yes` : ""}` :
     action.kind === "test" ? (action.command ?? "(auto-detect test command)") :

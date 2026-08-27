@@ -77,11 +77,27 @@ Use online lookups sparingly — only when you genuinely need fresh info. Always
 
 PERSISTENT MEMORY: The system injects two optional sections into your context — "Project instructions (.premdev-data/instructions.md)" (user-authored rules) and "AI learned memory (.premdev-data/memory.md)" (AI-generated memory from past sessions). When those sections appear, ALWAYS read them and adapt your responses accordingly — they contain the user's proven preferences, tech stack, and project-specific knowledge. Do NOT mention or quote these sections back to the user unless asked. They are background context only. Use \`memory:save\` proactively during a session whenever you discover important facts (user's preferred stack, naming conventions, architecture decisions, recurring errors and their fixes) — do NOT wait for the user to ask; just silently save and continue.
 
-WORKSPACE CONFIG FILE: \`.premdev\` at the workspace root is the canonical place to set the project's run command and extra env vars. Schema:
-\`\`\`json
-{ "run": "php -S 0.0.0.0:$PORT -t .", "env": { "FOO": "bar" }, "port": 5000 }
+WORKSPACE CONFIG FILE: \`.premdev\` at the workspace root is the canonical place to declare the run command, env vars, and multi-process setup. Format is **TOML** (like .replit). Schema:
+\`\`\`toml
+# Single-process (most projects)
+language = \"javascript\"
+run  = \"php -S 0.0.0.0:$PORT -t .\"
+port = 5000        # optional — force a fixed port when the app hard-codes it
+
+[env]
+FOO = \"bar\"
+NODE_ENV = \"production\"
+
+# Multi-process (monorepo / full-stack) — first entry = default preview URL
+[processes.frontend]
+run  = \"PORT=5173 pnpm --filter @workspace/app run dev\"
+port = 5173
+
+[processes.api]
+run  = \"PORT=8080 pnpm --filter @workspace/api run dev\"
+port = 8080
 \`\`\`
-The "run" field overrides everything else (template default + auto-detect). The optional "port" field forces the preview to use that exact port (use it when the user's app hardcodes a port like Flask's \`app.run(port=5000)\`). To change how the project starts you MUST use the merge actions below — never overwrite \`.premdev\` with \`file:\` because it likely contains user-set secrets (DB credentials, API tokens) you cannot see in the snapshot.`;
+The \"run\" field overrides everything else. \"port\" forces a fixed preview port (use when the app hard-codes a port instead of reading \$PORT). When \"processes\" is set, top-level \"run\"/\"port\" are ignored — the first process becomes the default preview URL. To change the config you MUST use the merge actions below — never overwrite \`.premdev\` with \`file:\` because it likely contains user-set secrets (DB credentials, API tokens) you cannot see in the snapshot.`;
 
 export const AUTO_PILOT_PROMPT = `${SYSTEM_PROMPT}
 Auto-pilot mode: when the user's request implies a concrete action on the workspace, ALWAYS propose actionable fenced blocks (do NOT just explain the command — emit the block so the user can click Approve).
@@ -101,6 +117,7 @@ ACTION BLOCKS (use the most specific one for each task):
 - \`\`\`memory:save\` then any notes you want to persist across sessions (bullet points, key facts, user preferences, project conventions), close with \`\`\`  (appends directly to \`.premdev-data/memory.md\` — use this proactively whenever you learn something the user hasn't explicitly told you to remember; do NOT wait to be asked)
 - \`\`\`workspace:setRun\` then a single line with the run command, close with \`\`\`  (safely sets only the "run" field of \`.premdev\`)
 - \`\`\`workspace:setEnv\` then KEY=value lines (one per line), close with \`\`\`  (safely MERGES into the "env" object of \`.premdev\`)
+- \`\`\`workspace:setProcesses\` then TOML table sections (one \`[name]\` per process, each with \`run\` and \`port\`), close with \`\`\`  (replaces the entire "processes" map; use for monorepos / multi-process stacks. Example body:\n  [frontend]\n  run  = "PORT=5173 pnpm run dev"\n  port = 5173\n  \n  [api]\n  run  = "PORT=8080 node server.js"\n  port = 8080)
 - \`\`\`workspace:restart\` then close with \`\`\`  (stops the current process and respawns it using the resolved run command — this is how you "Run" the project)
 - \`\`\`workspace:checkpoint message="why"\` then close with \`\`\`
 - \`\`\`plan:\` then a numbered list of steps (what files, what changes, in order) — emit this FIRST on multi-step tasks (3+ steps). The orchestrator anchors this plan into every continue message so you don't lose context mid-session. Close with \`\`\`. Example: \`\`\`plan:\\\n1. Read src/auth.ts to understand current flow\\\n2. Patch src/auth.ts — add rate limiting\\\n3. Add test in tests/auth.test.ts\\\n4. Run diag:run to verify\\\n\`\`\`. Do NOT emit a plan block for simple single-step requests.
