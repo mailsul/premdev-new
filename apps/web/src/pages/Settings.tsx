@@ -69,7 +69,7 @@ export default function SettingsPage() {
             <div>HOST: <span className="text-accent">mysql</span> <span className="text-text-muted">(internal Docker)</span></div>
             <div>USER: <span className="text-accent">{data?.user?.username}</span></div>
             <div>PASSWORD: <span className="text-text-muted">(env: DB_PASS)</span></div>
-            <div>DB FORMAT: <span className="text-accent">ws_&lt;nama-project&gt;</span></div>
+            <div>DB FORMAT: <span className="text-accent">{data?.user?.username}_&lt;nama-project&gt;</span></div>
             <div>DATABASE_URL: <span className="text-text-muted">(env: DATABASE_URL)</span></div>
           </div>
           <div className="mt-3 flex gap-2">
