@@ -827,8 +827,16 @@ export async function* streamOpenAICompat(opts: {
         const body = await res.text().catch(() => "");
         lastError = { status: res.status, body: body.slice(0, 300) };
 
-        // Non-429 errors are NOT pure rate-limit — break out of quota loop later.
-        if (res.status !== 429) allRateLimited = false;
+        // Treat as rate-limit if status is 429 OR if the body clearly says so
+        // (some providers return 400/503 with a "rate_limit" body instead of 429).
+        const bodyLower = body.toLowerCase();
+        const isRateLimitResponse =
+          res.status === 429 ||
+          bodyLower.includes("rate_limit") ||
+          bodyLower.includes("rate limit") ||
+          bodyLower.includes("quota") ||
+          bodyLower.includes("too many requests");
+        if (!isRateLimitResponse) allRateLimited = false;
 
         // 429: retry the same key with exponential backoff before failing over.
         if (res.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
@@ -863,8 +871,9 @@ export async function* streamOpenAICompat(opts: {
       // Only 1 key and it hit a failover status: fall through to quota-wait check below.
     }
 
-    // All keys exhausted.  If every failure was a 429, wait for quota reset and retry.
-    if (allRateLimited && lastError?.status === 429) {
+    // All keys exhausted.  If every failure was a rate-limit (status 429 or body says so),
+    // wait for quota reset and retry automatically.
+    if (allRateLimited && lastError) {
       quotaRound++;
       const waitSec = Math.round(QUOTA_RESET_WAIT_MS / 1000);
       const label = opts.providerLabel ?? opts.url;

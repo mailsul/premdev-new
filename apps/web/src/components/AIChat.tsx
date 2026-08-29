@@ -2523,7 +2523,10 @@ export function AIChat({
         // before showing ✅ Selesai. If the verify output has red flags
         // (fatal errors, no running process after restart, etc.) inject them
         // back to the AI so it can fix before the session closes.
-        if (autonomous && sessionActionsRef.current > 0 && !finalVerifyDoneRef.current) {
+        // Skip if last message was a provider/rate-limit error — firing another
+        // AI call while rate-limited just creates a second error and burns the
+        // session's recovery slots.
+        if (!lastIsProviderError && autonomous && sessionActionsRef.current > 0 && !finalVerifyDoneRef.current) {
           finalVerifyDoneRef.current = true; // prevent re-entry on the next "done"
           const FV_CMD = [
             "printf '=== STATUS PROSES ===\\n'",
