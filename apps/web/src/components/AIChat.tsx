@@ -2565,6 +2565,23 @@ export function AIChat({
           }
         }
 
+        // If the last AI response was a provider/rate-limit error, don't show
+        // ✅ Selesai — the task is NOT done.  Auto-retry after 65s to give the
+        // quota window time to reset.  The user can also click "Coba lagi"
+        // manually at any time via the error box button.
+        if (lastIsProviderError) {
+          const RATE_LIMIT_AUTO_RETRY_MS = 65_000;
+          const retryTimer = setTimeout(() => {
+            if (stoppedRef.current) return; // user pressed Stop in the meantime
+            // Dispatch the same retry event the "Coba lagi" button uses.
+            window.dispatchEvent(new CustomEvent("premdev:ai:retry"));
+          }, RATE_LIMIT_AUTO_RETRY_MS);
+          // If the user stops the session manually, clear the timer.
+          const stopHandler = () => clearTimeout(retryTimer);
+          window.addEventListener("premdev:ai:stop", stopHandler, { once: true });
+          return;
+        }
+
         // All clear (or verify passed / not applicable) — show session summary.
         if (autonomous && sessionActionsRef.current > 0) {
           const elapsed = Math.round((Date.now() - sessionStartRef.current) / 1000);
