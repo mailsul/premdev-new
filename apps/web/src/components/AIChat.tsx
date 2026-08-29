@@ -2456,7 +2456,17 @@ export function AIChat({
       const sig = (m: Msg) => parseActions(m.content).cleaned.trim().slice(0, 300);
       const last2 = sig(assistantMsgs[assistantMsgs.length - 1]);
       const prev2 = sig(assistantMsgs[assistantMsgs.length - 2]);
-      if (last2 && prev2 && last2 === prev2) {
+      const lastRaw = assistantMsgs[assistantMsgs.length - 1].content ?? "";
+      // Skip loop detection when the repeated content is a provider/rate-limit
+      // error — those aren't "stuck AI" loops, they're transient failures that
+      // the backend is already retrying.  Killing the session here would prevent
+      // the backend's 60-second quota-reset wait from ever completing.
+      const isProviderErrorMsg =
+        lastRaw.includes("__ai_error__:") ||
+        lastRaw.startsWith("⚠️ **") ||
+        lastRaw.startsWith("🔑 **") ||
+        lastRaw.startsWith("💳 **");
+      if (!isProviderErrorMsg && last2 && prev2 && last2 === prev2) {
         stoppedRef.current = true;
         setMsgs((prev) => [
           ...prev,
@@ -2480,7 +2490,21 @@ export function AIChat({
         // fired, recovery not yet attempted), give it one silent nudge.
         // This catches the case where a model emits an inline/malformed block
         // that the parser normalised → 0 actions detected → wrong early stop.
+        // Do not nudge if the last assistant turn was a provider/rate-limit
+        // error — the backend is already retrying; sending a new request on
+        // top would create another job that also hits the limit immediately,
+        // causing the loop-detection to fire and kill the session.
+        const lastAssistantContent = msgsRef.current
+          .slice()
+          .reverse()
+          .find((m) => m.role === "assistant" && !m.synthetic)?.content ?? "";
+        const lastIsProviderError =
+          lastAssistantContent.includes("__ai_error__:") ||
+          lastAssistantContent.startsWith("⚠️ **") ||
+          lastAssistantContent.startsWith("🔑 **") ||
+          lastAssistantContent.startsWith("💳 **");
         if (
+          !lastIsProviderError &&
           autonomous &&
           sessionActionsRef.current >= 1 &&
           !finalVerifyDoneRef.current &&
