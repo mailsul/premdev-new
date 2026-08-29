@@ -109,16 +109,15 @@ services:
     logging: *default-logging
     networks: [premdev_net]
     env_file: /opt/premdev/.env
-    # Prevent runaway shell-exec sessions from exhausting the host's PID table.
-    # The app container itself only needs a handful of Node threads + a few
-    # short-lived child processes (health-check wget, etc.).  Workspace shells
-    # run in separate pw_* containers, so this limit applies only to the app
-    # process itself and won't interfere with user workspace sessions.
-    pids_limit: 512
+    # Cap total PIDs inside the app container to prevent runaway accumulation.
+    # 2048 is generous enough for: Node threads, concurrent bash:run commands,
+    # workspace shells (some run inside the app container via docker exec),
+    # and burst traffic — while still bounding the container's cgroup.
+    # NOTE: do NOT set ulimits.nproc here — that limits fork() per-user and
+    # causes EAGAIN ("resource temporarily unavailable") the moment any burst
+    # of short-lived processes (autonomous mode, diag:run, etc.) hits the cap.
+    pids_limit: 2048
     ulimits:
-      nproc:
-        soft: 512
-        hard: 1024
       nofile:
         soft: 65535
         hard: 65535
