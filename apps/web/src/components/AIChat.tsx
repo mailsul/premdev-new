@@ -2571,10 +2571,31 @@ export function AIChat({
         // manually at any time via the error box button.
         if (lastIsProviderError) {
           const RATE_LIMIT_AUTO_RETRY_MS = 65_000;
-          const retryTimer = setTimeout(() => {
+          // NOTE: `premdev:ai:retry` cannot be used here — it calls send() which
+          // returns immediately when the input is empty.  Instead we directly call
+          // sendRaw() with a synthetic continuation after removing the error msg.
+          const retryTimer = setTimeout(async () => {
             if (stoppedRef.current) return; // user pressed Stop in the meantime
-            // Dispatch the same retry event the "Coba lagi" button uses.
-            window.dispatchEvent(new CustomEvent("premdev:ai:retry"));
+            // Remove the rate-limit error assistant message.
+            setMsgs((cur) => {
+              const withoutError =
+                cur[cur.length - 1]?.role === "assistant"
+                  ? cur.slice(0, -1)
+                  : cur;
+              msgsRef.current = withoutError;
+              return withoutError;
+            });
+            // Reset per-turn guards so recovery/verify can fire on the new turn.
+            recoveryAttemptedRef.current = false;
+            finalVerifyDoneRef.current = false;
+            // Small tick so React commits the setMsgs before sendRaw reads msgsRef.
+            await new Promise<void>((r) => setTimeout(r, 120));
+            if (stoppedRef.current) return;
+            await sendRaw(
+              "[Rate limit sudah reset — lanjutkan task dari langkah terakhir]",
+              undefined,
+              { synthetic: true },
+            );
           }, RATE_LIMIT_AUTO_RETRY_MS);
           // If the user stops the session manually, clear the timer.
           const stopHandler = () => clearTimeout(retryTimer);
