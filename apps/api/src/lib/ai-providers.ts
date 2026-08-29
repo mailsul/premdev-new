@@ -294,6 +294,30 @@ export function getModelCapability(name: string): number | null {
 export const KEY_FAILOVER_STATUSES = new Set([401, 402, 403, 429]);
 
 // ---------------------------------------------------------------------------
+// Rate-limit retry helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Delays (ms) between successive retries on a 429 response, for the SAME key.
+ * The sequence is: wait 5 s → 15 s → 30 s before giving up and failing over
+ * to the next key.  Three retry attempts = four total attempts per key.
+ */
+const RATE_LIMIT_RETRY_DELAYS_MS = [5_000, 15_000, 30_000] as const;
+
+/**
+ * Sleep for `ms` milliseconds.  Resolves early (throws AbortError) if the
+ * provided AbortSignal fires, so a user Stop always cancels immediately.
+ */
+function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(new DOMException("aborted", "AbortError")); return; }
+    const t = setTimeout(resolve, ms);
+    const onAbort = () => { clearTimeout(t); reject(new DOMException("aborted", "AbortError")); };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Live model list caches
 // ---------------------------------------------------------------------------
 
@@ -720,70 +744,104 @@ export async function* streamOpenAICompat(opts: {
   let lastError: { status: number; body: string } | null = null;
   for (let i = 0; i < opts.keys.length; i++) {
     const key = opts.keys[i];
-    const res = await fetch(opts.url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        ...(opts.extraHeaders || {}),
-      },
-      body: reqBody,
-      signal: opts.signal,
-    });
-    if (res.ok && res.body) {
-      if (i > 0) yield `\n[Key #${i + 1} dipakai (key sebelumnya gagal)]\n`;
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      let firstToken = false;
-      // Timer for first-token timeout (useful for slow local models like Ollama)
-      const ftTimeoutMs = opts.firstTokenTimeoutMs;
-      let ftTimer: ReturnType<typeof setTimeout> | null = null;
-      let ftAbortCtrl: AbortController | null = null;
-      if (ftTimeoutMs) {
-        ftAbortCtrl = new AbortController();
-        ftTimer = setTimeout(() => ftAbortCtrl!.abort(), ftTimeoutMs);
-      }
-      try {
-        while (true) {
-          // Check first-token timeout
-          if (ftAbortCtrl?.signal.aborted && !firstToken) {
-            yield `\n⏱ Ollama timeout — model sedang sibuk atau konteks terlalu panjang. Coba lagi dengan pesan lebih singkat, atau tunggu request sebelumnya selesai.`;
-            reader.cancel().catch(() => {});
-            return;
-          }
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          let idx;
-          while ((idx = buf.indexOf("\n")) >= 0) {
-            const line = buf.slice(0, idx).trim();
-            buf = buf.slice(idx + 1);
-            if (!line.startsWith("data:")) continue;
-            const data = line.slice(5).trim();
-            if (data === "[DONE]") return;
-            try {
-              const j = JSON.parse(data);
-              const txt = j.choices?.[0]?.delta?.content ?? "";
-              if (txt) {
-                if (!firstToken) {
-                  firstToken = true;
-                  if (ftTimer) clearTimeout(ftTimer);
-                }
-                yield txt;
-              }
-            } catch {}
-          }
+
+    // Inner retry loop for 429 rate-limit on the same key.
+    // Attempt 0 = first try; attempts 1..N = retries after waiting.
+    let keySucceeded = false;
+    for (let attempt = 0; attempt <= RATE_LIMIT_RETRY_DELAYS_MS.length; attempt++) {
+      const res = await fetch(opts.url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+          ...(opts.extraHeaders || {}),
+        },
+        body: reqBody,
+        signal: opts.signal,
+      });
+
+      if (res.ok && res.body) {
+        keySucceeded = true;
+        if (i > 0) yield `\n[Key #${i + 1} dipakai (key sebelumnya gagal)]\n`;
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        let firstToken = false;
+        // Timer for first-token timeout (useful for slow local models like Ollama)
+        const ftTimeoutMs = opts.firstTokenTimeoutMs;
+        let ftTimer: ReturnType<typeof setTimeout> | null = null;
+        let ftAbortCtrl: AbortController | null = null;
+        if (ftTimeoutMs) {
+          ftAbortCtrl = new AbortController();
+          ftTimer = setTimeout(() => ftAbortCtrl!.abort(), ftTimeoutMs);
         }
-      } finally {
-        if (ftTimer) clearTimeout(ftTimer);
+        try {
+          while (true) {
+            // Check first-token timeout
+            if (ftAbortCtrl?.signal.aborted && !firstToken) {
+              yield `\n⏱ Ollama timeout — model sedang sibuk atau konteks terlalu panjang. Coba lagi dengan pesan lebih singkat, atau tunggu request sebelumnya selesai.`;
+              reader.cancel().catch(() => {});
+              return;
+            }
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let idx;
+            while ((idx = buf.indexOf("\n")) >= 0) {
+              const line = buf.slice(0, idx).trim();
+              buf = buf.slice(idx + 1);
+              if (!line.startsWith("data:")) continue;
+              const data = line.slice(5).trim();
+              if (data === "[DONE]") return;
+              try {
+                const j = JSON.parse(data);
+                const txt = j.choices?.[0]?.delta?.content ?? "";
+                if (txt) {
+                  if (!firstToken) {
+                    firstToken = true;
+                    if (ftTimer) clearTimeout(ftTimer);
+                  }
+                  yield txt;
+                }
+              } catch {}
+            }
+          }
+        } finally {
+          if (ftTimer) clearTimeout(ftTimer);
+        }
+        return;
       }
-      return;
+
+      const body = await res.text().catch(() => "");
+      lastError = { status: res.status, body: body.slice(0, 300) };
+
+      // 429: retry the same key with exponential backoff before failing over.
+      if (res.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
+        const waitMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+        const waitSec = Math.round(waitMs / 1000);
+        const label = opts.providerLabel ?? opts.url;
+        yield `\n⏳ **${label} kena rate-limit** — menunggu ${waitSec}s lalu coba lagi (percobaan ${attempt + 2}/${RATE_LIMIT_RETRY_DELAYS_MS.length + 1})…\n`;
+        try {
+          await sleepWithAbort(waitMs, opts.signal);
+        } catch {
+          // User pressed Stop — exit immediately.
+          return;
+        }
+        continue; // retry same key
+      }
+
+      // Non-429 error or retries exhausted: break inner loop and evaluate failover.
+      break;
     }
-    const body = await res.text().catch(() => "");
-    lastError = { status: res.status, body: body.slice(0, 300) };
-    if (KEY_FAILOVER_STATUSES.has(res.status) && i < opts.keys.length - 1) continue;
-    yield formatProviderError(res.status, body, opts.providerLabel, opts.model);
+
+    if (keySucceeded) return;
+
+    // Failover to next key for all KEY_FAILOVER_STATUSES (including 429 if all retries exhausted).
+    if (lastError && KEY_FAILOVER_STATUSES.has(lastError.status) && i < opts.keys.length - 1) continue;
+
+    if (lastError) {
+      yield formatProviderError(lastError.status, lastError.body, opts.providerLabel, opts.model);
+    }
     return;
   }
   if (lastError) {
@@ -937,7 +995,12 @@ export async function* streamGoogle(
         if (skipReason === "notfound") allQuotaThisKey = false;
         const reason = skipReason === "quota" ? "Quota habis" : "Model tidak tersedia";
         const next = candidates[i + 1] ?? "(habis semua)";
-        yield `\n[${reason} di ${candidate}, coba ${next}…]\n`;
+        // Wait briefly before trying next model so quota window can partially recover.
+        const googleWaitMs = skipReason === "quota" ? 3_000 : 0;
+        yield `\n[${reason} di ${candidate}${googleWaitMs ? `, menunggu ${googleWaitMs / 1000}s` : ""}, coba ${next}…]\n`;
+        if (googleWaitMs > 0) {
+          try { await sleepWithAbort(googleWaitMs, signal); } catch { return; }
+        }
       }
       if ((keyDead || allQuotaThisKey) && ki < keys.length - 1) {
         lastQuotaMsg = lastError;
