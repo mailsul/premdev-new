@@ -186,6 +186,8 @@ export function initDb() {
       created_at INTEGER NOT NULL
     )
   `);
+  // Migration: add rpm column if it doesn't exist yet (0 = no throttle).
+  try { db.exec("ALTER TABLE custom_providers ADD COLUMN rpm INTEGER NOT NULL DEFAULT 0"); } catch {}
 }
 
 /**

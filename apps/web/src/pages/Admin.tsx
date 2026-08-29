@@ -2215,6 +2215,7 @@ type CustomProviderRow = {
   enabled: boolean;
   configured: boolean;
   key_count: number;
+  rpm: number;
   created_at: number;
 };
 
@@ -2484,6 +2485,7 @@ function CustomProviderForm({
   const [modelsRaw, setModelsRaw] = useState(provider?.models.join(", ") ?? "");
   const [docsUrl, setDocsUrl] = useState(provider?.docs_url ?? "");
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
+  const [rpm, setRpm] = useState(provider?.rpm ?? 0);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -2514,6 +2516,7 @@ function CustomProviderForm({
         models,
         docs_url: docsUrl.trim(),
         enabled,
+        rpm: Math.max(0, Math.floor(rpm || 0)),
       };
       // Only send api_keys when the user actually typed something —
       // an empty value means "don't touch stored keys" on the backend.
@@ -2651,6 +2654,32 @@ function CustomProviderForm({
                 onChange={(e) => setModelsRaw(e.target.value)}
               />
             </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-medium text-text-muted">
+              RPM — Requests per Minute{" "}
+              <span className="font-normal text-text-muted">(0 = tidak dibatasi)</span>
+            </label>
+            <input
+              className="input w-32"
+              type="number"
+              min={0}
+              max={10000}
+              step={1}
+              placeholder="0"
+              value={rpm || ""}
+              onChange={(e) => setRpm(Math.max(0, parseInt(e.target.value || "0", 10)))}
+            />
+            <p className="mt-1 text-[10px] text-text-muted">
+              Jika diisi, PremDev akan otomatis memberi jeda antar request agar tidak melewati batas RPM provider.
+              Contoh: RPM 5 → minimal 12 detik antar request.
+              {rpm > 0 && (
+                <span className="ml-1 font-medium text-info">
+                  ({Math.ceil(60 / rpm)} dtk jeda minimum)
+                </span>
+              )}
+            </p>
           </div>
 
           <div>

@@ -706,6 +706,8 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     docs_url: z.string().max(500).optional().default(""),
     enabled: z.boolean().optional().default(true),
     sort_order: z.number().int().optional().default(0),
+    /** Requests per minute cap (0 = no throttle). */
+    rpm: z.number().int().min(0).max(10000).optional().default(0),
   });
 
   app.get("/custom-providers", async (req, reply) => {
@@ -728,6 +730,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       docs_url: body.docs_url,
       enabled: body.enabled,
       sort_order: body.sort_order,
+      rpm: body.rpm,
     });
     writeAudit({ actorId: a.id, actorUsername: a.username, ip: clientIp(req), action: "custom-provider-add", target: body.name });
     return { ok: true, id, providers: listCustomProviders() };
@@ -750,6 +753,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       docs_url: body.docs_url,
       enabled: body.enabled,
       sort_order: body.sort_order,
+      rpm: body.rpm,
     });
     writeAudit({ actorId: a.id, actorUsername: a.username, ip: clientIp(req), action: "custom-provider-update", target: body.name });
     return { ok: true, providers: listCustomProviders() };

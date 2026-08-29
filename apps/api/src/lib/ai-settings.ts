@@ -280,6 +280,7 @@ export function listCustomProviders(): CustomProvider[] {
       docs_url: r.docs_url || "",
       enabled: r.enabled === 1,
       sort_order: r.sort_order || 0,
+      rpm: r.rpm || 0,
       configured: keys.length > 0,
       key_count: keys.length,
       created_at: r.created_at,
@@ -310,6 +311,8 @@ export function upsertCustomProvider(opts: {
   docs_url?: string;
   enabled?: boolean;
   sort_order?: number;
+  /** Requests per minute cap (0 = no throttle). */
+  rpm?: number;
 }): string {
   const id = opts.id || nanoid(12);
   // Resolve the key list: prefer api_keys array, fall back to single api_key.
@@ -318,6 +321,7 @@ export function upsertCustomProvider(opts: {
     opts.api_key             ? [opts.api_key] :
     undefined;
   const encKeysStr = newKeys !== undefined ? encodeKeys(newKeys) : "";
+  const rpm = opts.rpm ?? 0;
 
   if (opts.id) {
     // CASE WHEN: only overwrite api_key if a new value was provided.
@@ -326,23 +330,23 @@ export function upsertCustomProvider(opts: {
         name = ?, base_url = ?,
         api_key = CASE WHEN ? = '' THEN api_key ELSE ? END,
         models = ?, default_model = ?, docs_url = ?,
-        enabled = ?, sort_order = ?
+        enabled = ?, sort_order = ?, rpm = ?
       WHERE id = ?
     `).run(
       opts.name, opts.base_url,
       encKeysStr, encKeysStr,
       opts.models.join(","), opts.default_model, opts.docs_url ?? "",
-      opts.enabled !== false ? 1 : 0, opts.sort_order ?? 0,
+      opts.enabled !== false ? 1 : 0, opts.sort_order ?? 0, rpm,
       id,
     );
   } else {
     db.prepare(`
-      INSERT INTO custom_providers (id, name, base_url, api_key, models, default_model, docs_url, enabled, sort_order, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO custom_providers (id, name, base_url, api_key, models, default_model, docs_url, enabled, sort_order, rpm, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, opts.name, opts.base_url, encKeysStr,
       opts.models.join(","), opts.default_model, opts.docs_url ?? "",
-      opts.enabled !== false ? 1 : 0, opts.sort_order ?? 0,
+      opts.enabled !== false ? 1 : 0, opts.sort_order ?? 0, rpm,
       Date.now(),
     );
   }

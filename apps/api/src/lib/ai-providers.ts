@@ -426,6 +426,31 @@ export async function fetchSnifoxModels(): Promise<string[]> {
 // Custom provider streaming (OpenAI-compatible, base_url from DB)
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-provider RPM throttler.
+ * Stores the timestamp of the most-recent request start for each provider id.
+ * When a provider has rpm > 0, we enforce a minimum gap of (60000 / rpm) ms
+ * between consecutive requests so we stay under the limit proactively instead
+ * of waiting for a 429 after the fact.
+ */
+const providerLastRequestAt = new Map<string, number>();
+
+async function throttleProvider(
+  providerId: string,
+  rpm: number,
+  signal: AbortSignal,
+): Promise<void> {
+  if (!rpm || rpm <= 0) return;
+  const minGapMs = Math.ceil(60_000 / rpm);
+  const last = providerLastRequestAt.get(providerId) ?? 0;
+  const now = Date.now();
+  const waitMs = minGapMs - (now - last);
+  if (waitMs > 0) {
+    await sleepWithAbort(waitMs, signal);
+  }
+  providerLastRequestAt.set(providerId, Date.now());
+}
+
 export async function* streamCustomProvider(
   customId: string,
   model: string,
@@ -451,6 +476,15 @@ export async function* streamCustomProvider(
   const resolvedModel = model === "auto"
     ? (prov.default_model || (prov.models[0] ?? "gpt-4o-mini"))
     : model;
+
+  // Proactive RPM throttle — wait if needed before sending the request.
+  if (prov.rpm > 0) {
+    try {
+      await throttleProvider(customId, prov.rpm, signal);
+    } catch {
+      return; // user pressed Stop during the wait
+    }
+  }
 
   // Always log custom provider requests so debugging is possible via
   // `docker logs premdev-app-1 2>&1 | grep "\[CUSTOM\]"` without needing
