@@ -741,111 +741,149 @@ export async function* streamOpenAICompat(opts: {
     ...(opts.extraBody ?? {}),
   });
 
-  let lastError: { status: number; body: string } | null = null;
-  for (let i = 0; i < opts.keys.length; i++) {
-    const key = opts.keys[i];
+  /**
+   * Outer quota-reset loop.
+   * When ALL keys are exhausted and every failure was a 429 (pure rate-limit),
+   * we wait QUOTA_RESET_WAIT_MS then retry from key #1 instead of surfacing
+   * an error.  Any non-429 failure still breaks out immediately.
+   */
+  const QUOTA_RESET_WAIT_MS = 60_000;
 
-    // Inner retry loop for 429 rate-limit on the same key.
-    // Attempt 0 = first try; attempts 1..N = retries after waiting.
-    let keySucceeded = false;
-    for (let attempt = 0; attempt <= RATE_LIMIT_RETRY_DELAYS_MS.length; attempt++) {
-      const res = await fetch(opts.url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${key}`,
-          ...(opts.extraHeaders || {}),
-        },
-        body: reqBody,
-        signal: opts.signal,
-      });
+  let quotaRound = 0;
+  while (true) {
+    let lastError: { status: number; body: string } | null = null;
+    let allRateLimited = true; // assume true until proven otherwise
 
-      if (res.ok && res.body) {
-        keySucceeded = true;
-        if (i > 0) yield `\n[Key #${i + 1} dipakai (key sebelumnya gagal)]\n`;
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        let firstToken = false;
-        // Timer for first-token timeout (useful for slow local models like Ollama)
-        const ftTimeoutMs = opts.firstTokenTimeoutMs;
-        let ftTimer: ReturnType<typeof setTimeout> | null = null;
-        let ftAbortCtrl: AbortController | null = null;
-        if (ftTimeoutMs) {
-          ftAbortCtrl = new AbortController();
-          ftTimer = setTimeout(() => ftAbortCtrl!.abort(), ftTimeoutMs);
-        }
-        try {
-          while (true) {
-            // Check first-token timeout
-            if (ftAbortCtrl?.signal.aborted && !firstToken) {
-              yield `\n⏱ Ollama timeout — model sedang sibuk atau konteks terlalu panjang. Coba lagi dengan pesan lebih singkat, atau tunggu request sebelumnya selesai.`;
-              reader.cancel().catch(() => {});
-              return;
-            }
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += dec.decode(value, { stream: true });
-            let idx;
-            while ((idx = buf.indexOf("\n")) >= 0) {
-              const line = buf.slice(0, idx).trim();
-              buf = buf.slice(idx + 1);
-              if (!line.startsWith("data:")) continue;
-              const data = line.slice(5).trim();
-              if (data === "[DONE]") return;
-              try {
-                const j = JSON.parse(data);
-                const txt = j.choices?.[0]?.delta?.content ?? "";
-                if (txt) {
-                  if (!firstToken) {
-                    firstToken = true;
-                    if (ftTimer) clearTimeout(ftTimer);
-                  }
-                  yield txt;
-                }
-              } catch {}
-            }
+    for (let i = 0; i < opts.keys.length; i++) {
+      const key = opts.keys[i];
+
+      // Inner retry loop for 429 rate-limit on the same key.
+      // Attempt 0 = first try; attempts 1..N = retries after waiting.
+      let keySucceeded = false;
+      for (let attempt = 0; attempt <= RATE_LIMIT_RETRY_DELAYS_MS.length; attempt++) {
+        const res = await fetch(opts.url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${key}`,
+            ...(opts.extraHeaders || {}),
+          },
+          body: reqBody,
+          signal: opts.signal,
+        });
+
+        if (res.ok && res.body) {
+          keySucceeded = true;
+          if (i > 0) yield `\n[Key #${i + 1} dipakai (key sebelumnya gagal)]\n`;
+          const reader = res.body.getReader();
+          const dec = new TextDecoder();
+          let buf = "";
+          let firstToken = false;
+          // Timer for first-token timeout (useful for slow local models like Ollama)
+          const ftTimeoutMs = opts.firstTokenTimeoutMs;
+          let ftTimer: ReturnType<typeof setTimeout> | null = null;
+          let ftAbortCtrl: AbortController | null = null;
+          if (ftTimeoutMs) {
+            ftAbortCtrl = new AbortController();
+            ftTimer = setTimeout(() => ftAbortCtrl!.abort(), ftTimeoutMs);
           }
-        } finally {
-          if (ftTimer) clearTimeout(ftTimer);
+          try {
+            while (true) {
+              // Check first-token timeout
+              if (ftAbortCtrl?.signal.aborted && !firstToken) {
+                yield `\n⏱ Ollama timeout — model sedang sibuk atau konteks terlalu panjang. Coba lagi dengan pesan lebih singkat, atau tunggu request sebelumnya selesai.`;
+                reader.cancel().catch(() => {});
+                return;
+              }
+              const { done, value } = await reader.read();
+              if (done) break;
+              buf += dec.decode(value, { stream: true });
+              let idx;
+              while ((idx = buf.indexOf("\n")) >= 0) {
+                const line = buf.slice(0, idx).trim();
+                buf = buf.slice(idx + 1);
+                if (!line.startsWith("data:")) continue;
+                const data = line.slice(5).trim();
+                if (data === "[DONE]") return;
+                try {
+                  const j = JSON.parse(data);
+                  const txt = j.choices?.[0]?.delta?.content ?? "";
+                  if (txt) {
+                    if (!firstToken) {
+                      firstToken = true;
+                      if (ftTimer) clearTimeout(ftTimer);
+                    }
+                    yield txt;
+                  }
+                } catch {}
+              }
+            }
+          } finally {
+            if (ftTimer) clearTimeout(ftTimer);
+          }
+          return;
         }
+
+        const body = await res.text().catch(() => "");
+        lastError = { status: res.status, body: body.slice(0, 300) };
+
+        // Non-429 errors are NOT pure rate-limit — break out of quota loop later.
+        if (res.status !== 429) allRateLimited = false;
+
+        // 429: retry the same key with exponential backoff before failing over.
+        if (res.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
+          const waitMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+          const waitSec = Math.round(waitMs / 1000);
+          const label = opts.providerLabel ?? opts.url;
+          yield `\n⏳ **${label} kena rate-limit** — menunggu ${waitSec}s lalu coba lagi (percobaan ${attempt + 2}/${RATE_LIMIT_RETRY_DELAYS_MS.length + 1})…\n`;
+          try {
+            await sleepWithAbort(waitMs, opts.signal);
+          } catch {
+            // User pressed Stop — exit immediately.
+            return;
+          }
+          continue; // retry same key
+        }
+
+        // Non-429 error or retries exhausted: break inner loop and evaluate failover.
+        break;
+      }
+
+      if (keySucceeded) return;
+
+      // Failover to next key for all KEY_FAILOVER_STATUSES (including 429 if all retries exhausted).
+      if (lastError && KEY_FAILOVER_STATUSES.has(lastError.status) && i < opts.keys.length - 1) continue;
+
+      // Non-failover error (e.g. 500, 400) — surface immediately, no quota-wait.
+      if (lastError && !KEY_FAILOVER_STATUSES.has(lastError.status)) {
+        yield formatProviderError(lastError.status, lastError.body, opts.providerLabel, opts.model);
         return;
       }
 
-      const body = await res.text().catch(() => "");
-      lastError = { status: res.status, body: body.slice(0, 300) };
-
-      // 429: retry the same key with exponential backoff before failing over.
-      if (res.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
-        const waitMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
-        const waitSec = Math.round(waitMs / 1000);
-        const label = opts.providerLabel ?? opts.url;
-        yield `\n⏳ **${label} kena rate-limit** — menunggu ${waitSec}s lalu coba lagi (percobaan ${attempt + 2}/${RATE_LIMIT_RETRY_DELAYS_MS.length + 1})…\n`;
-        try {
-          await sleepWithAbort(waitMs, opts.signal);
-        } catch {
-          // User pressed Stop — exit immediately.
-          return;
-        }
-        continue; // retry same key
-      }
-
-      // Non-429 error or retries exhausted: break inner loop and evaluate failover.
-      break;
+      // Only 1 key and it hit a failover status: fall through to quota-wait check below.
     }
 
-    if (keySucceeded) return;
+    // All keys exhausted.  If every failure was a 429, wait for quota reset and retry.
+    if (allRateLimited && lastError?.status === 429) {
+      quotaRound++;
+      const waitSec = Math.round(QUOTA_RESET_WAIT_MS / 1000);
+      const label = opts.providerLabel ?? opts.url;
+      const keyCount = opts.keys.length;
+      const keyInfo = keyCount === 1 ? "1 key" : `semua ${keyCount} key`;
+      yield `\n⏳ **${label} — ${keyInfo} kena rate-limit.** Menunggu ${waitSec}s untuk quota reset, lalu coba otomatis (round ${quotaRound})… Tekan Stop untuk batal.\n`;
+      try {
+        await sleepWithAbort(QUOTA_RESET_WAIT_MS, opts.signal);
+      } catch {
+        return; // User pressed Stop.
+      }
+      continue; // restart outer loop — try all keys again
+    }
 
-    // Failover to next key for all KEY_FAILOVER_STATUSES (including 429 if all retries exhausted).
-    if (lastError && KEY_FAILOVER_STATUSES.has(lastError.status) && i < opts.keys.length - 1) continue;
-
+    // Not all-429: surface the last error and stop.
     if (lastError) {
-      yield formatProviderError(lastError.status, lastError.body, opts.providerLabel, opts.model);
+      yield formatProviderError(lastError.status, lastError.body, opts.providerLabel, opts.model, opts.keys.length);
     }
     return;
-  }
-  if (lastError) {
-    yield formatProviderError(lastError.status, lastError.body, opts.providerLabel, opts.model, opts.keys.length);
   }
 }
 
