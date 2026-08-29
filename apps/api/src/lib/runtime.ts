@@ -396,15 +396,14 @@ cd /workspace && exec bash -lc ${JSON.stringify(opts.runCommand)}`
       // I/O when it OOMs (MemorySwap == Memory means "no swap allowed").
       MemorySwap: opts.memMb * 1024 * 1024,
       NanoCpus: Math.floor(opts.cpu * 1e9),
-      // 1024 PIDs: PHP-FPM alone spawns ~50 workers; each docker exec the AI
-      // runs adds another bash + timeout process. 512 was too tight for active
-      // workspaces running a web server + concurrent AI actions.
-      PidsLimit: 1024,
-      // Cap open file descriptors and per-user processes. Without these a
-      // runaway loop can fork-bomb or exhaust nofile on the host.
+      // 2048 PIDs: PHP-FPM spawns ~50 workers; each docker exec adds
+      // bash + timeout; autonomous mode runs many in parallel.
+      PidsLimit: 2048,
+      // NOTE: nproc ulimit intentionally omitted — it causes EAGAIN
+      // ("resource temporarily unavailable") under burst load because
+      // it limits fork() per-user, not just total container PIDs.
       Ulimits: [
         { Name: "nofile", Soft: 4096, Hard: 8192 },
-        { Name: "nproc", Soft: 1024, Hard: 2048 },
       ],
       // Cap container log volume so a chatty user app can't fill the host
       // disk with stdout/stderr. Matches docker-compose.prod.yml services.
@@ -541,10 +540,10 @@ export async function runOneOff(workspaceId: string, command: string, timeoutMs 
         AutoRemove: true,
         Memory: 1024 * 1024 * 1024,
         NanoCpus: 1e9,
-        PidsLimit: 512,
+        PidsLimit: 2048,
+        // nproc omitted — causes EAGAIN under burst load (see run container note above).
         Ulimits: [
           { Name: "nofile", Soft: 4096, Hard: 8192 },
-          { Name: "nproc", Soft: 512, Hard: 1024 },
         ],
       },
     });
@@ -670,12 +669,11 @@ export async function ensureShellContainer(workspaceId: string): Promise<string>
       Memory: 1024 * 1024 * 1024,
       MemorySwap: 1024 * 1024 * 1024,
       NanoCpus: 1e9,
-      // Shell container can also run AI docker exec calls in parallel with user
-      // terminal commands — bump PidsLimit to match run container.
-      PidsLimit: 512,
+      // Shell container runs user terminal + AI docker exec in parallel.
+      PidsLimit: 2048,
+      // nproc omitted — causes EAGAIN under burst load (see run container note).
       Ulimits: [
         { Name: "nofile", Soft: 4096, Hard: 8192 },
-        { Name: "nproc", Soft: 512, Hard: 1024 },
       ],
       LogConfig: {
         Type: "json-file",
