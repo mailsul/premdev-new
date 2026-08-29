@@ -1205,6 +1205,10 @@ export function AIChat({
     try { return localStorage.getItem("premdev:ai:model") ?? ""; } catch { return ""; }
   });
   const [streaming, setStreaming] = useState(false);
+  // True while the 65s rate-limit quota-reset wait is in progress.
+  // Keeps Stop button visible so the user can cancel the retry at any time.
+  const [rateLimitWaiting, setRateLimitWaiting] = useState(false);
+  const rateLimitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Always ON — AI proposes approve-able action blocks.
   const [autoPilot] = useState(true);
   // Autonomous: always ON — AI auto-executes all actions.
@@ -2313,6 +2317,13 @@ export function AIChat({
   // until the model finishes naturally.
   function stop() {
     stoppedRef.current = true;
+    // Cancel any pending rate-limit auto-retry timer.
+    if (rateLimitTimerRef.current !== null) {
+      clearTimeout(rateLimitTimerRef.current);
+      rateLimitTimerRef.current = null;
+      setRateLimitWaiting(false);
+    }
+    window.dispatchEvent(new CustomEvent("premdev:ai:stop"));
     const jobId = activeJobIdRef.current;
     if (jobId) {
       // Fire-and-forget; if the network is down the local abort below
@@ -2574,7 +2585,14 @@ export function AIChat({
           // NOTE: `premdev:ai:retry` cannot be used here — it calls send() which
           // returns immediately when the input is empty.  Instead we directly call
           // sendRaw() with a synthetic continuation after removing the error msg.
+          //
+          // While waiting, rateLimitWaiting=true so the Stop button stays visible
+          // and the activity bar shows "⏳ Menunggu quota reset…" — the user can
+          // cancel at any time by clicking Stop.
+          setRateLimitWaiting(true);
           const retryTimer = setTimeout(async () => {
+            rateLimitTimerRef.current = null;
+            setRateLimitWaiting(false);
             if (stoppedRef.current) return; // user pressed Stop in the meantime
             // Remove the rate-limit error assistant message.
             setMsgs((cur) => {
@@ -2597,9 +2615,7 @@ export function AIChat({
               { synthetic: true },
             );
           }, RATE_LIMIT_AUTO_RETRY_MS);
-          // If the user stops the session manually, clear the timer.
-          const stopHandler = () => clearTimeout(retryTimer);
-          window.addEventListener("premdev:ai:stop", stopHandler, { once: true });
+          rateLimitTimerRef.current = retryTimer;
           return;
         }
 
@@ -3201,6 +3217,12 @@ export function AIChat({
             <span className="min-w-0 truncate">{currentActivity}</span>
           </div>
         )}
+        {rateLimitWaiting && (
+          <div className="mx-1 my-0.5 flex items-center gap-1.5 rounded-md border border-warning/30 bg-warning/5 px-2.5 py-1.5 text-[11px] text-warning">
+            <Loader2 size={10} className="animate-spin shrink-0" />
+            <span className="min-w-0 truncate">⏳ Menunggu quota reset (~65 dtk) — klik Stop untuk batal</span>
+          </div>
+        )}
         {/* ── Provider error recovery ──────────────────────────────────────────
             When the last assistant message is a provider error (rate-limit,
             invalid key, server error, empty stream), show retry buttons:
@@ -3440,22 +3462,24 @@ export function AIChat({
               }
             }}
           />
-          {streaming || autoExecuting ? (
-            // During streaming: show Stop + a Queue button side-by-side.
-            // Queue button adds the typed message to a backlog that fires
-            // one-by-one after the current AI run finishes.
+          {streaming || autoExecuting || rateLimitWaiting ? (
+            // During streaming OR while waiting for rate-limit retry: show Stop.
+            // rateLimitWaiting keeps the Stop button visible during the 65s
+            // quota-reset pause so the user can cancel at any time.
             <div className="flex gap-1">
               <button className="btn-danger" onClick={stop} title="Stop AI">
                 <Square size={14} />
               </button>
-              <button
-                className="btn-secondary"
-                title="Kirim setelah AI selesai (Shift+Enter untuk queue tanpa kirim)"
-                disabled={!input.trim()}
-                onClick={queueMessage}
-              >
-                <Plus size={14} />
-              </button>
+              {!rateLimitWaiting && (
+                <button
+                  className="btn-secondary"
+                  title="Kirim setelah AI selesai (Shift+Enter untuk queue tanpa kirim)"
+                  disabled={!input.trim()}
+                  onClick={queueMessage}
+                >
+                  <Plus size={14} />
+                </button>
+              )}
             </div>
           ) : (
             <button
