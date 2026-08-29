@@ -235,6 +235,8 @@ export type CustomProvider = {
   docs_url: string;
   enabled: boolean;
   sort_order: number;
+  /** Requests per minute cap (0 = no throttle). */
+  rpm: number;
   configured: boolean;
   key_count: number;   // number of API keys stored for this provider
   created_at: number;
