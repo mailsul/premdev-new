@@ -109,6 +109,19 @@ services:
     logging: *default-logging
     networks: [premdev_net]
     env_file: /opt/premdev/.env
+    # Prevent runaway shell-exec sessions from exhausting the host's PID table.
+    # The app container itself only needs a handful of Node threads + a few
+    # short-lived child processes (health-check wget, etc.).  Workspace shells
+    # run in separate pw_* containers, so this limit applies only to the app
+    # process itself and won't interfere with user workspace sessions.
+    pids_limit: 512
+    ulimits:
+      nproc:
+        soft: 512
+        hard: 1024
+      nofile:
+        soft: 65535
+        hard: 65535
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/premdev/data:/var/lib/premdev
