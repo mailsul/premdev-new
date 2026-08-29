@@ -3152,7 +3152,6 @@ export function AIChat({
             c.startsWith("⚠️ **") ||
             c.startsWith("🔑 **") ||
             c.startsWith("💳 **") ||
-            c.includes("rate-limit") ||
             c.includes("API key tidak valid") ||
             c.includes("tidak mengembalikan respons") ||
             c.includes("server error");

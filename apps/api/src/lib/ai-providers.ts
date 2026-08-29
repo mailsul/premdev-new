@@ -835,7 +835,7 @@ export async function* streamOpenAICompat(opts: {
           const waitMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
           const waitSec = Math.round(waitMs / 1000);
           const label = opts.providerLabel ?? opts.url;
-          yield `\n⏳ **${label} kena rate-limit** — menunggu ${waitSec}s lalu coba lagi (percobaan ${attempt + 2}/${RATE_LIMIT_RETRY_DELAYS_MS.length + 1})…\n`;
+          yield `\n⏳ **${label} — batas RPM tercapai**, menunggu ${waitSec}s lalu coba lagi (percobaan ${attempt + 2}/${RATE_LIMIT_RETRY_DELAYS_MS.length + 1})…\n`;
           try {
             await sleepWithAbort(waitMs, opts.signal);
           } catch {
@@ -870,7 +870,7 @@ export async function* streamOpenAICompat(opts: {
       const label = opts.providerLabel ?? opts.url;
       const keyCount = opts.keys.length;
       const keyInfo = keyCount === 1 ? "1 key" : `semua ${keyCount} key`;
-      yield `\n⏳ **${label} — ${keyInfo} kena rate-limit.** Menunggu ${waitSec}s untuk quota reset, lalu coba otomatis (round ${quotaRound})… Tekan Stop untuk batal.\n`;
+      yield `\n⏳ **${label} — ${keyInfo} batas RPM tercapai.** Menunggu ${waitSec}s untuk quota reset, lalu coba otomatis (round ${quotaRound})… Tekan Stop untuk batal.\n`;
       try {
         await sleepWithAbort(QUOTA_RESET_WAIT_MS, opts.signal);
       } catch {
