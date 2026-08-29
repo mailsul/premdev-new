@@ -2581,7 +2581,11 @@ export function AIChat({
         // quota window time to reset.  The user can also click "Coba lagi"
         // manually at any time via the error box button.
         if (lastIsProviderError) {
-          const RATE_LIMIT_AUTO_RETRY_MS = 65_000;
+          // 35s cukup — RPM throttler di backend sudah mencegah 429 proaktif.
+          // 65s lama dulu karena backend punya 60s quota-wait sendiri yang
+          // numpuk di atas timer ini; sekarang dengan RPM set, backend jarang
+          // kena quota exhausted, jadi 35s biasanya sudah reset.
+          const RATE_LIMIT_AUTO_RETRY_MS = 35_000;
           // NOTE: `premdev:ai:retry` cannot be used here — it calls send() which
           // returns immediately when the input is empty.  Instead we directly call
           // sendRaw() with a synthetic continuation after removing the error msg.
@@ -2612,7 +2616,9 @@ export function AIChat({
             await sendRaw(
               "[Rate limit sudah reset — lanjutkan task dari langkah terakhir]",
               undefined,
-              { synthetic: true },
+              // continuation:true hides this from the chat UI — it's an internal
+              // signal to the AI, not a visible user bubble.
+              { synthetic: true, continuation: true },
             );
           }, RATE_LIMIT_AUTO_RETRY_MS);
           rateLimitTimerRef.current = retryTimer;
@@ -2687,7 +2693,13 @@ export function AIChat({
     );
     const diagAfterLastEdit = lastEditIdx !== -1
       && acts.slice(lastEditIdx + 1).some((a) => a.kind === "diag");
-    if (lastEditIdx !== -1 && !diagAfterLastEdit) toRun.push({ kind: "diag" });
+    // Auto-inject diag only when:
+    //   a) AI edited a file AND didn't already include a diag, AND
+    //   b) The batch is "small" (≤2 actions) — if the AI already batched 3+
+    //      actions it's working efficiently and likely included its own checks.
+    //      Injecting an extra diag on large batches adds a round-trip for no gain.
+    const isSmallBatch = acts.length <= 2;
+    if (lastEditIdx !== -1 && !diagAfterLastEdit && isSmallBatch) toRun.push({ kind: "diag" });
 
     // 2. Always inject a standardized localhost health-check after any restart.
     // Unconditional injection is the only reliable guarantee: any non-localhost
