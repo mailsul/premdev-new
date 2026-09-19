@@ -27,14 +27,20 @@ export type Action =
 
 export type ActionResult = { ok: boolean; output: string };
 
-export type ExecOptions = { signal?: AbortSignal; provider?: string; model?: string };
+export type ExecOptions = {
+  signal?: AbortSignal;
+  provider?: string;
+  model?: string;
+  /** True only when the user's current request explicitly asked to delete a database. */
+  explicitDatabaseDeletion?: boolean;
+};
 
 export async function runAction(
   workspaceId: string,
   action: Action,
   opts: ExecOptions = {},
 ): Promise<ActionResult> {
-  const { signal, provider, model } = opts;
+  const { signal, provider, model, explicitDatabaseDeletion } = opts;
 
   async function fetchJson(method: string, path: string, body?: unknown) {
     const res = await fetch(`/api${path}`, {
@@ -125,9 +131,24 @@ export async function runAction(
         return { ok: r.ok !== false, output: `Tests (${r.tool}, exit=${r.exitCode}):\n${r.output || "(no output)"}` };
       }
       case "db": {
+        const isDropDatabase = /^\s*DROP\s+(?:DATABASE|SCHEMA)\b/i.test(action.sql);
+        let confirmDestructive = false;
+        if (isDropDatabase) {
+          // An explicit user instruction is sufficient. Otherwise require a
+          // visible confirmation at the exact point of execution.
+          const approved = explicitDatabaseDeletion ||
+            (typeof window !== "undefined" && window.confirm(
+              `Konfirmasi: jalankan "${action.sql.trim()}"? Database workspace akan dihapus permanen dan tidak dapat dipulihkan dari checkpoint.`,
+            ));
+          if (!approved) {
+            return { ok: false, output: "DROP DATABASE dibatalkan oleh pengguna; database tidak diubah." };
+          }
+          confirmDestructive = true;
+        }
         const r = await fetchJson("POST", `/workspaces/${workspaceId}/db/query`, {
           sql: action.sql,
           autonomous: true,
+          confirmDestructive,
           rowLimit: 50,
         });
         if (r.kind === "rows") {

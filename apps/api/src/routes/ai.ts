@@ -22,6 +22,7 @@ import {
 import { requireUser } from "../lib/auth-helpers.js";
 import { db, DbWorkspace } from "../lib/db.js";
 import { getAIKey, listCustomProviders } from "../lib/ai-settings.js";
+import { config } from "../lib/config.js";
 import {
   type Provider,
   type ChatMsg,
@@ -140,25 +141,29 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       activeFileBlock = `\n\n--- Currently open in editor: ${body.activeFile.path} (${rawLines.length} lines total) ---\n\`\`\`${ext}\n${preview}\n\`\`\``;
     }
 
-    // Server-side iteration cap: count how many autonomous "Tool results:"
-    // continuations are already in the history. If the session has run ≥ 40
-    // tool-result turns, instruct the model to stop and summarise — regardless
-    // of what the client's localStorage cap says.
-    const toolResultTurns = (body.messages as ChatMsg[]).filter(
-      (m) => m.role === "user" && m.content.startsWith("Tool results:"),
-    ).length;
-    const iterCapBlock = toolResultTurns >= 40
-      ? "\n\n⚠️ SERVER CAP: Sesi otonom ini sudah mencapai 40 iterasi. HENTIKAN loop sekarang — kirim SATU pesan ringkasan singkat (max 5 baris) tanpa action blocks. Jangan lanjutkan aksi apapun."
-      : "";
-
     const messages: ChatMsg[] = [
       {
         role: "system",
-        content: `${sys}${preFlightBlock}\n\n--- Workspace snapshot ---\n${ctx}${snippetsBlock}${memoryBlock}${aiMemoryBlock}${activeFileBlock}${continuationBlock}${iterCapBlock}`,
+        content: `${sys}${preFlightBlock}\n\n--- Workspace snapshot ---\n${ctx}${snippetsBlock}${memoryBlock}${aiMemoryBlock}${activeFileBlock}${continuationBlock}`,
       },
       ...trimmed,
     ];
-    const model = body.model || DEFAULT_MODELS[body.provider];
+    let model = body.model || DEFAULT_MODELS[body.provider];
+    // 9Router is user-managed. Do not accept a stale/forged model id that is
+    // no longer exposed by its live /v1/models endpoint.
+    if (body.provider === "9router") {
+      const liveModels = await fetchNineRouterModels();
+      if (liveModels.length === 0) {
+        return reply.code(503).send({ error: "9Router tidak terhubung atau tidak memiliki model aktif." });
+      }
+      if (!body.model) model = liveModels[0];
+      if (!liveModels.includes(model)) {
+        return reply.code(400).send({
+          error: `Model 9Router "${model}" tidak tersedia. Pilih salah satu model yang sedang terkoneksi.`,
+          models: liveModels,
+        });
+      }
+    }
     const { MAX_TOKENS_DEFAULT, MAX_TOKENS_AUTOPILOT } = getAIBudgets();
     const maxTokens = body.autoPilot ? MAX_TOKENS_AUTOPILOT : MAX_TOKENS_DEFAULT;
 
@@ -405,15 +410,14 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       fetchGoogleModels().catch(() => null),
       fetchSnifoxModels().catch(() => null),
       fetchOpenRouterModels().catch(() => null),
-      fetchNineRouterModels().catch(() => null),
+      fetchNineRouterModels().catch(() => []),
     ]);
 
-    // If 9Router is configured, surface it first — workspaces use it as the
-    // sole AI backend; other built-in providers are still listed but secondary.
-    const nineRouterConfigured = !!(config.NINE_ROUTER_BASE_URL && config.NINE_ROUTER_API_KEY);
-    const nineRouterModels: string[] = nineRouterLive && nineRouterLive.length > 0
-      ? ["auto", ...nineRouterLive]
-      : ["auto"];
+    // 9Router is considered connected only when its live endpoint returned at
+    // least one model. Never show a synthetic "auto" model or disconnected
+    // provider in the workspace selector.
+    const nineRouterConfigured = nineRouterLive.length > 0;
+    const nineRouterModels: string[] = nineRouterConfigured ? nineRouterLive : [];
 
     const builtIn = (
       ["9router", "openai", "anthropic", "google", "openrouter", "groq", "konektika", "snifox"] as Provider[]
@@ -441,7 +445,9 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
         models,
         textOnlyModels: models.filter(isTextOnlyModel),
         modelCapabilities: capabilities,
-        defaultModel: DEFAULT_MODELS[id] ?? "auto",
+         defaultModel: id === "9router"
+           ? (models[0] ?? "")
+           : (DEFAULT_MODELS[id] ?? "auto"),
         isCustom: false,
         // Flag so UI can know 9Router is the primary gateway and hide other built-ins
         isPrimary: id === "9router" && nineRouterConfigured,
@@ -463,7 +469,19 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
         docsUrl: p.docs_url,
         baseUrl: p.base_url,
       }));
-    return { providers: [...builtIn, ...customProvs] };
+    // When 9Router is live it is the only built-in gateway shown: its
+    // /v1/models response is the source of truth for the user's active
+    // provider/model configuration. Without it, expose only other providers
+    // that have credentials configured.
+    const visibleBuiltIn = nineRouterConfigured
+      ? builtIn.filter((p) => p.id === "9router")
+      : builtIn.filter((p) => p.configured);
+    return {
+      providers: [
+        ...visibleBuiltIn,
+        ...customProvs.filter((p) => p.configured),
+      ],
+    };
   });
 
   // POST /memory/update  — save AI-learned memory for a workspace.

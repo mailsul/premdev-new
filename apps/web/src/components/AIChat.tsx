@@ -143,7 +143,7 @@ function modelSupportsVision(provider: string, model: string): boolean {
   // Custom providers: id starts with "custom:". Apply generous heuristics —
   // most custom endpoints are OpenAI-compat wrappers of multimodal models.
   // Err on the side of allowing images; the server will reject if unsupported.
-  if (id.startsWith("custom:") || !(id in PROVIDER_LABELS)) {
+  if (provider.startsWith("custom:") || !(provider in PROVIDER_LABELS)) {
     if (!m) return false; // no model name → can't guess; assume text-only
     return /vision|gpt-4o|gpt-4\.1|claude-(3|sonnet|opus|haiku|4)|gemini-(1\.5|2)|llava|pixtral|llama-3\.2.*vision|qwen.*vl|intern.*vl|minicpm.*v/.test(m);
   }
@@ -302,9 +302,14 @@ async function runAction(
   workspaceId: string,
   action: Action,
   signal?: AbortSignal,
-  opts?: { provider?: string; model?: string },
+  opts?: { provider?: string; model?: string; explicitDatabaseDeletion?: boolean },
 ): Promise<ActionResult> {
-  return runActionImpl(workspaceId, action, { signal, provider: opts?.provider, model: opts?.model });
+  return runActionImpl(workspaceId, action, {
+    signal,
+    provider: opts?.provider,
+    model: opts?.model,
+    explicitDatabaseDeletion: opts?.explicitDatabaseDeletion,
+  });
 }
 
 async function logAudit(opts: {
@@ -386,11 +391,6 @@ function formatToolResults(actions: Action[], results: ActionResult[]): string {
 
   return lines.join("\n");
 }
-
-// Conservative default — still allows long multi-step sessions but stops
-// clearly-runaway loops before they burn thousands of tokens. Configurable
-// at runtime: localStorage.setItem("premdev:ai:maxIterations", "30").
-const MAX_AUTO_ITERATIONS_DEFAULT = 60;
 
 /**
  * Strip backend routing annotations injected by the auto-model router.
@@ -1319,6 +1319,10 @@ export function AIChat({
   const voiceSupported = typeof window !== "undefined" &&
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
   const iterationRef = useRef<number>(0);
+  // Set only from the user's current request. It lets an explicit request
+  // such as "hapus database yang diperlukan" skip the redundant confirmation;
+  // ambiguous DROP DATABASE actions still use window.confirm at execution time.
+  const explicitDatabaseDeletionRef = useRef<boolean>(false);
   const stoppedRef = useRef<boolean>(false);
   // Stores the most recent plan: block emitted by the AI. Injected as an
   // anchor into every "Tool results:" continue message so the AI keeps track
@@ -1363,32 +1367,13 @@ export function AIChat({
   // a job we're already streaming.
   const activeJobIdRef = useRef<string | null>(null);
   // Auto-continue: counts how many continuation rounds we've fired for the
-  // CURRENT user turn. Reset to 0 in send() (i.e. when the user types a
-  // genuinely new message). Capped by MAX_CONTINUATIONS so a stuck model
-  // can't burn the user's tokens in an infinite loop.
+  // CURRENT user turn. It is telemetry/UI state, not a hard session cap.
   const continuationCountRef = useRef<number>(0);
   // Queue for messages typed while the AI is still streaming. Contents are
   // flushed (one by one, in order) after the current sendRaw call chain
   // finishes. The displayed count drives the "N pesan di-queue" pill.
   const pendingQueueRef = useRef<string[]>([]);
   const [queuedCount, setQueuedCount] = useState<number>(0);
-  // Configurable max autonomous iterations per user turn. Read from
-  // localStorage so power users can raise/lower it without a code change:
-  //   localStorage.setItem("premdev:ai:maxIterations", "30")
-  const MAX_AUTO_ITERATIONS = (() => {
-    try {
-      const v = parseInt(localStorage.getItem("premdev:ai:maxIterations") ?? "", 10);
-      return v > 0 && v <= 500 ? v : MAX_AUTO_ITERATIONS_DEFAULT;
-    } catch { return MAX_AUTO_ITERATIONS_DEFAULT; }
-  })();
-  // Same pattern for continuation (mid-output truncation) rounds.
-  //   localStorage.setItem("premdev:ai:maxContinuations", "30")
-  const MAX_CONTINUATIONS = (() => {
-    try {
-      const v = parseInt(localStorage.getItem("premdev:ai:maxContinuations") ?? "", 10);
-      return v > 0 && v <= 500 ? v : 20;
-    } catch { return 20; }
-  })();
   // Rolling history of action fingerprints for loop detection.
   // Each entry = array of fingerprints for one executed batch.
   const loopStateRef = useRef(createLoopState());
@@ -1731,7 +1716,6 @@ export function AIChat({
       if (
         result.status === "done" &&
         !stoppedRef.current &&
-        continuationCountRef.current < MAX_CONTINUATIONS &&
         hasUnclosedActionFence(acc)
       ) {
         continuationCountRef.current += 1;
@@ -1782,8 +1766,8 @@ export function AIChat({
         setProvider(first.id);
         setModel(first.defaultModel);
       }
-    } else if (!model) {
-      setModel(cur.defaultModel);
+    } else if (!model || !cur.models.includes(model)) {
+      setModel(cur.defaultModel || cur.models[0] || "");
     }
   }, [providers]);
 
@@ -1994,11 +1978,10 @@ export function AIChat({
     // fence (badge would say "OUTPUT TERPOTONG"), silently re-fire the
     // chat with a `[CONT_TRUNC]` marker so the server prepends a strong
     // "continue without preamble, switch to chunked patches" instruction.
-    // We cap at MAX_CONTINUATIONS rounds per user turn so a model that
-    // keeps truncating doesn't loop forever.
+    // There is no hard continuation count: a long action block may need many
+    // chunks. Stop remains available and aborts both the current job and loop.
     if (
       !stoppedRef.current &&
-      continuationCountRef.current < MAX_CONTINUATIONS &&
       hasUnclosedActionFence(buf)
     ) {
       continuationCountRef.current += 1;
@@ -2172,6 +2155,8 @@ export function AIChat({
     }
     iterationRef.current = 0;
     stoppedRef.current = false;
+    explicitDatabaseDeletionRef.current = /\b(?:drop|delete|remove|hapus(?:kan)?|hilangkan)\s+(?:the\s+)?(?:database|db|basis\s+data)\b/i.test(txt) ||
+      /\b(?:database|db|basis\s+data)\b.{0,40}\b(?:drop|delete|remove|hapus|hilangkan)\b/i.test(txt);
     continuationCountRef.current = 0;
     processedBatchesRef.current = new Set();
     sessionStartRef.current = Date.now();
@@ -2436,8 +2421,8 @@ export function AIChat({
   // Autonomous orchestrator: when the latest assistant message contains
   // action blocks and Otonom is on, run them SEQUENTIALLY (each awaiting the
   // previous), populate the results map for ActionCard display, then send a
-  // "Tool results" continuation so the AI can keep iterating. Bounded by
-  // MAX_AUTO_ITERATIONS and stoppedRef.
+  // "Tool results" continuation so the AI can keep iterating. The loop ends
+  // when the model stops emitting actions or the user presses Stop.
   //
   // Enhancements:
   //  • Loop detection — if any action fingerprint appears in 3 consecutive
@@ -2771,7 +2756,11 @@ export function AIChat({
         actionAbortRef.current = ac;
         // Show realtime activity label in the status bar while action runs.
         setCurrentActivity(actionLabel(toRun[i]));
-        const r = await runAction(workspaceId, toRun[i], ac.signal, { provider, model });
+        const r = await runAction(workspaceId, toRun[i], ac.signal, {
+          provider,
+          model,
+          explicitDatabaseDeletion: explicitDatabaseDeletionRef.current,
+        });
         actionAbortRef.current = null;
         results[i] = r;
         sessionActionsRef.current += 1;
@@ -2802,7 +2791,6 @@ export function AIChat({
       setAutoExecuting(false);
       setCurrentActivity(null);
       if (stoppedRef.current) return;
-      if (iterationRef.current >= MAX_AUTO_ITERATIONS) return;
       iterationRef.current += 1;
       // Re-inject the active plan as an anchor so the AI doesn't lose track
       // of its plan even after history compression has stripped old messages.
@@ -2871,11 +2859,10 @@ export function AIChat({
                   // Keep only last 6 non-synthetic messages + add system note
                   const keep = msgs.filter((m) => !m.synthetic).slice(-6);
                   const note: Msg = {
-                    id: `compress-${Date.now()}`,
                     role: "assistant" as const,
                     content: `*[Konteks dikompres — percakapan sebelumnya diarsip ke Memori. Sesi dilanjutkan dengan ${keep.length} pesan terakhir.]*`,
                     synthetic: true,
-                    ts: Date.now(),
+                    sentAt: Date.now(),
                   };
                   setMsgs([note, ...keep]);
                 }}
@@ -3090,7 +3077,7 @@ export function AIChat({
           <span className="flex-1">Sesi panjang terdeteksi — simpan ke memori supaya AI ingat preferensi kamu di sesi berikutnya.</span>
           <button
             className="shrink-0 rounded px-1.5 py-0.5 font-medium hover:bg-accent/20"
-            onClick={saveMemory}
+             onClick={() => { void saveMemory(); }}
             disabled={savingMemory}
           >
             {savingMemory ? <Loader2 size={9} className="animate-spin" /> : "Simpan"}
@@ -3493,7 +3480,7 @@ export function AIChat({
                 title="Hentikan AI (Stop)"
               >
                 <Square size={12} />
-                <span>Stop AI</span>
+                <span>Pause / Stop</span>
               </button>
               {!rateLimitWaiting && (
                 <button

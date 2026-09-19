@@ -1290,9 +1290,10 @@ function parseDataUrlLocal(
  * Result is cached for 2 minutes so repeated /providers calls are cheap.
  */
 export async function fetchNineRouterModels(): Promise<string[]> {
-  const baseUrl = config.NINE_ROUTER_BASE_URL.replace(/\/v1\/?$/, "") || "http://9router:20128";
+  const configuredBaseUrl = config.NINE_ROUTER_BASE_URL.trim();
+  if (!configuredBaseUrl) return [];
+  const baseUrl = configuredBaseUrl.replace(/\/v1\/?$/, "");
   const apiKey  = config.NINE_ROUTER_API_KEY;
-  if (!baseUrl) return [];
   if (cachedNineRouterModels && Date.now() - cachedNineRouterModels.at < 2 * 60 * 1000) {
     return cachedNineRouterModels.list;
   }
@@ -1303,7 +1304,10 @@ export async function fetchNineRouterModels(): Promise<string[]> {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
     const res = await fetch(url, { headers, signal: ctrl.signal });
-    if (!res.ok) return cachedNineRouterModels?.list ?? [];
+    if (!res.ok) {
+      cachedNineRouterModels = null;
+      return [];
+    }
     const j = (await res.json().catch(() => null)) as any;
     const arr = Array.isArray(j?.data) ? j.data : [];
     const list: string[] = arr
@@ -1313,7 +1317,8 @@ export async function fetchNineRouterModels(): Promise<string[]> {
     cachedNineRouterModels = { at: Date.now(), list };
     return list;
   } catch {
-    return cachedNineRouterModels?.list ?? [];
+    cachedNineRouterModels = null;
+    return [];
   } finally {
     clearTimeout(t);
   }

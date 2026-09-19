@@ -770,6 +770,9 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     // When true (sent by the autonomous orchestrator), SQL is restricted to
     // read-only statements. Human users via the Query tab can write freely.
     autonomous: z.boolean().optional(),
+    // DROP DATABASE is allowed for the workspace database only after the
+    // browser has obtained an explicit confirmation from the user.
+    confirmDestructive: z.boolean().optional(),
   });
   app.post<{ Params: { id: string } }>("/:id/db/query", async (req, reply) => {
     const u = await requireUser(req, reply);
@@ -778,19 +781,6 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     const w = db.prepare("SELECT * FROM workspaces WHERE id = ? AND user_id = ?").get(id, u.id) as DbWorkspace | undefined;
     if (!w) return reply.code(404).send({ error: "Not found" });
     const body = DbQueryBody.parse(req.body);
-
-    // Autonomous mode: restrict to read-only SQL (SELECT/SHOW/EXPLAIN/DESCRIBE).
-    // sql-safety.ts blocks writes, DDL, admin commands, and multi-statements.
-    // Non-autonomous (human user in Query tab): no restrictions.
-    if (body.autonomous) {
-      const reason = checkSqlReadOnly(body.sql);
-      if (reason) {
-        return reply.code(403).send({
-          error: `Autonomous mode is read-only: ${reason}. To run writes, INSERT, UPDATE, or DDL, ask the user to execute the query manually in the phpMyAdmin panel or a terminal MySQL session.`,
-          database: "n/a",
-        });
-      }
-    }
 
     const userRow = db.prepare("SELECT username FROM users WHERE id = ?").get(w.user_id) as { username?: string } | undefined;
     const username = userRow?.username;
@@ -804,6 +794,40 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "Workspace identity has no usable username/name." });
     }
     const dbName = `${safeUser}_${safeProj}`;
+
+    // Autonomous mode remains read-only except for the one explicitly
+    // supported destructive workflow: dropping this workspace's own database
+    // after a browser confirmation. This avoids silently destroying data while
+    // still allowing an explicit user request to complete through the agent.
+    const dropMatch = body.sql.trim().replace(/;\s*$/, "").match(
+      /^DROP\s+(?:DATABASE|SCHEMA)\s+(?:IF\s+EXISTS\s+)?[`"]?([A-Za-z0-9_$-]+)[`"]?$/i,
+    );
+    if (body.autonomous) {
+      if (dropMatch) {
+        const targetDb = dropMatch[1];
+        if (targetDb !== dbName) {
+          return reply.code(403).send({
+            error: `DROP DATABASE hanya boleh menarget database workspace ini (${dbName}).`,
+            database: dbName,
+          });
+        }
+        if (!body.confirmDestructive) {
+          return reply.code(409).send({
+            confirmationRequired: true,
+            error: `Konfirmasi diperlukan untuk menghapus database ${dbName}.`,
+            database: dbName,
+          });
+        }
+      } else {
+        const reason = checkSqlReadOnly(body.sql);
+        if (reason) {
+          return reply.code(403).send({
+            error: `Autonomous mode is read-only: ${reason}. To run writes, INSERT, UPDATE, or DDL, ask the user to execute the query manually in the phpMyAdmin panel or a terminal MySQL session.`,
+            database: dbName,
+          });
+        }
+      }
+    }
     // Auto-provision: create the DB and user if they don't exist yet so the
     // first query doesn't fail with "Unknown database".
     if (config.MYSQL_USER_PASSWORD) {
