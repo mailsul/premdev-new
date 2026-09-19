@@ -6,6 +6,10 @@ import { notifyAdmin, telegramConfigured } from "./telegram.js";
 const POLL_INTERVAL_MS = 60_000;
 
 let docker: Docker | null = null;
+let monitorTimer: ReturnType<typeof setInterval> | null = null;
+let checkInFlight = false;
+let lastCheckAt: number | null = null;
+let lastError: string | null = null;
 
 function getDocker(): Docker {
   if (!docker) {
@@ -52,8 +56,34 @@ async function checkRunningWorkspaces() {
 
 export function startCrashMonitor() {
   if (!telegramConfigured()) return;
+  if (monitorTimer) return;
 
-  setInterval(() => {
-    checkRunningWorkspaces().catch(() => {});
+  monitorTimer = setInterval(() => {
+    if (checkInFlight) return;
+    checkInFlight = true;
+    lastCheckAt = Date.now();
+    checkRunningWorkspaces()
+      .then(() => {
+        lastError = null;
+      })
+      .catch((error: unknown) => {
+        lastError = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        checkInFlight = false;
+      });
   }, POLL_INTERVAL_MS);
+}
+
+export function getLifecycleState() {
+  return {
+    crashMonitor: {
+      enabled: telegramConfigured(),
+      running: monitorTimer !== null,
+      pollIntervalMs: POLL_INTERVAL_MS,
+      checkInFlight,
+      lastCheckAt,
+      lastError,
+    },
+  };
 }
