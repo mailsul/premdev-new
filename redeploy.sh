@@ -103,6 +103,74 @@ select_compose_file() {
   return 1
 }
 
+load_deployment_env() {
+  [[ -f "$APP_DIR/.env" ]] ||
+    fail "File deployment .env tidak ditemukan: $APP_DIR/.env"
+
+  set -a
+  # shellcheck disable=SC1091
+  . "$APP_DIR/.env"
+  set +a
+}
+
+validate_deployment_env() {
+  local missing=()
+  local key
+  for key in PRIMARY_DOMAIN LE_EMAIL CF_API_TOKEN ADMIN_PASSWORD MYSQL_ROOT_PASSWORD; do
+    if [[ -z "${!key:-}" ]]; then
+      missing+=("$key")
+    fi
+  done
+
+  if (( ${#missing[@]} > 0 )); then
+    fail "Variabel wajib tidak ada/kosong di $APP_DIR/.env: ${missing[*]}. Isi .env lalu jalankan ulang."
+  fi
+}
+
+prepare_compose_assets() {
+  local compose_file="$1"
+
+  [[ -f "$APP_DIR/.env" ]] ||
+    fail "File .env tidak ditemukan. Compose production membutuhkan konfigurasi VPS."
+
+  if [[ "$compose_file" != "$APP_DIR/infra/docker-compose.prod.yml" ]]; then
+    return 0
+  fi
+
+  local template="$APP_DIR/infra/Caddyfile.tmpl"
+  local caddy_data_dir="${CADDY_DATA_DIR:-/opt/premdev/data/caddy}"
+  local landing_dir="${LANDING_DATA_DIR:-/opt/premdev/data/landing}"
+
+  [[ -f "$template" ]] ||
+    fail "Template Caddy tidak ditemukan: $template"
+  command -v envsubst >/dev/null 2>&1 ||
+    fail "envsubst tidak ditemukan. Install package gettext-base di VPS."
+
+  load_deployment_env
+  validate_deployment_env
+
+  # These values are optional in the deployment, but the template still needs
+  # a syntactically valid upstream block when Gitea is not installed.
+  : "${GITEA_SUBDOMAIN:=gitea}"
+  : "${GITEA_CONTAINER_HOST:=gitea}"
+  : "${GITEA_PORT:=3000}"
+  export GITEA_SUBDOMAIN GITEA_CONTAINER_HOST GITEA_PORT
+
+  mkdir -p "$caddy_data_dir/extra" "$landing_dir"
+  if [[ -d "$caddy_data_dir/Caddyfile" && ! -L "$caddy_data_dir/Caddyfile" ]]; then
+    if [[ -n "$(find "$caddy_data_dir/Caddyfile" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+      fail "Path Caddyfile adalah direktori berisi data, bukan file: $caddy_data_dir/Caddyfile"
+    fi
+    rmdir "$caddy_data_dir/Caddyfile"
+  fi
+  envsubst < "$template" > "$caddy_data_dir/Caddyfile"
+  chmod 600 "$caddy_data_dir/Caddyfile"
+  if [[ ! -f "$landing_dir/index.html" && -f "$APP_DIR/infra/landing/index.html" ]]; then
+    cp "$APP_DIR/infra/landing/index.html" "$landing_dir/index.html"
+  fi
+  printf '[INFO] Generated Caddyfile: %s\n' "$caddy_data_dir/Caddyfile"
+}
+
 restart_application() {
   STEP="restart application"
   local compose_file
@@ -140,8 +208,9 @@ restart_application() {
      command -v docker >/dev/null 2>&1 &&
      docker compose version >/dev/null 2>&1 &&
      compose_file="$(select_compose_file)"; then
+    prepare_compose_assets "$compose_file"
     printf '[INFO] Rebuild/restart Docker Compose deployment: %s\n' "$compose_file"
-    docker compose -f "$compose_file" up -d --build
+    docker compose --env-file "$APP_DIR/.env" -f "$compose_file" up -d --build
     return 0
   fi
 
