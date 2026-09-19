@@ -43,6 +43,7 @@ export const GEMINI_FREE_TIER = [
 ] as const;
 
 export const PROVIDER_MODELS: Record<Provider, string[]> = {
+  "9router": ["auto"],   // populated at runtime from /v1/models
   openai: ["auto", "gpt-4o", "gpt-4o-mini", "gpt-4.1-mini"],
   anthropic: ["auto", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
   google: [
@@ -119,6 +120,7 @@ export const PROVIDER_MODELS: Record<Provider, string[]> = {
  * live model list per-key), so its tier here is unused by the dispatcher.
  */
 export const AUTO_TIERS: Record<Provider, string[]> = {
+  "9router": [],  // auto-tier populated at runtime from fetchNineRouterModels
   openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini"],
   anthropic: ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
   google: [...GEMINI_FREE_TIER],
@@ -384,7 +386,7 @@ export async function fetchGoogleModels(): Promise<string[]> {
   return list;
 }
 
-
+let cachedNineRouterModels: { at: number; list: string[] } | null = null;
 let cachedOpenRouterModels: { at: number; list: string[] } | null = null;
 export async function fetchOpenRouterModels(): Promise<string[]> {
   if (cachedOpenRouterModels && Date.now() - cachedOpenRouterModels.at < 10 * 60 * 1000) {
@@ -505,13 +507,11 @@ export async function* streamCustomProvider(
     yield `(API key untuk "${prov.name}" belum diset — buka Admin → Custom Providers untuk isi)`;
     return;
   }
-  const baseUrl = prov.base_url.replace(/\/$/, "");
-  const url = baseUrl.endsWith("/v1")
-    ? `${baseUrl}/chat/completions`
-    : `${baseUrl}/v1/chat/completions`;
-  const resolvedModel = model === "auto"
-    ? (prov.default_model || (prov.models[0] ?? "gpt-4o-mini"))
-    : model;
+      const baseUrl = config.NINE_ROUTER_BASE_URL;
+      const url = baseUrl.replace(/\/v1\/?$/, "") + "/v1/chat/completions";
+      let resolvedModel = model;
+
+        const live = await fetchNineRouterModels().catch(() => []);
 
   // Proactive RPM throttle — wait if needed before sending the request.
   if (prov.rpm > 0) {
@@ -574,8 +574,6 @@ export async function* streamProvider(
   // Handle custom providers (format: "custom:{id}")
   if (provider.startsWith("custom:")) {
     const customId = provider.slice(7);
-
-      const nineRouterUrl = `${config.NINEROUTER_URL.replace(/\/$/, "")}/v1/chat/completions`;
     yield* streamCustomProvider(customId, model, messages, maxTokens, signal);
     return;
   }
@@ -1291,4 +1289,39 @@ function parseDataUrlLocal(
   return { mimeType: m[1], data: m[2] };
 }
 
-      const nineRouterKeys = config.NINEROUTER_API_KEY ? [config.NINEROUTER_API_KEY] : ["no-key"];
+
+/**
+ * Fetch the live model list from a 9Router instance.
+ * Returns only models whose provider is actually connected in 9Router
+ * (i.e. the endpoint returns them in GET /v1/models).
+ * Result is cached for 2 minutes so repeated /providers calls are cheap.
+ */
+export async function fetchNineRouterModels(): Promise<string[]> {
+  const baseUrl = config.NINE_ROUTER_BASE_URL;
+  const apiKey  = config.NINE_ROUTER_API_KEY;
+  if (!baseUrl) return [];
+  if (cachedNineRouterModels && Date.now() - cachedNineRouterModels.at < 2 * 60 * 1000) {
+    return cachedNineRouterModels.list;
+  }
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const url = baseUrl.replace(/\/v1\/?$/, "") + "/v1/models";
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+    const res = await fetch(url, { headers, signal: ctrl.signal });
+    if (!res.ok) return cachedNineRouterModels?.list ?? [];
+    const j = (await res.json().catch(() => null)) as any;
+    const arr = Array.isArray(j?.data) ? j.data : [];
+    const list: string[] = arr
+      .map((m: any) => String(m?.id ?? m?.name ?? "").trim())
+      .filter((s: string) => s.length > 0)
+      .sort((a: string, b: string) => a.localeCompare(b));
+    cachedNineRouterModels = { at: Date.now(), list };
+    return list;
+  } catch {
+    return cachedNineRouterModels?.list ?? [];
+  } finally {
+    clearTimeout(t);
+  }
+}

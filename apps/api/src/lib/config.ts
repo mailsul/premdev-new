@@ -116,6 +116,14 @@ export const config = {
   // Requires docker-compose.yml volume: - /:/vpsroot:rw on the `app` service.
   // Admin-only. Leave as default; override only if you mount at a different path.
   VFS_ROOT: env("VFS_ROOT", "/vpsroot"),
+
+  // 9Router — self-hosted OpenAI-compatible AI gateway (https://9router.com).
+  // Set NINE_ROUTER_BASE_URL to the internal Docker network address
+  // (e.g. http://9router:20128/v1 when running in the same Compose stack).
+  // NINE_ROUTER_API_KEY is the API key generated from the 9Router dashboard.
+  // When these are set, 9Router becomes the sole AI backend for all workspaces.
+  NINE_ROUTER_BASE_URL: env("NINE_ROUTER_BASE_URL", ""),
+  NINE_ROUTER_API_KEY: env("NINE_ROUTER_API_KEY", ""),
 };
 
 export const IS_DEV = config.NODE_ENV === "development";

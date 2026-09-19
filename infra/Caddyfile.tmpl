@@ -116,6 +116,21 @@ import /etc/caddy/extra/*.caddy
                 reverse_proxy ${GITEA_CONTAINER_HOST}:${GITEA_PORT}
         }
 
+        # 9Router AI gateway dashboard — admin-only.
+        # Login uses 9Router's own INITIAL_PASSWORD (separate from PremDev accounts).
+        # External tools (VS Code, Cursor) can use router.<domain>/v1 as base URL.
+        @nine-router host router.${PRIMARY_DOMAIN}
+        handle @nine-router {
+                reverse_proxy 9router:20128 {
+                        transport http {
+                                dial_timeout 10s
+                                read_timeout 24h
+                                write_timeout 24h
+                        }
+                        flush_interval -1
+                }
+        }
+
         @workspace header_regexp workspace Host ^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?\.${PRIMARY_DOMAIN}$
         handle @workspace {
                 reverse_proxy app:3001 {

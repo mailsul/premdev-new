@@ -67,7 +67,7 @@ function envFallback(provider: Provider): string {
     case "groq": return config.GROQ_API_KEY;
     case "konektika": return config.KONEKTIKA_API_KEY;
     case "snifox": return config.SNIFOX_API_KEY;
-    case "9router": return config.NINEROUTER_API_KEY;
+    case "9router": return config.NINE_ROUTER_API_KEY;
   }
 }
 

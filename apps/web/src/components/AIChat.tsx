@@ -236,7 +236,7 @@ async function saveAttachment(
 }
 
 type Provider = {
-  id: string; // "openai" | "anthropic" | ... | "custom:{id}"
+  id: string; // "openai" | "anthropic" | ... | "custom:{id}" | "9router"
   name?: string; // display name, used for custom providers
   configured: boolean;
   models: string[];
@@ -249,6 +249,9 @@ type Provider = {
   modelCapabilities?: Record<string, number>;
   defaultModel: string;
   isCustom?: boolean;
+  // When true, this provider is the sole AI gateway for all workspaces.
+  // Other built-in providers are hidden from the workspace dropdown.
+  isPrimary?: boolean;
   docsUrl?: string;
 };
 
@@ -260,6 +263,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   groq: "Groq",
   konektika: "Konektika (kimi-pro)",
   snifox: "SnifoxAI",
+  "9router": "9Router",
 };
 
 function getProviderLabel(id: string, name?: string): string {
@@ -2939,8 +2943,12 @@ export function AIChat({
             onChange={(e) => changeProvider(e.target.value)}
           >
             {(() => {
-              const builtIn = providers?.providers.filter((p) => !p.isCustom) ?? [];
-              const custom = providers?.providers.filter((p) => p.isCustom) ?? [];
+              const allProviders = providers?.providers ?? [];
+              // When 9Router is configured as the primary gateway, hide other
+              // built-in providers — 9Router already aggregates them internally.
+              const hasPrimary = allProviders.some((p) => p.isPrimary && p.configured);
+              const builtIn = allProviders.filter((p) => !p.isCustom && (!hasPrimary || p.isPrimary));
+              const custom = allProviders.filter((p) => p.isCustom);
               return (
                 <>
                   {builtIn.map((p) => (
@@ -3479,8 +3487,13 @@ export function AIChat({
             // rateLimitWaiting keeps the Stop button visible during the 65s
             // quota-reset pause so the user can cancel at any time.
             <div className="flex gap-1">
-              <button className="btn-danger" onClick={stop} title="Stop AI">
-                <Square size={14} />
+              <button
+                className="btn-danger flex items-center gap-1 px-2 py-1 text-xs font-semibold"
+                onClick={stop}
+                title="Hentikan AI (Stop)"
+              >
+                <Square size={12} />
+                <span>Stop AI</span>
               </button>
               {!rateLimitWaiting && (
                 <button

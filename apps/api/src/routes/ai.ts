@@ -49,6 +49,7 @@ import {
   fetchGoogleModels,
   fetchSnifoxModels,
   fetchOpenRouterModels,
+  fetchNineRouterModels,
 } from "../lib/ai-providers.js";
 
 // ---------------------------------------------------------------------------
@@ -400,22 +401,31 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
   app.get("/providers", async (req, reply) => {
     const u = await requireUser(req, reply);
     if (!u) return;
-    const [googleLive, snifoxLive, openrouterLive] = await Promise.all([
+    const [googleLive, snifoxLive, openrouterLive, nineRouterLive] = await Promise.all([
       fetchGoogleModels().catch(() => null),
       fetchSnifoxModels().catch(() => null),
       fetchOpenRouterModels().catch(() => null),
+      fetchNineRouterModels().catch(() => null),
     ]);
+
+    // If 9Router is configured, surface it first — workspaces use it as the
+    // sole AI backend; other built-in providers are still listed but secondary.
+    const nineRouterConfigured = !!(config.NINE_ROUTER_BASE_URL && config.NINE_ROUTER_API_KEY);
+    const nineRouterModels: string[] = nineRouterLive && nineRouterLive.length > 0
+      ? ["auto", ...nineRouterLive]
+      : ["auto"];
+
     const builtIn = (
-      ["openai", "anthropic", "google", "openrouter", "groq", "konektika", "snifox"] as Provider[]
+      ["9router", "openai", "anthropic", "google", "openrouter", "groq", "konektika", "snifox"] as Provider[]
     ).map((id) => {
       let models = PROVIDER_MODELS[id];
-      if (id === "google" && googleLive && googleLive.length > 0) {
+      if (id === "9router") {
+        models = nineRouterModels;
+      } else if (id === "google" && googleLive && googleLive.length > 0) {
         models = ["auto", ...googleLive];
-      }
-      if (id === "snifox" && snifoxLive && snifoxLive.length > 0) {
+      } else if (id === "snifox" && snifoxLive && snifoxLive.length > 0) {
         models = ["auto", ...snifoxLive];
-      }
-      if (id === "openrouter" && openrouterLive && openrouterLive.length > 0) {
+      } else if (id === "openrouter" && openrouterLive && openrouterLive.length > 0) {
         models = ["auto", ...openrouterLive];
       }
       const capabilities: Record<string, number> = {};
@@ -423,15 +433,18 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
         const score = getModelCapability(m);
         if (score !== null) capabilities[m] = score;
       }
+      const configured = id === "9router" ? nineRouterConfigured : !!getAIKey(id);
       return {
         id,
         name: id,
-        configured: !!getAIKey(id),
+        configured,
         models,
         textOnlyModels: models.filter(isTextOnlyModel),
         modelCapabilities: capabilities,
-        defaultModel: DEFAULT_MODELS[id],
+        defaultModel: DEFAULT_MODELS[id] ?? "auto",
         isCustom: false,
+        // Flag so UI can know 9Router is the primary gateway and hide other built-ins
+        isPrimary: id === "9router" && nineRouterConfigured,
       };
     });
     // Add custom providers from DB
@@ -446,6 +459,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
         modelCapabilities: {} as Record<string, number>,
         defaultModel: "auto",
         isCustom: true,
+        isPrimary: false,
         docsUrl: p.docs_url,
         baseUrl: p.base_url,
       }));
