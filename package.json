@@ -10,6 +10,10 @@
     "build": "npm run build:api && npm run build:web",
     "build:api": "cd apps/api && npm run build",
     "build:web": "cd apps/web && npm run build",
+    "typecheck": "npm run typecheck:api && npm run typecheck:web",
+    "typecheck:api": "cd apps/api && npx tsc --noEmit -p tsconfig.json",
+    "typecheck:web": "cd apps/web && npx tsc --noEmit -p tsconfig.json",
+    "check": "npm run typecheck && git diff --check",
     "start": "cd apps/api && npm start",
     "install:all": "npm install && cd apps/api && npm install && cd ../web && npm install"
   },

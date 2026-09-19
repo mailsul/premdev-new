@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="id" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23293548'/%3E%3Ctext x='8' y='12' text-anchor='middle' font-size='10' fill='white'%3EP%3C/text%3E%3C/svg%3E" />
+  <title>PremDev Workspace — Three panel editor</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1d2636;
+      --muted: #697386;
+      --soft: #8c96a6;
+      --line: #e3e8ef;
+      --line-strong: #cbd5e1;
+      --canvas: #f5f7fa;
+      --surface: #fff;
+      --surface-raised: #fbfcfe;
+      --surface-hover: #f0f4f8;
+      --editor: #fbfcfe;
+      --blue: #2575e6;
+      --blue-weak: #eaf2ff;
+      --purple: #7455ca;
+      --green: #16835d;
+      --green-weak: #e7f7ef;
+      --amber: #a9690d;
+      --amber-weak: #fff3d8;
+      --red: #cc4a51;
+      --shadow: 0 10px 28px rgba(27, 43, 70, .1);
+      --ai-w: 286px;
+      --files-w: 214px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --ink: #e4eaf3;
+      --muted: #9ba8bb;
+      --soft: #748197;
+      --line: #2b3545;
+      --line-strong: #45536a;
+      --canvas: #131a24;
+      --surface: #192230;
+      --surface-raised: #1d2938;
+      --surface-hover: #263448;
+      --editor: #151e2b;
+      --blue: #71a7ff;
+      --blue-weak: #203a63;
+      --purple: #ad92ff;
+      --green: #5ad0a1;
+      --green-weak: #173d34;
+      --amber: #e6ad55;
+      --amber-weak: #483618;
+      --red: #ff858d;
+      --shadow: 0 10px 28px rgba(0, 0, 0, .24);
+    }
+    [data-theme="dark"] .brand-mark { border: 1px solid #43526b; background: #111a28; }
+    [data-theme="dark"] .terminal { border: 1px solid #30463c; background: #101a17; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      min-width: 760px;
+      overflow: hidden;
+      color: var(--ink);
+      background: var(--canvas);
+      font-size: 12px;
+      transition: background .2s ease, color .2s ease;
+    }
+    button, input, textarea { font: inherit; }
+    button { color: inherit; border: 0; cursor: pointer; }
+    svg { display: block; flex: 0 0 auto; }
+    .app { display: grid; grid-template-rows: 54px minmax(0, 1fr) 27px; height: 100vh; }
+
+    /* The compact header intentionally contains only runtime actions. */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      padding: 0 15px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 195px;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -.04em;
+    }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      color: #fff;
+      background: #293548;
+      font-size: 11px;
+    }
+    .project-name { color: var(--muted); font-weight: 550; letter-spacing: 0; }
+    .runtime-actions { display: flex; align-items: center; gap: 5px; }
+    .action {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: var(--muted);
+      background: var(--surface-raised);
+      transition: .16s ease;
+    }
+    .action:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface-hover); }
+    .action.primary { color: #fff; border-color: var(--blue); background: var(--blue); }
+    .action.primary:hover { filter: brightness(1.07); }
+    .action:disabled { cursor: wait; opacity: .55; }
+    .header-spacer { flex: 1; }
+    .header-status { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 25px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--surface-raised);
+      font-size: 11px;
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+    .status-pill.running { color: var(--green); border-color: color-mix(in srgb, var(--green) 35%, var(--line)); background: var(--green-weak); }
+    .status-pill.running .status-dot { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent); }
+    .status-pill.error { color: var(--red); }
+    .icon-button {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 29px;
+      height: 29px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+    }
+    .icon-button:hover { color: var(--ink); background: var(--surface-hover); border-color: var(--line); }
+    .icon-button[aria-label]:hover::after {
+      position: absolute;
+      z-index: 10;
+      top: calc(100% + 7px);
+      right: 0;
+      width: max-content;
+      max-width: 190px;
+      padding: 5px 7px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      content: attr(aria-label);
+      font-size: 10px;
+      font-weight: 500;
+      pointer-events: none;
+    }
+
+    /* Three workspace columns: AI, editor, and a deliberately narrow file panel. */
+    .workspace {
+      display: grid;
+      grid-template-columns: var(--ai-w) 6px minmax(0, 1fr) 6px var(--files-w);
+      min-height: 0;
+      min-width: 0;
+      background: var(--canvas);
+    }
+    .panel { min-width: 0; min-height: 0; background: var(--surface); }
+    .ai-panel { display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--line); }
+    .editor-panel { position: relative; display: grid; grid-template-rows: 43px 36px minmax(0, 1fr); min-width: 0; background: var(--editor); }
+    .files-panel { display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--line); }
+    .resizer {
+      position: relative;
+      z-index: 3;
+      cursor: col-resize;
+      background: var(--surface);
+    }
+    .resizer::after {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 2px;
+      width: 1px;
+      background: transparent;
+      content: "";
+    }
+    .resizer:hover::after, .resizer.dragging::after { background: var(--blue); box-shadow: 0 0 0 2px var(--blue-weak); }
+    .resizer:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .ai-hidden .ai-panel, .files-hidden .files-panel { visibility: hidden; pointer-events: none; }
+    .ai-hidden { grid-template-columns: 0 0 minmax(0, 1fr) 6px var(--files-w); }
+    .files-hidden { grid-template-columns: var(--ai-w) 6px minmax(0, 1fr) 0 0; }
+    .ai-hidden .ai-resizer, .files-hidden .files-resizer { display: none; }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 43px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .panel-title { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+    .panel-title svg { color: var(--purple); }
+    .panel-subtitle { margin: 4px 0 0 22px; color: var(--soft); font-size: 10px; }
+    .panel-head-actions { display: flex; gap: 2px; }
+    .panel-body { min-height: 0; overflow: auto; }
+
+    /* AI panel */
+    .ai-body { display: flex; flex-direction: column; gap: 15px; padding: 16px 13px; }
+    .ai-intro { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
+    .ai-intro h2 { margin: 0 0 5px; font-size: 13px; }
+    .ai-intro p { margin: 0; color: var(--muted); line-height: 1.5; }
+    code { padding: 1px 4px; border-radius: 3px; color: var(--purple); background: var(--blue-weak); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+    .quick-label { color: var(--soft); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .quick-actions { display: grid; gap: 5px; }
+    .quick-action {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      color: var(--muted);
+      background: transparent;
+      text-align: left;
+    }
+    .quick-action:hover { color: var(--ink); border-color: var(--line); background: var(--surface-hover); }
+    .quick-action strong { display: block; margin-bottom: 2px; color: var(--ink); font-size: 11px; }
+    .quick-action span span { font-size: 10px; }
+    .quick-icon { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 6px; color: var(--blue); background: var(--blue-weak); }
+    .quick-icon.amber { color: var(--amber); background: var(--amber-weak); }
+    .quick-icon.green { color: var(--green); background: var(--green-weak); }
+    .ai-note { display: flex; gap: 7px; padding: 9px; border-radius: 6px; color: var(--muted); background: var(--surface-hover); font-size: 10px; line-height: 1.45; }
+    .ai-note svg { color: var(--blue); }
+    .ai-composer { margin-top: auto; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
+    .ai-composer textarea { width: 100%; height: 44px; padding: 0; resize: none; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 11px; }
+    .composer-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 7px; color: var(--soft); font-size: 10px; }
+    .send-button { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 6px; color: #fff; background: var(--blue); }
+
+    /* Editor */
+    .editor-head { display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+    .breadcrumbs { display: flex; align-items: center; gap: 7px; color: var(--soft); }
+    .breadcrumbs strong { color: var(--ink); font-weight: 650; }
+    .editor-tools { display: flex; align-items: center; gap: 5px; }
+    .preview-link { display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; color: var(--muted); font-size: 10px; }
+    .preview-link .status-dot { width: 6px; height: 6px; background: var(--soft); }
+    .preview-link.available { color: var(--green); }
+    .preview-link.available .status-dot { background: var(--green); }
+    .tab-strip { display: flex; align-items: stretch; gap: 2px; min-width: 0; overflow-x: auto; padding: 0 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
+    .workspace-tab { position: relative; display: inline-flex; align-items: center; gap: 7px; min-width: max-content; height: 36px; padding: 0 10px; border-right: 1px solid transparent; color: var(--muted); background: transparent; }
+    .workspace-tab:hover { color: var(--ink); background: var(--surface-hover); }
+    .workspace-tab.active { color: var(--ink); background: var(--editor); box-shadow: inset 0 -2px var(--blue); }
+    .workspace-tab .tab-icon { color: var(--blue); font-size: 10px; font-weight: 800; }
+    .workspace-tab .tab-close { display: grid; place-items: center; width: 16px; height: 16px; margin-left: 2px; border-radius: 4px; color: var(--soft); background: transparent; }
+    .workspace-tab .tab-close:hover { color: var(--ink); background: var(--line); }
+    .new-tab-trigger { display: inline-flex; align-items: center; gap: 5px; min-width: max-content; height: 36px; padding: 0 10px; color: var(--muted); background: transparent; }
+    .new-tab-trigger:hover { color: var(--ink); background: var(--surface-hover); }
+    .tab-stage { min-width: 0; min-height: 0; overflow: hidden; background: var(--editor); }
+    .tab-view { display: none; width: 100%; height: 100%; min-height: 0; }
+    .tab-view.active { display: block; }
+    .code-wrap { overflow: auto; padding: 16px 0 25px; background: var(--editor); }
+    .code { min-width: 650px; margin: 0; color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.85; }
+    .code-line { display: grid; grid-template-columns: 45px minmax(0, 1fr); min-height: 22px; padding-right: 22px; }
+    .code-line:hover { background: var(--surface-hover); }
+    .line-number { padding-right: 13px; color: var(--soft); text-align: right; user-select: none; }
+    .code-content { white-space: pre; }
+    .syntax-key { color: var(--blue); }
+    .syntax-string { color: var(--green); }
+    .syntax-value { color: var(--purple); }
+    .syntax-comment { color: var(--soft); }
+    .changed { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: var(--amber); vertical-align: middle; }
+    .tools-view { overflow: auto; padding: 24px clamp(16px, 7vw, 84px); background: var(--canvas); }
+    .tools-inner { max-width: 650px; margin: 0 auto; }
+    .tools-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 17px; }
+    .tools-heading h1 { margin: 0; font-size: 17px; }
+    .tools-heading p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+    .tools-heading-icon { display: grid; place-items: center; width: 31px; height: 31px; border: 1px solid var(--line); border-radius: 8px; color: var(--blue); background: var(--surface); }
+    .tools-search { width: 100%; height: 34px; margin-bottom: 13px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; outline: 0; color: var(--ink); background: var(--surface); }
+    .tools-search:focus { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-weak); }
+    .tool-list { display: grid; gap: 3px; }
+    .tool-row { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 49px; padding: 6px 9px; border: 1px solid transparent; border-radius: 7px; color: var(--muted); background: transparent; text-align: left; }
+    .tool-row:hover { color: var(--ink); border-color: var(--line); background: var(--surface); }
+    .tool-row strong { display: block; margin-bottom: 3px; color: var(--ink); font-weight: 650; }
+    .tool-row small { display: block; color: var(--muted); font-size: 10px; }
+    .tool-row > svg:last-child { margin-left: auto; color: var(--soft); }
+    .tool-icon { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--line); border-radius: 7px; color: var(--blue); background: var(--surface-raised); }
+    .tool-new { padding: 2px 6px; border-radius: 8px; color: var(--blue); background: var(--blue-weak); font-size: 9px; }
+    .tool-screen { height: 100%; overflow: auto; padding: 22px; background: var(--editor); }
+    .tool-screen-inner { max-width: 760px; margin: 0 auto; }
+    .tool-screen-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 17px; }
+    .tool-screen h1 { margin: 0; font-size: 16px; }
+    .tool-screen p { margin: 5px 0 0; color: var(--muted); }
+    .tool-card { padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    .terminal { min-height: 300px; padding: 15px; border-radius: 8px; color: #cfe9dc; background: #18241f; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.8; }
+    .terminal .prompt { color: #70d6a1; }
+    .tab-empty { display: grid; place-items: center; height: 100%; padding: 30px; color: var(--muted); text-align: center; }
+    .tab-empty-card { max-width: 370px; padding: 25px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface); }
+    .tab-empty-card h2 { margin: 0 0 7px; color: var(--ink); font-size: 15px; }
+    .tab-empty-card p { margin: 0 0 15px; line-height: 1.5; }
+    .dock-row { display: flex; gap: 10px; margin-bottom: 8px; }
+    .dock-row { display: flex; gap: 10px; margin-bottom: 8px; }
+    .dock-command { color: var(--green); }
+    .dock-link { color: var(--blue); cursor: pointer; }
+    .dock-log { margin: 4px 0; color: var(--muted); }
+    .dock-log strong { color: var(--ink); font-weight: 600; }
+    .new-tab-menu { position: absolute; z-index: 12; top: 86px; right: 13px; display: none; width: 350px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow); }
+    .new-tab-menu.open { display: block; }
+    .new-tab-menu h3 { margin: 0 0 3px; font-size: 13px; }
+    .new-tab-menu p { margin: 0 0 10px; color: var(--muted); font-size: 10px; }
+    .new-tab-options { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; max-height: 330px; overflow: auto; }
+    .new-tab-option { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px; border-radius: 6px; color: var(--muted); background: transparent; text-align: left; }
+    .new-tab-option:hover { color: var(--ink); background: var(--surface-hover); }
+    .new-tab-option strong { display: block; color: var(--ink); font-size: 10px; }
+    .new-tab-option small { display: block; margin-top: 2px; color: var(--soft); font-size: 9px; }
+    .option-icon { display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--line); border-radius: 5px; color: var(--blue); background: var(--surface-raised); font-size: 9px; font-weight: 800; }
+
+    /* Narrow file explorer */
+    .file-search { margin: 9px 10px 7px; }
+    .file-search input { width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; outline: 0; color: var(--ink); background: var(--surface-raised); font-size: 11px; }
+    .file-search input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-weak); }
+    .files { min-height: 0; overflow: auto; padding: 2px 7px 12px; }
+    .file-section { padding: 8px 6px 6px; color: var(--soft); font-size: 9px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+    .file-row { display: flex; align-items: center; gap: 6px; min-height: 29px; padding: 0 7px; border-radius: 5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+    .file-row:hover { color: var(--ink); background: var(--surface-hover); }
+    .file-row.selected { color: var(--blue); background: var(--blue-weak); }
+    .file-row.folder { color: var(--ink); }
+    .file-row .file-name { overflow: hidden; text-overflow: ellipsis; }
+    .indent { width: 9px; }
+    .file-type { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 17px; border-radius: 3px; color: var(--blue); background: var(--blue-weak); font-size: 8px; font-weight: 800; }
+    .file-type.md { color: var(--green); background: var(--green-weak); }
+    .file-type.cfg { color: var(--amber); background: var(--amber-weak); }
+    .file-type.dir { color: var(--purple); background: transparent; }
+    .file-state { margin-left: auto; color: var(--amber); font-size: 10px; }
+    .selected-info { margin: auto 10px 10px; padding: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .selected-info strong { display: block; margin: 3px 0; color: var(--ink); font-size: 11px; }
+    .selected-label { color: var(--soft); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+
+    .statusbar { display: flex; align-items: center; gap: 14px; padding: 0 12px; border-top: 1px solid var(--line); color: var(--muted); background: var(--surface); font-size: 10px; }
+    .statusbar .right { display: flex; gap: 14px; margin-left: auto; }
+    .toast { position: fixed; right: 16px; bottom: 40px; z-index: 20; max-width: 310px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: var(--surface); box-shadow: var(--shadow); opacity: 0; transform: translateY(7px); pointer-events: none; transition: .2s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .modal-backdrop { position: fixed; inset: 0; z-index: 30; display: none; place-items: center; background: rgba(14, 23, 38, .42); }
+    .modal-backdrop.open { display: grid; }
+    .modal { width: min(410px, calc(100vw - 28px)); padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); }
+    .modal-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 15px; }
+    .modal h2 { margin: 0 0 4px; font-size: 15px; }
+    .modal p { margin: 0; color: var(--muted); font-size: 11px; }
+    .form-grid { display: grid; gap: 11px; }
+    .form-field label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 650; }
+    .form-field input, .form-field select { width: 100%; height: 31px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; outline: 0; color: var(--ink); background: var(--surface-raised); }
+    .form-field input:focus, .form-field select:focus { border-color: var(--blue); }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 17px; }
+    .modal-actions .action { height: 31px; }
+
+    @media (max-width: 1080px) {
+      :root { --ai-w: 255px; --files-w: 190px; }
+      .brand { min-width: 158px; }
+      .header-status { display: none; }
+    }
+    @media (max-width: 850px) {
+      body { min-width: 640px; }
+      .brand { min-width: auto; }
+      .project-name { display: none; }
+      .action span { display: none; }
+      .action { width: 30px; justify-content: center; padding: 0; }
+      .workspace { grid-template-columns: 0 0 minmax(0, 1fr) 6px var(--files-w); }
+      .ai-panel, .ai-resizer { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">P</span><span>PremDev</span><span class="project-name">/ premdev-console</span></div>
+      <div class="runtime-actions">
+        <button class="action primary" id="startButton" data-runtime="start" title="Start workspace">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 5 11 7-11 7V5Z"/></svg><span>Start</span>
+        </button>
+        <button class="action" id="stopButton" data-runtime="stop" title="Stop workspace">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg><span>Stop</span>
+        </button>
+        <button class="action" id="restartButton" data-runtime="restart" title="Restart workspace">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M20 11a8 8 0 0 0-14.8-4L4 9"/><path d="M4 4v5h5M4 13a8 8 0 0 0 14.8 4L20 15"/><path d="M20 20v-5h-5"/></svg><span>Restart</span>
+        </button>
+        <button class="action" id="saveButton" data-runtime="save" title="Save file">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4h12l2 2v14H5z"/><path d="M8 4v6h8V4M8 20v-6h8v6"/></svg><span>Save</span>
+        </button>
+      </div>
+      <div class="header-spacer"></div>
+      <div class="header-status"><span class="status-pill" id="statusPill"><span class="status-dot"></span><span id="statusText">stopped</span></span></div>
+      <button class="icon-button" id="toggleAi" aria-label="Toggle AI panel" aria-pressed="true">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3a7 7 0 0 1 7 7v4.5a3.5 3.5 0 0 1-3.5 3.5H9a3.5 3.5 0 0 1-3.5-3.5V10a7 7 0 0 1 7-7Z"/><path d="M8 11h.01M16 11h.01M9 15c2 1.5 4 1.5 6 0"/></svg>
+      </button>
+      <button class="icon-button" id="toggleFiles" aria-label="Toggle Right Sidebar" aria-pressed="true">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M16 4v16M8 9h4M8 12h4M8 15h4"/></svg>
+      </button>
+      <button class="icon-button" id="themeButton" aria-label="Switch to dark mode" aria-pressed="false">
+        <svg id="themeIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 15.3A8.5 8.5 0 0 1 8.7 4 8.5 8.5 0 1 0 20 15.3Z"/></svg>
+      </button>
+    </header>
+
+    <div class="workspace" id="workspace">
+      <aside class="panel ai-panel" id="aiPanel">
+        <div class="panel-head">
+          <div><div class="panel-title"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 9.8 8.2 4 10l5.8 1.8L12 17l2.2-5.2L20 10l-5.8-1.8L12 3ZM19 16l-.9 2.1L16 19l2.1.9L19 22l.9-2.1L22 19l-2.1-.9L19 16Z"/></svg> AI Assistant</div><div class="panel-subtitle">Workspace-aware help</div></div>
+          <div class="panel-head-actions"><button class="icon-button" id="closeAi" aria-label="Hide AI panel"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+        </div>
+        <div class="panel-body ai-body">
+          <div class="ai-intro"><h2>PremDev AI</h2><p>Pahami file, <code>.premdev</code>, runtime container, dan tools workspace ini.</p></div>
+          <div class="quick-label">Suggested actions</div>
+          <div class="quick-actions">
+            <button class="quick-action" data-prompt="Jelaskan konfigurasi .premdev workspace ini"><span class="quick-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M12 11v5M12 8h.01"/></svg></span><span><strong>Explain workspace</strong><span>Entrypoint, port, dan file penting</span></span></button>
+            <button class="quick-action" data-prompt="Jalankan diagnostics untuk runtime workspace"><span class="quick-icon green"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m4 12 3 3 5-7 3 4 5-6"/></svg></span><span><strong>Diagnose runtime</strong><span>Log, health check, dan resource</span></span></button>
+            <button class="quick-action" data-prompt="Buat cron job untuk command workspace ini"><span class="quick-icon amber"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 1.8"/></svg></span><span><strong>Manage Cron Jobs</strong><span>Jadwalkan command tanpa terminal browser</span></span></button>
+          </div>
+          <div class="ai-note"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 5 6v5c0 4.8 2.9 8.2 7 10 4.1-1.8 7-5.2 7-10V6l-7-3Z"/><path d="M12 8v4M12 15h.01"/></svg><span>Command selalu diarahkan ke container workspace, bukan host VPS.</span></div>
+          <div class="ai-composer"><textarea id="aiInput" placeholder="Ask AI about this workspace..."></textarea><div class="composer-foot"><span>⌘ Enter to send</span><button class="send-button" id="sendAi" aria-label="Send to AI"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 4 16 8-16 8 3-8-3-8Z"/><path d="M7 12h13"/></svg></button></div></div>
+        </div>
+      </aside>
+      <div class="resizer ai-resizer" id="aiResizer" role="separator" tabindex="0" aria-label="Resize AI panel" aria-valuemin="220" aria-valuemax="500" aria-valuenow="286"></div>
+
+      <main class="editor-panel">
+        <div class="editor-head">
+          <div class="breadcrumbs"><span style="color:var(--purple)">●</span><span>premdev-console</span><span>/</span><strong id="activeFileName">.premdev</strong><span class="changed" id="changedMarker"></span></div>
+          <div class="editor-tools"><span class="preview-link" id="previewLink"><span class="status-dot"></span><span id="previewText">Preview unavailable</span></span><button class="icon-button" id="cronButton" aria-label="Open Cron Jobs"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3 1.8"/></svg></button></div>
+        </div>
+        <div class="tab-strip" id="tabStrip">
+          <button class="workspace-tab active" data-tab="file:.premdev"><span class="tab-icon">CFG</span><span>.premdev</span><span class="changed"></span><span class="tab-close" aria-label="Close .premdev">×</span></button>
+          <button class="workspace-tab" data-tab="file:README.md"><span class="tab-icon">MD</span><span>README.md</span><span class="tab-close" aria-label="Close README.md">×</span></button>
+          <button class="workspace-tab" data-tab="tools"><span class="tab-icon">⚒</span><span>Tools</span><span class="tab-close" aria-label="Close Tools">×</span></button>
+          <button class="workspace-tab" data-tab="shell"><span class="tab-icon">›_</span><span>Shell</span><span class="tab-close" aria-label="Close Shell">×</span></button>
+          <button class="new-tab-trigger" id="newTabButton"><span>＋</span><span>New tab</span></button>
+        </div>
+        <div class="tab-stage" id="tabStage">
+          <div class="code-wrap tab-view active" data-view="file:.premdev">
+            <div class="code" id="codeEditor">
+              <div class="code-line"><span class="line-number">1</span><span class="code-content"><span class="syntax-comment"># PremDev workspace configuration</span></span></div>
+              <div class="code-line"><span class="line-number">2</span><span class="code-content"><span class="syntax-key">language</span> = <span class="syntax-string">"typescript"</span></span></div>
+              <div class="code-line"><span class="line-number">3</span><span class="code-content"><span class="syntax-key">entrypoint</span> = <span class="syntax-string">"src/index.ts"</span></span></div>
+              <div class="code-line"><span class="line-number">4</span><span class="code-content"><span class="syntax-key">modules</span> = [<span class="syntax-string">"nodejs-20"</span>]</span></div>
+              <div class="code-line"><span class="line-number">5</span><span class="code-content"><span class="syntax-key">run</span> = <span class="syntax-string">"npm run dev"</span></span></div>
+              <div class="code-line"><span class="line-number">6</span><span class="code-content"><span class="syntax-key">port</span> = <span class="syntax-value">3000</span></span></div>
+              <div class="code-line"><span class="line-number">7</span><span class="code-content"></span></div>
+              <div class="code-line"><span class="line-number">8</span><span class="code-content"><span class="syntax-comment"># Environment dikelola melalui Secrets atau [env]</span></span></div>
+              <div class="code-line"><span class="line-number">9</span><span class="code-content"><span class="syntax-key">workspace_root</span> = <span class="syntax-string">"/workspace"</span></span></div>
+              <div class="code-line"><span class="line-number">10</span><span class="code-content"></span></div>
+              <div class="code-line"><span class="line-number">11</span><span class="code-content"><span class="syntax-comment"># Cron Jobs dijalankan oleh scheduler API terpusat</span></span></div>
+              <div class="code-line"><span class="line-number">12</span><span class="code-content"><span class="syntax-comment"># bukan terminal browser yang dapat idle</span></span></div>
+              <div class="code-line"><span class="line-number">13</span><span class="code-content"><span class="syntax-comment"># workspace state: stopped</span></span></div>
+            </div>
+          </div>
+          <section class="tab-view tools-view" data-view="tools">
+            <div class="tools-inner">
+              <div class="tools-heading"><span class="tools-heading-icon">⚒</span><div><h1>Tools</h1><p>Everything to configure, connect, and ship this workspace</p></div></div>
+              <input class="tools-search" id="toolsSearch" type="search" placeholder="Search tools..." />
+              <div class="tool-list" id="toolList">
+                <button class="tool-row" data-open-tab="console" data-tool-search="console terminal output"><span class="tool-icon">›_</span><span><strong>Console</strong><small>View the terminal output after running your code</small></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 6 6 6-6 6"/></svg></button>
+                <button class="tool-row" data-open-tab="developer" data-tool-search="developer telemetry diagnostics"><span class="tool-icon">&lt;&gt;</span><span><strong>Developer</strong><small>Internal developer tools, telemetry, and diagnostics</small></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 6 6 6-6 6"/></svg></button>
+                <button class="tool-row" data-open-tab="shell" data-tool-search="shell command line cli"><span class="tool-icon">⌁</span><span><strong>Shell</strong><small>Directly access your workspace through a command line interface</small></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 6 6 6-6 6"/></svg></button>
+                <button class="tool-row" data-open-tab="settings" data-tool-search="user settings preferences"><span class="tool-icon">⚙</span><span><strong>User Settings</strong><small>Configure personal editor preferences and workspace settings</small></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 6 6 6-6 6"/></svg></button>
+                <button class="tool-row" data-open-tab="validation" data-tool-search="validation tests results"><span class="tool-icon">✓</span><span><strong>Validation</strong><small>Configure test commands and inspect results to verify CI readiness</small></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 6 6 6-6 6"/></svg></button>
+                <button class="tool-row" data-open-tab="vnc" data-tool-search="vnc desktop screen"><span class="tool-icon">▣</span><span><strong>VNC</strong><small>View your app's desktop screen output</small></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 6 6 6-6 6"/></svg></button>
+                <button class="tool-row" data-open-tab="workflows" data-tool-search="workflows run app"><span class="tool-icon">▷</span><span><strong>Workflows</strong><small>Configure different ways to run your app</small></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 6 6 6-6 6"/></svg></button>
+                <button class="tool-row" data-open-tab="cron" data-tool-search="cron jobs scheduler"><span class="tool-icon">◷</span><span><strong>Cron Jobs</strong><small>Manage scheduled commands for this workspace</small><span class="tool-new">2 active</span></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 6 6 6-6 6"/></svg></button>
+              </div>
+            </div>
+          </section>
+          <section class="tab-view tool-screen" data-view="shell"><div class="tool-screen-inner"><div class="tool-screen-head"><div><h1>Shell</h1><p>/workspace · premdev-console</p></div><button class="action" data-toast="Shell command siap dijalankan">New command</button></div><div class="terminal"><div><span class="prompt">workspace@premdev:/workspace$</span> npm run dev</div><div>PremDev runtime is stopped.</div><div><span class="prompt">workspace@premdev:/workspace$</span><span class="cursor">▌</span></div></div></div></section>
+          <section class="tab-view tool-screen" data-view="preview"><div class="tab-empty"><div class="tab-empty-card"><h2>Preview unavailable</h2><p>Start the workspace container to open the app preview from port 3000.</p><button class="action primary" data-runtime="start">Start workspace</button></div></div></section>
+        </div>
+        <div class="new-tab-menu" id="newTabMenu">
+          <h3>Open a new tab</h3><p>Pilih tools atau workspace view. Tab bisa dibuka banyak dan tetap berdampingan.</p>
+          <div class="new-tab-options" id="newTabOptions">
+            <button class="new-tab-option" data-open-tab="tools" data-tab-label="Tools"><span class="option-icon">⚒</span><span><strong>Tools</strong><small>Browse workspace tools</small></span></button>
+            <button class="new-tab-option" data-open-tab="console" data-tab-label="Console"><span class="option-icon">›_</span><span><strong>Console</strong><small>Runtime output</small></span></button>
+            <button class="new-tab-option" data-open-tab="developer" data-tab-label="Developer"><span class="option-icon">&lt;&gt;</span><span><strong>Developer</strong><small>Telemetry & diagnostics</small></span></button>
+            <button class="new-tab-option" data-open-tab="shell" data-tab-label="Shell"><span class="option-icon">⌁</span><span><strong>Shell</strong><small>Workspace CLI</small></span></button>
+            <button class="new-tab-option" data-open-tab="settings" data-tab-label="User Settings"><span class="option-icon">⚙</span><span><strong>User Settings</strong><small>Editor preferences</small></span></button>
+            <button class="new-tab-option" data-open-tab="validation" data-tab-label="Validation"><span class="option-icon">✓</span><span><strong>Validation</strong><small>Test commands</small></span></button>
+            <button class="new-tab-option" data-open-tab="vnc" data-tab-label="VNC"><span class="option-icon">▣</span><span><strong>VNC</strong><small>Desktop output</small></span></button>
+            <button class="new-tab-option" data-open-tab="workflows" data-tab-label="Workflows"><span class="option-icon">▷</span><span><strong>Workflows</strong><small>Run configurations</small></span></button>
+            <button class="new-tab-option" data-open-tab="preview" data-tab-label="Preview"><span class="option-icon">□</span><span><strong>Preview</strong><small>App preview</small></span></button>
+            <button class="new-tab-option" data-open-tab="cron" data-tab-label="Cron Jobs"><span class="option-icon">◷</span><span><strong>Cron Jobs</strong><small>Scheduled commands</small></span></button>
+          </div>
+        </div>
+      </main>
+      <div class="resizer files-resizer" id="filesResizer" role="separator" tabindex="0" aria-label="Resize right sidebar" aria-valuemin="170" aria-valuemax="360" aria-valuenow="214"></div>
+
+      <aside class="panel files-panel" id="filesPanel">
+        <div class="panel-head"><div class="panel-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Z"/></svg> Files</div><div class="panel-head-actions"><button class="icon-button" data-toast="File baru siap dibuat" aria-label="New file"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg></button><button class="icon-button" data-toast="File explorer diperbarui" aria-label="Refresh files"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 0 0-14.8-4L4 9"/><path d="M4 4v5h5M4 13a8 8 0 0 0 14.8 4L20 15"/><path d="M20 20v-5h-5"/></svg></button></div></div>
+        <div class="file-search"><input id="fileSearch" type="search" placeholder="Find a file..." /></div>
+        <div class="files" id="fileList">
+          <div class="file-section">Workspace root</div>
+          <div class="file-row folder"><span class="file-type dir">DIR</span><span class="file-name">premdev-console</span></div>
+          <div class="file-row selected" data-file=".premdev"><span class="indent"></span><span class="file-type cfg">CFG</span><span class="file-name">.premdev</span><span class="file-state">M</span></div>
+          <div class="file-row" data-file="README.md"><span class="indent"></span><span class="file-type md">MD</span><span class="file-name">README.md</span></div>
+          <div class="file-row" data-file=".gitignore"><span class="indent"></span><span class="file-type cfg">GIT</span><span class="file-name">.gitignore</span></div>
+          <div class="file-row folder"><span class="file-type dir">DIR</span><span class="file-name">src</span></div>
+          <div class="file-row" data-file="src/index.ts"><span class="indent"></span><span class="indent"></span><span class="file-type">TS</span><span class="file-name">index.ts</span></div>
+          <div class="file-row" data-file="src/routes.ts"><span class="indent"></span><span class="indent"></span><span class="file-type">TS</span><span class="file-name">routes.ts</span></div>
+          <div class="file-row" data-file="src/cron.ts"><span class="indent"></span><span class="indent"></span><span class="file-type">TS</span><span class="file-name">cron.ts</span><span class="file-state">M</span></div>
+          <div class="file-row folder"><span class="file-type dir">DIR</span><span class="file-name">public</span></div>
+          <div class="file-row folder"><span class="file-type dir">DIR</span><span class="file-name">tests</span></div>
+          <div class="file-row"><span class="file-type cfg">SYS</span><span class="file-name">.premdev-data/</span></div>
+        </div>
+        <div class="selected-info"><span class="selected-label">Selected file</span><strong id="selectedFile">.premdev</strong><span id="selectedMeta">Workspace config · TOML · 182 B</span></div>
+      </aside>
+    </div>
+
+    <footer class="statusbar"><span>main*</span><span>0 errors</span><span>Workspace: <strong id="footerStatus">stopped</strong></span><div class="right"><span>Container: <span id="containerStatus">paused</span></span><span>Root: /workspace</span><span>PremDev</span></div></footer>
+  </div>
+  <div class="toast" id="toast"></div>
+  <div class="modal-backdrop" id="cronModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cronTitle">
+      <div class="modal-head"><div><h2 id="cronTitle">Cron Jobs</h2><p>Jadwalkan command di container workspace ini.</p></div><button class="icon-button" id="closeCron" aria-label="Close Cron Jobs"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <div class="form-grid">
+        <div class="form-field"><label for="cronName">Job name</label><input id="cronName" value="Refresh workspace cache" /></div>
+        <div class="form-field"><label for="cronCommand">Command</label><input id="cronCommand" value="npm run cache:refresh" /></div>
+        <div class="form-row"><div class="form-field"><label for="cronSchedule">Cron expression</label><input id="cronSchedule" value="0 * * * *" /></div><div class="form-field"><label for="cronTimezone">Timezone</label><select id="cronTimezone"><option>Asia/Jakarta</option><option>UTC</option></select></div></div>
+      </div>
+      <div class="modal-actions"><button class="action" id="cancelCron">Cancel</button><button class="action primary" id="saveCron">Save Cron Job</button></div>
+    </div>
+  </div>
+  <script>
+    const root = document.documentElement;
+    const workspace = document.getElementById('workspace');
+    const toast = document.getElementById('toast');
+    const defaults = { ai: 286, files: 214 };
+    let toastTimer;
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+    }
+    function setTheme(theme) {
+      root.dataset.theme = theme;
+      localStorage.setItem('premdev-preview-theme', theme);
+      const dark = theme === 'dark';
+      document.getElementById('themeButton').setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+      document.getElementById('themeButton').setAttribute('aria-pressed', String(dark));
+      document.getElementById('themeIcon').innerHTML = dark
+        ? '<circle cx="12" cy="12" r="3.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
+        : '<path d="M20 15.3A8.5 8.5 0 0 1 8.7 4 8.5 8.5 0 1 0 20 15.3Z"/>';
+    }
+    const savedTheme = localStorage.getItem('premdev-preview-theme-v2');
+    setTheme(savedTheme || 'dark');
+    document.getElementById('themeButton').addEventListener('click', () => setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark'));
+
+    function togglePanel(kind) {
+      const isAi = kind === 'ai';
+      const className = isAi ? 'ai-hidden' : 'files-hidden';
+      const button = document.getElementById(isAi ? 'toggleAi' : 'toggleFiles');
+      const hidden = workspace.classList.toggle(className);
+      button.setAttribute('aria-pressed', String(!hidden));
+      showToast(hidden ? `${isAi ? 'AI panel' : 'Right sidebar'} disembunyikan` : `${isAi ? 'AI panel' : 'Right sidebar'} ditampilkan`);
+    }
+    document.getElementById('toggleAi').addEventListener('click', () => togglePanel('ai'));
+    document.getElementById('closeAi').addEventListener('click', () => { if (!workspace.classList.contains('ai-hidden')) togglePanel('ai'); });
+    document.getElementById('toggleFiles').addEventListener('click', () => togglePanel('files'));
+
+    function setWidth(variable, width, min, max, resizer) {
+      const value = Math.max(min, Math.min(max, width));
+      root.style.setProperty(variable, `${value}px`);
+      resizer.setAttribute('aria-valuenow', value);
+      localStorage.setItem(variable === '--ai-w' ? 'premdev-ai-width' : 'premdev-files-width', value);
+    }
+    function makeResizable(resizer, variable, min, max, initial) {
+      const saved = Number(localStorage.getItem(variable === '--ai-w' ? 'premdev-ai-width' : 'premdev-files-width')) || initial;
+      setWidth(variable, saved, min, max, resizer);
+      let startX = 0; let startWidth = saved;
+      resizer.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        resizer.classList.add('dragging');
+        startX = event.clientX;
+        startWidth = parseInt(getComputedStyle(root).getPropertyValue(variable), 10);
+        resizer.setPointerCapture(event.pointerId);
+      });
+      resizer.addEventListener('pointermove', (event) => {
+        if (!resizer.hasPointerCapture(event.pointerId)) return;
+        const delta = variable === '--ai-w' ? event.clientX - startX : startX - event.clientX;
+        setWidth(variable, startWidth + delta, min, max, resizer);
+      });
+      const stop = (event) => { if (resizer.hasPointerCapture(event.pointerId)) resizer.releasePointerCapture(event.pointerId); resizer.classList.remove('dragging'); };
+      resizer.addEventListener('pointerup', stop);
+      resizer.addEventListener('pointercancel', stop);
+      resizer.addEventListener('dblclick', () => setWidth(variable, initial, min, max, resizer));
+      resizer.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const current = parseInt(getComputedStyle(root).getPropertyValue(variable), 10);
+        const direction = variable === '--ai-w' ? 1 : -1;
+        const next = event.key === 'Home' ? min : event.key === 'End' ? max : current + (event.key === 'ArrowRight' ? 12 * direction : -12 * direction);
+        setWidth(variable, next, min, max, resizer);
+      });
+    }
+    makeResizable(document.getElementById('aiResizer'), '--ai-w', 220, 500, defaults.ai);
+    makeResizable(document.getElementById('filesResizer'), '--files-w', 170, 360, defaults.files);
+
+    const tabLabels = {
+      tools: ['Tools', '⚒'],
+      console: ['Console', '›_'],
+      developer: ['Developer', '<>'],
+      shell: ['Shell', '⌁'],
+      settings: ['User Settings', '⚙'],
+      validation: ['Validation', '✓'],
+      vnc: ['VNC', '▣'],
+      workflows: ['Workflows', '▷'],
+      preview: ['Preview', '□'],
+      cron: ['Cron Jobs', '◷'],
+    };
+    const toolViews = {
+      console: ['Console', 'Runtime output from the workspace container', '<div class="tool-card"><div class="dock-row"><span class="dock-command">[workspace] workflow:run</span><span>stopped</span></div><div class="dock-log">No process output yet. Start the workspace to stream logs here.</div></div>'],
+      developer: ['Developer', 'Internal developer tools, telemetry, and diagnostics', '<div class="tool-card"><div class="dock-log"><strong>Runtime health</strong> · waiting for workspace container</div><div class="dock-log"><strong>Diagnostics</strong> · 0 errors · 0 warnings</div></div>'],
+      settings: ['User Settings', 'Preferences that apply to this PremDev editor', '<div class="tool-card"><div class="dock-log"><strong>Editor theme</strong> · follows the light/dark toggle in the header</div><div class="dock-log"><strong>Workspace layout</strong> · panel widths are saved locally</div></div>'],
+      validation: ['Validation', 'Test commands and results for this workspace', '<div class="tool-card"><div class="dock-row"><span class="dock-command">No validation commands configured</span></div><div class="dock-log">Add commands through the workspace validation settings.</div></div>'],
+      vnc: ['VNC', "View the workspace application's desktop output", '<div class="tab-empty"><div class="tab-empty-card"><h2>VNC is unavailable</h2><p>Start a workspace process that exposes a desktop screen to view it here.</p></div></div>'],
+      workflows: ['Workflows', 'Configure different ways to run your workspace', '<div class="tool-card"><div class="dock-row"><span class="dock-command">workflow:run</span><span>stopped</span></div><div class="dock-log">npm run dev · port 3000 · source <strong>.premdev</strong></div></div>'],
+      cron: ['Cron Jobs', 'Scheduled commands owned by this workspace', '<div class="tool-card"><div class="dock-row"><span class="dock-command">scheduler-api</span><span>2 active jobs</span></div><div class="dock-log">Central runner · no browser terminal dependency · <span class="dock-link" data-open-cron>Manage jobs →</span></div></div>'],
+    };
+    function makeToolView(type) {
+      const [title, description, content] = toolViews[type] || toolViews.console;
+      const section = document.createElement('section');
+      section.className = 'tab-view tool-screen';
+      section.dataset.view = type;
+      section.innerHTML = `<div class="tool-screen-inner"><div class="tool-screen-head"><div><h1>${title}</h1><p>${description}</p></div><button class="action" data-toast="${title} ready">Open settings</button></div>${content}</div>`;
+      return section;
+    }
+    function makeFileView(file) {
+      const view = document.querySelector('[data-view="file:.premdev"]').cloneNode(true);
+      view.dataset.view = `file:${file}`;
+      view.querySelector('#codeEditor').removeAttribute('id');
+      view.querySelectorAll('.syntax-string').forEach((item) => { item.textContent = file === 'README.md' ? '# PremDev workspace' : item.textContent; });
+      return view;
+    }
+    function openWorkspaceTab(type, label, icon) {
+      let tab = document.querySelector(`.workspace-tab[data-tab="${CSS.escape(type)}"]`);
+      let view = document.querySelector(`.tab-view[data-view="${CSS.escape(type)}"]`);
+      if (!view) {
+        view = type.startsWith('file:') ? makeFileView(type.slice(5)) : makeToolView(type);
+        document.getElementById('tabStage').appendChild(view);
+      }
+      if (!tab) {
+        tab = document.createElement('button');
+        tab.className = 'workspace-tab';
+        tab.dataset.tab = type;
+        tab.innerHTML = `<span class="tab-icon">${icon || (type.startsWith('file:') ? 'TXT' : 'TAB')}</span><span>${label || type}</span><span class="tab-close" aria-label="Close ${label || type}">×</span>`;
+        document.getElementById('newTabButton').before(tab);
+        bindTab(tab);
+      }
+      document.querySelectorAll('.workspace-tab').forEach((item) => item.classList.toggle('active', item === tab));
+      document.querySelectorAll('.tab-view').forEach((item) => item.classList.toggle('active', item === view));
+      const fileName = type.startsWith('file:') ? type.slice(5) : label || type;
+      document.getElementById('activeFileName').textContent = fileName;
+      document.getElementById('newTabMenu').classList.remove('open');
+      if (type === 'cron') document.querySelectorAll('[data-open-cron]').forEach((item) => item.addEventListener('click', () => document.getElementById('cronModal').classList.add('open')));
+    }
+    function bindTab(tab) {
+      tab.addEventListener('click', (event) => {
+        if (event.target.closest('.tab-close')) {
+          event.stopPropagation();
+          const view = document.querySelector(`.tab-view[data-view="${CSS.escape(tab.dataset.tab)}"]`);
+          const wasActive = tab.classList.contains('active');
+          tab.remove();
+          view?.remove();
+          if (wasActive) {
+            const fallback = document.querySelector('.workspace-tab');
+            if (fallback) openWorkspaceTab(fallback.dataset.tab);
+          }
+          return;
+        }
+        openWorkspaceTab(tab.dataset.tab, tab.querySelector('span:nth-child(2)')?.textContent, tab.querySelector('.tab-icon')?.textContent);
+      });
+    }
+    document.querySelectorAll('.workspace-tab').forEach(bindTab);
+    document.querySelectorAll('[data-open-tab]').forEach((item) => item.addEventListener('click', () => {
+      const type = item.dataset.openTab;
+      const [defaultLabel, defaultIcon] = tabLabels[type] || [item.dataset.tabLabel || type, 'TAB'];
+      openWorkspaceTab(type, item.dataset.tabLabel || defaultLabel, defaultIcon);
+    }));
+    document.getElementById('newTabButton').addEventListener('click', (event) => {
+      event.stopPropagation();
+      document.getElementById('newTabMenu').classList.toggle('open');
+    });
+    document.addEventListener('click', (event) => {
+      if (!event.target.closest('#newTabMenu') && !event.target.closest('#newTabButton')) document.getElementById('newTabMenu').classList.remove('open');
+    });
+    document.getElementById('toolsSearch').addEventListener('input', (event) => {
+      const query = event.target.value.toLowerCase();
+      document.querySelectorAll('.tool-row').forEach((row) => { row.hidden = !row.dataset.toolSearch.includes(query); });
+    });
+
+    function updateRuntime(status, message) {
+      const pill = document.getElementById('statusPill');
+      const text = document.getElementById('statusText');
+      const footer = document.getElementById('footerStatus');
+      const container = document.getElementById('containerStatus');
+      const preview = document.getElementById('previewLink');
+      const previewText = document.getElementById('previewText');
+      pill.classList.toggle('running', status === 'running');
+      pill.classList.toggle('error', status === 'error');
+      text.textContent = status;
+      footer.textContent = status;
+      container.textContent = status === 'running' ? 'running' : status === 'restarting' ? 'restarting' : 'paused';
+      preview.classList.toggle('available', status === 'running');
+      previewText.textContent = status === 'running' ? 'Preview available' : 'Preview unavailable';
+      document.querySelectorAll('[data-view="shell"] .terminal').forEach((terminal) => {
+        terminal.innerHTML = `<div><span class="prompt">workspace@premdev:/workspace$</span> npm run dev</div><div>${message}</div><div><span class="prompt">workspace@premdev:/workspace$</span><span class="cursor">▌</span></div>`;
+      });
+    }
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-runtime]');
+      if (!button) return;
+      const action = button.dataset.runtime;
+      if (action === 'save') {
+        document.getElementById('changedMarker').style.display = 'none';
+        showToast('File disimpan ke workspace');
+        return;
+      }
+      const buttons = document.querySelectorAll('[data-runtime]');
+      buttons.forEach((item) => item.disabled = true);
+      if (action === 'restart') {
+        updateRuntime('restarting', 'Container sedang dihentikan dan dimulai kembali...');
+        setTimeout(() => { updateRuntime('running', 'Container workspace aktif kembali. Preview siap digunakan.'); buttons.forEach((item) => item.disabled = false); }, 900);
+      } else {
+        const next = action === 'start' ? 'running' : 'stopped';
+        updateRuntime(next, next === 'running' ? 'Container workspace aktif. Preview tersedia di port 3000.' : 'Container workspace dihentikan dengan aman.');
+        setTimeout(() => buttons.forEach((item) => item.disabled = false), 250);
+      }
+      showToast(action === 'start' ? 'Workspace dimulai' : action === 'stop' ? 'Workspace dihentikan' : 'Workspace direstart');
+    });
+
+    function selectFile(row) {
+      document.querySelectorAll('.file-row[data-file]').forEach((item) => item.classList.remove('selected'));
+      row.classList.add('selected');
+      const file = row.dataset.file;
+      document.getElementById('selectedFile').textContent = file;
+      document.getElementById('selectedMeta').textContent = file === '.premdev' ? 'Workspace config · TOML · 182 B' : 'Workspace file · recently opened';
+      openWorkspaceTab(`file:${file}`, file, file.endsWith('.md') ? 'MD' : file.endsWith('.ts') ? 'TS' : 'CFG');
+    }
+    document.querySelectorAll('.file-row[data-file]').forEach((row) => row.addEventListener('click', () => selectFile(row)));
+    document.getElementById('fileSearch').addEventListener('input', (event) => {
+      const query = event.target.value.toLowerCase();
+      document.querySelectorAll('.file-row[data-file]').forEach((row) => row.hidden = !row.dataset.file.toLowerCase().includes(query));
+    });
+    document.querySelectorAll('.quick-action').forEach((button) => button.addEventListener('click', () => {
+      const input = document.getElementById('aiInput');
+      input.value = button.dataset.prompt;
+      input.focus();
+    }));
+    function sendAi() {
+      const input = document.getElementById('aiInput');
+      if (!input.value.trim()) return showToast('Tulis pertanyaan untuk AI Assistant');
+      showToast('AI Assistant menerima pertanyaan');
+      input.value = '';
+    }
+    document.getElementById('sendAi').addEventListener('click', sendAi);
+    document.getElementById('aiInput').addEventListener('keydown', (event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') sendAi(); });
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-toast]');
+      if (button) showToast(button.dataset.toast);
+    });
+
+    const cronModal = document.getElementById('cronModal');
+    const openCron = () => cronModal.classList.add('open');
+    document.getElementById('cronButton').addEventListener('click', openCron);
+    document.getElementById('closeCron').addEventListener('click', () => cronModal.classList.remove('open'));
+    document.getElementById('cancelCron').addEventListener('click', () => cronModal.classList.remove('open'));
+    document.getElementById('saveCron').addEventListener('click', () => { cronModal.classList.remove('open'); showToast('Cron job disimpan untuk workspace ini'); });
+    cronModal.addEventListener('click', (event) => { if (event.target === cronModal) cronModal.classList.remove('open'); });
+  </script>
+</body>
+</html>

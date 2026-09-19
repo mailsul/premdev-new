@@ -23,7 +23,10 @@ import { setupProxy } from "./routes/proxy.js";
 import { apiLimiter, aiLimiter, fileWriteLimiter, loginLimiter, clientIp } from "./lib/rate-limit.js";
 import { getAllRtSettings } from "./lib/ai-settings.js";
 import { applyAIBudgets } from "./lib/ai-prompt.js";
-import { startCrashMonitor } from "./lib/crash-monitor.js";
+import { cronJobRoutes } from "./routes/cron-jobs.js";
+import { shareRoutes, publicShareRoutes } from "./routes/share.js";
+import { startCrashMonitor, getLifecycleState } from "./lib/crash-monitor.js";
+import { getSchedulerState } from "./lib/scheduler.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -125,10 +128,22 @@ await app.register(async (api) => {
   await api.register(adminRoutes, { prefix: "/admin" });
   await api.register(dbRoutes, { prefix: "/db" });
   await api.register(vfsRoutes, { prefix: "/vfs" });
+  await api.register(cronJobRoutes, { prefix: "/workspaces" });
+  await api.register(shareRoutes, { prefix: "/workspaces" });
 }, { prefix: "/api" });
 
+// Public read-only share lookup is deliberately outside /api so the copied
+// link is a simple /share/<token> URL.
+await app.register(publicShareRoutes);
+
 // Health
-app.get("/api/health", async () => ({ ok: true, version: "0.1.0", time: Date.now() }));
+app.get("/api/health", async () => ({
+  ok: true,
+  version: "0.1.0",
+  time: Date.now(),
+  scheduler: getSchedulerState(),
+  workspaceLifecycle: getLifecycleState(),
+}));
 
 // Serve built frontend in production
 const webDist = path.resolve(__dirname, "../../web/dist");
@@ -162,9 +177,8 @@ if (fs.existsSync(webDist)) {
 
 const port = Number(config.PORT);
 const host = config.HOST;
-try {
-  await app.listen({ port, host });
-  app.log.info(`PremDev API listening on http://${host}:${port}`);
+
+  startScheduler();
   startCrashMonitor();
 } catch (e) {
   app.log.error(e);

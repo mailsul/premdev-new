@@ -96,6 +96,21 @@ import /etc/caddy/extra/*.caddy
         # GITEA_SUBDOMAIN is read from .env (e.g. GITEA_SUBDOMAIN=gitea-maraazn069).
         # To change: update GITEA_SUBDOMAIN in /opt/premdev/.env, then regenerate
         # Caddyfile and reload Caddy (see perintah.md).
+        # 9Router AI Gateway — router.${PRIMARY_DOMAIN}
+        # Dashboard untuk konfigurasi provider AI (Anthropic, Gemini, OpenAI, dll).
+        # Semua AI agent di workspace PremDev diarahkan lewat sini.
+        @ninerouter host router.${PRIMARY_DOMAIN}
+        handle @ninerouter {
+                reverse_proxy 9router:20128 {
+                        transport http {
+                                dial_timeout 10s
+                                read_timeout 5m
+                                write_timeout 5m
+                        }
+                        flush_interval -1
+                }
+        }
+
         @gitea host ${GITEA_SUBDOMAIN}.${PRIMARY_DOMAIN}
         handle @gitea {
                 reverse_proxy ${GITEA_CONTAINER_HOST}:${GITEA_PORT}

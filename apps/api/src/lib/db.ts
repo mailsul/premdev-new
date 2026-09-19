@@ -33,6 +33,10 @@ export function initDb() {
       name TEXT NOT NULL,
       template TEXT NOT NULL DEFAULT 'blank',
       status TEXT NOT NULL DEFAULT 'stopped',
+      auto_start INTEGER NOT NULL DEFAULT 0 CHECK (auto_start IN (0, 1)),
+      desired_running INTEGER NOT NULL DEFAULT 0 CHECK (desired_running IN (0, 1)),
+      auto_start_failures INTEGER NOT NULL DEFAULT 0,
+      auto_start_next_attempt_at INTEGER,
       container_id TEXT,
       preview_port INTEGER,
       run_command TEXT,
@@ -112,6 +116,50 @@ export function initDb() {
       PRIMARY KEY (workspace_id, tab_id)
     );
 
+    CREATE TABLE IF NOT EXISTS share_tokens (
+      token TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      label TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS scheduled_jobs (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      cron_expression TEXT NOT NULL,
+      timezone TEXT NOT NULL DEFAULT 'UTC',
+      command TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+      next_run_at INTEGER,
+      last_run_at INTEGER,
+      last_status TEXT,
+      last_exit_code INTEGER,
+      last_output TEXT,
+      lock_token TEXT,
+      lock_acquired_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      status TEXT NOT NULL,
+      exit_code INTEGER,
+      output TEXT NOT NULL DEFAULT '',
+      error TEXT,
+      FOREIGN KEY (job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id);
     CREATE INDEX IF NOT EXISTS idx_workspaces_status ON workspaces(status);
     CREATE INDEX IF NOT EXISTS idx_checkpoints_workspace ON checkpoints(workspace_id);
@@ -121,12 +169,43 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_login_attempts_created ON login_attempts(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_share_tokens_workspace ON share_tokens(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_due ON scheduled_jobs(enabled, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_workspace ON scheduled_jobs(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_job ON scheduled_job_runs(job_id, started_at DESC);
   `);
+
+  // Owner scope was added with scheduled jobs. Keep this migration idempotent
+  // for databases that may have been initialized by an earlier development
+  // build before the explicit owner column was introduced.
+  const scheduledCols = db.prepare("PRAGMA table_info(scheduled_jobs)").all() as any[];
+  if (!scheduledCols.find((c) => c.name === "owner_id")) {
+    db.exec("ALTER TABLE scheduled_jobs ADD COLUMN owner_id TEXT");
+    db.exec(`
+      UPDATE scheduled_jobs
+      SET owner_id = (SELECT user_id FROM workspaces WHERE workspaces.id = scheduled_jobs.workspace_id)
+      WHERE owner_id IS NULL
+    `);
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_owner ON scheduled_jobs(owner_id, created_at DESC)");
 
   // Add last_shell_activity_at column if missing (idempotent migration).
   // Persisted in DB so the idle reaper survives API restarts cleanly —
   // otherwise every restart hands containers a fresh 30-min lease.
   const cols = db.prepare("PRAGMA table_info(workspaces)").all() as any[];
+  if (!cols.find((c) => c.name === "auto_start")) {
+    db.exec("ALTER TABLE workspaces ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!cols.find((c) => c.name === "desired_running")) {
+    db.exec("ALTER TABLE workspaces ADD COLUMN desired_running INTEGER NOT NULL DEFAULT 0");
+    db.prepare("UPDATE workspaces SET desired_running = 1 WHERE status = 'running'").run();
+  }
+  if (!cols.find((c) => c.name === "auto_start_failures")) {
+    db.exec("ALTER TABLE workspaces ADD COLUMN auto_start_failures INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!cols.find((c) => c.name === "auto_start_next_attempt_at")) {
+    db.exec("ALTER TABLE workspaces ADD COLUMN auto_start_next_attempt_at INTEGER");
+  }
   if (!cols.find((c) => c.name === "last_shell_activity_at")) {
     db.exec("ALTER TABLE workspaces ADD COLUMN last_shell_activity_at INTEGER");
   }
@@ -283,6 +362,10 @@ export type DbWorkspace = {
   name: string;
   template: string;
   status: "stopped" | "starting" | "running" | "error";
+  auto_start: number;
+  desired_running: number;
+  auto_start_failures: number;
+  auto_start_next_attempt_at: number | null;
   container_id: string | null;
   preview_port: number | null;
   /** JSON: Record<string, number> — process name → port. Set when workspace uses multi-process mode. */
@@ -396,6 +479,8 @@ export function workspaceToPublic(w: DbWorkspace) {
     name: w.name,
     template: w.template,
     status: w.status,
+    autoStart: Boolean(w.auto_start),
+    desiredRunning: Boolean(w.desired_running),
     previewPort: w.preview_port ?? undefined,
     previewUrl,
     defaultUrl,
@@ -423,4 +508,3 @@ export function validateSubdomainLabel(label: string): string | null {
   if (label.includes("--")) return "Subdomain may not contain consecutive hyphens";
   return null;
 }
-

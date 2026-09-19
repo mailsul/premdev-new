@@ -1,11 +1,16 @@
 export class ApiError extends Error {
   status: number;
   body: any;
+  requestId?: string;
   constructor(status: number, message: string, body?: any) {
     super(message);
     this.status = status;
     this.body = body;
   }
+}
+
+function requestId() {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export async function api<T = any>(
@@ -17,14 +22,35 @@ export async function api<T = any>(
   // which broke buttons like Run/Stop/Restart that POST without a body.
   const hasBody = opts.body !== undefined && opts.body !== null;
   const headers: Record<string, string> = { ...(opts.headers as any || {}) };
+  const id = requestId();
   if (hasBody && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(`/api${path}`, {
-    ...opts,
-    headers,
-    credentials: "include",
-  });
+  headers["X-Request-ID"] = id;
+  const controller = new AbortController();
+  const timer = globalThis.setTimeout(() => controller.abort(), 45_000);
+  const abortExternal = () => controller.abort();
+  opts.signal?.addEventListener("abort", abortExternal, { once: true });
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, {
+      ...opts,
+      headers,
+      credentials: "include",
+      signal: controller.signal,
+    });
+  } catch (cause: any) {
+    const error = new ApiError(
+      0,
+      cause?.name === "AbortError" ? "Request timeout. Please try again." : (cause?.message ?? "Network request failed"),
+    );
+    error.requestId = id;
+    emitApiError(error);
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", abortExternal);
+  }
   const text = await res.text();
   let body: any = null;
   try {
@@ -34,7 +60,10 @@ export async function api<T = any>(
   }
   if (!res.ok) {
     const msg = (body && body.error) || res.statusText;
-    throw new ApiError(res.status, msg, body);
+    const error = new ApiError(res.status, msg, body);
+    error.requestId = id;
+    emitApiError(error);
+    throw error;
   }
   return body as T;
 }
@@ -49,3 +78,11 @@ export const API = {
     api<T>(p, { method: "PATCH", body: data ? JSON.stringify(data) : undefined }),
   delete: <T = any>(p: string) => api<T>(p, { method: "DELETE" }),
 };
+
+function emitApiError(error: ApiError) {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("premdev:toast", {
+      detail: { kind: "error", message: error.message, requestId: error.requestId },
+    }));
+  }
+}

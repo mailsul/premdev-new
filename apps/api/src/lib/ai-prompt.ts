@@ -10,7 +10,8 @@ export type Provider =
   | "openrouter"
   | "groq"
   | "konektika"
-  | "snifox";
+  | "snifox"
+  | "9router";
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
   openai: "OpenAI",
@@ -20,6 +21,7 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
   groq: "Groq",
   konektika: "Konektika (kimi-pro)",
   snifox: "SnifoxAI (snfx-…)",
+  "9router": "9Router (self-hosted gateway)",
 };
 
 export type ChatMsg = {

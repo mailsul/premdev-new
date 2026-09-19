@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PremDev Workspace — Concept Preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080d19;
+      --surface: #0d1424;
+      --surface-2: #111b2e;
+      --surface-3: #16243b;
+      --border: rgba(159, 178, 211, .14);
+      --border-strong: rgba(159, 178, 211, .24);
+      --text: #eff5ff;
+      --muted: #8898b4;
+      --dim: #5e6e88;
+      --blue: #6c8cff;
+      --cyan: #55d8e5;
+      --green: #5ad9a0;
+      --amber: #f6c76a;
+      --red: #ff7587;
+      --purple: #b991ff;
+      --radius: 11px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 1060px;
+      height: 100vh;
+      overflow: hidden;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 76% -20%, rgba(76, 111, 255, .18), transparent 34rem),
+        var(--bg);
+      font-size: 13px;
+    }
+    button, input { font: inherit; }
+    button {
+      border: 0;
+      cursor: pointer;
+      color: inherit;
+    }
+    svg { display: block; }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: 68px 218px minmax(520px, 1fr) 326px;
+      grid-template-rows: 58px minmax(0, 1fr) 246px 30px;
+      height: 100vh;
+    }
+
+    .icon-rail {
+      grid-row: 1 / -1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 17px 9px 12px;
+      background: rgba(9, 15, 28, .86);
+      border-right: 1px solid var(--border);
+    }
+    .brand-mark {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      margin-bottom: 28px;
+      border: 1px solid rgba(117, 143, 255, .62);
+      border-radius: 10px;
+      background: linear-gradient(145deg, #28459d, #151f4e);
+      box-shadow: 0 0 28px rgba(95, 121, 255, .26);
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -.08em;
+    }
+    .rail-nav {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 7px;
+      width: 100%;
+    }
+    .rail-button {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 40px;
+      border-radius: 10px;
+      color: var(--dim);
+      background: transparent;
+      transition: .2s ease;
+    }
+    .rail-button:hover, .rail-button.active {
+      color: var(--text);
+      background: rgba(107, 137, 255, .14);
+    }
+    .rail-button.active::before {
+      content: "";
+      position: absolute;
+      left: -14px;
+      width: 3px;
+      height: 20px;
+      border-radius: 0 3px 3px 0;
+      background: var(--blue);
+      box-shadow: 0 0 14px var(--blue);
+    }
+    .rail-spacer { flex: 1; }
+    .avatar {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      border: 1px solid rgba(116, 216, 220, .45);
+      border-radius: 50%;
+      color: #c8fff6;
+      background: #164b53;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .workspace-bar {
+      grid-column: 2 / -1;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 20px;
+      background: rgba(12, 19, 34, .9);
+      border-bottom: 1px solid var(--border);
+    }
+    .workspace-switcher {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-width: 200px;
+      padding-right: 19px;
+      border-right: 1px solid var(--border);
+    }
+    .workspace-icon {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      color: #a8fff0;
+      background: linear-gradient(140deg, #1a5964, #17303e);
+    }
+    .eyebrow {
+      color: var(--dim);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .workspace-name {
+      margin-top: 2px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }
+    .top-button, .ghost-button, .primary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      height: 32px;
+      padding: 0 11px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .025);
+      color: var(--muted);
+      transition: .18s ease;
+    }
+    .top-button:hover, .ghost-button:hover { color: var(--text); background: rgba(255,255,255,.07); border-color: var(--border-strong); }
+    .primary-button {
+      border-color: rgba(115, 143, 255, .5);
+      background: linear-gradient(135deg, #5b75e8, #4961c7);
+      color: white;
+      box-shadow: 0 7px 22px rgba(82, 108, 223, .22);
+    }
+    .primary-button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+    .status-pill, .tiny-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+    .status-pill {
+      height: 27px;
+      padding: 0 9px;
+      border: 1px solid rgba(90, 217, 160, .22);
+      border-radius: 20px;
+      color: var(--green);
+      background: rgba(90, 217, 160, .08);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 9px currentColor;
+    }
+
+    .explorer {
+      grid-column: 2;
+      grid-row: 2 / 4;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: rgba(11, 18, 32, .72);
+    }
+    .panel-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 50px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-heading h2 {
+      margin: 0;
+      font-size: 11px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .small-icon {
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      color: var(--dim);
+      background: transparent;
+    }
+    .small-icon:hover { color: var(--text); background: rgba(255,255,255,.08); }
+    .project-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 17px 16px 12px;
+      color: var(--text);
+      font-weight: 700;
+    }
+    .project-badge .folder-icon { color: var(--amber); }
+    .tree {
+      padding: 0 8px 20px;
+      overflow: auto;
+      color: var(--muted);
+    }
+    .tree::-webkit-scrollbar, .code::-webkit-scrollbar, .activity-list::-webkit-scrollbar { width: 5px; height: 5px; }
+    .tree::-webkit-scrollbar-thumb, .code::-webkit-scrollbar-thumb, .activity-list::-webkit-scrollbar-thumb { background: rgba(158, 177, 211, .2); border-radius: 10px; }
+    .tree-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 32px;
+      padding: 0 8px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: .15s ease;
+    }
+    .tree-row:hover, .tree-row.selected { color: var(--text); background: rgba(104, 133, 255, .12); }
+    .tree-row.indent-1 { padding-left: 25px; }
+    .tree-row.indent-2 { padding-left: 42px; }
+    .tree-row .file-type { color: var(--dim); }
+    .tree-row.selected .file-type { color: var(--blue); }
+    .tree-row .muted-file { color: #53627b; }
+    .chevron { color: var(--dim); }
+    .explorer-footer {
+      margin-top: auto;
+      padding: 15px 16px;
+      border-top: 1px solid var(--border);
+    }
+    .resource-line {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      color: var(--dim);
+      font-size: 11px;
+    }
+    .resource-line strong { color: var(--muted); font-weight: 600; }
+    .progress {
+      height: 4px;
+      overflow: hidden;
+      border-radius: 10px;
+      background: #1a2940;
+    }
+    .progress > span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--blue), var(--cyan));
+    }
+
+    .editor-area {
+      position: relative;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      background: rgba(12, 19, 34, .78);
+    }
+    .editor-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 49px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .crumbs {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--dim);
+      font-size: 11px;
+    }
+    .crumbs strong { color: var(--muted); font-weight: 600; }
+    .editor-actions { display: flex; align-items: center; gap: 4px; }
+    .editor-tabs {
+      display: flex;
+      height: 39px;
+      padding: 0 9px;
+      border-bottom: 1px solid var(--border);
+    }
+    .editor-tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 126px;
+      padding: 0 14px;
+      border-right: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .editor-tab.active {
+      color: var(--text);
+      background: rgba(105, 135, 255, .08);
+      box-shadow: inset 0 -2px var(--blue);
+    }
+    .modified-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--amber); }
+    .code {
+      flex: 1;
+      min-height: 0;
+      padding: 17px 0 30px;
+      overflow: auto;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.9;
+    }
+    .code-line {
+      display: grid;
+      grid-template-columns: 51px minmax(max-content, 1fr);
+      min-width: max-content;
+      padding-right: 30px;
+    }
+    .code-line:hover { background: rgba(255,255,255,.035); }
+    .line-no {
+      padding-right: 17px;
+      color: #39465d;
+      text-align: right;
+      user-select: none;
+    }
+    .code-line.active { background: rgba(98, 130, 255, .095); }
+    .code-line.active .line-no { color: var(--blue); }
+    .code-content { white-space: pre; color: #b9c7dc; }
+    .kw { color: #a995ff; }
+    .fn { color: #73d9ec; }
+    .str { color: #f1c477; }
+    .comment { color: #566781; }
+    .tag { color: #e686ad; }
+    .attr { color: #8fd7b7; }
+    .value { color: #c3a9ff; }
+    .editor-footer {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: flex;
+      justify-content: space-between;
+      padding: 9px 17px;
+      color: var(--dim);
+      background: rgba(13, 20, 36, .93);
+      border-top: 1px solid var(--border);
+      font-size: 10px;
+    }
+    .editor-footer span { margin-left: 15px; }
+
+    .inspector {
+      grid-column: 4;
+      grid-row: 2 / 4;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--border);
+      background: rgba(12, 19, 34, .76);
+    }
+    .inspector-tabs {
+      display: flex;
+      height: 50px;
+      padding: 0 13px;
+      border-bottom: 1px solid var(--border);
+    }
+    .inspector-tab {
+      position: relative;
+      display: flex;
+      align-items: center;
+      margin-right: 20px;
+      color: var(--dim);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .inspector-tab.active { color: var(--text); }
+    .inspector-tab.active::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      bottom: -1px;
+      left: 0;
+      height: 2px;
+      border-radius: 2px 2px 0 0;
+      background: var(--cyan);
+    }
+    .inspector-body {
+      min-height: 0;
+      padding: 18px 17px;
+      overflow: auto;
+    }
+    .inspector-body::-webkit-scrollbar { width: 5px; }
+    .inspector-body::-webkit-scrollbar-thumb { background: rgba(158, 177, 211, .2); border-radius: 10px; }
+    .quick-card {
+      padding: 15px;
+      border: 1px solid rgba(107, 140, 255, .2);
+      border-radius: 10px;
+      background: linear-gradient(145deg, rgba(83, 111, 221, .16), rgba(30, 47, 88, .11));
+    }
+    .quick-card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .quick-card h3 { margin: 0 0 6px; font-size: 13px; }
+    .quick-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .shortcut {
+      display: inline-flex;
+      align-items: center;
+      height: 20px;
+      padding: 0 6px;
+      border: 1px solid var(--border-strong);
+      border-radius: 5px;
+      color: var(--dim);
+      background: rgba(0,0,0,.16);
+      font-family: monospace;
+      font-size: 10px;
+    }
+    .section-label {
+      display: flex;
+      justify-content: space-between;
+      margin: 20px 0 10px;
+      color: var(--dim);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .section-label button { color: var(--blue); background: none; font-size: 10px; }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .metric {
+      padding: 11px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: rgba(255,255,255,.02);
+    }
+    .metric strong { display: block; margin-bottom: 5px; font-size: 17px; letter-spacing: -.03em; }
+    .metric span { color: var(--dim); font-size: 10px; }
+    .metric strong.green { color: var(--green); }
+    .metric strong.purple { color: var(--purple); }
+    .activity-list { display: grid; gap: 12px; }
+    .activity {
+      display: grid;
+      grid-template-columns: 25px 1fr auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .activity-icon {
+      display: grid;
+      place-items: center;
+      width: 25px;
+      height: 25px;
+      border-radius: 7px;
+      color: var(--cyan);
+      background: rgba(85, 216, 229, .1);
+    }
+    .activity p { margin: 0; color: var(--muted); font-size: 11px; }
+    .activity p strong { color: var(--text); font-weight: 600; }
+    .activity time { color: var(--dim); font-size: 10px; }
+    .cron-list { display: grid; gap: 8px; }
+    .cron-item {
+      display: grid;
+      grid-template-columns: 26px 1fr auto;
+      gap: 9px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(255,255,255,.018);
+    }
+    .cron-icon {
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      color: var(--amber);
+      background: rgba(246, 199, 106, .1);
+    }
+    .cron-title { color: var(--text); font-size: 11px; font-weight: 600; }
+    .cron-meta { margin-top: 3px; color: var(--dim); font-size: 10px; }
+    .toggle {
+      position: relative;
+      width: 29px;
+      height: 17px;
+      padding: 0;
+      border-radius: 20px;
+      background: #26344d;
+      transition: .2s;
+    }
+    .toggle::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #8a98ad;
+      transition: .2s;
+    }
+    .toggle.on { background: rgba(90, 217, 160, .5); }
+    .toggle.on::after { left: 15px; background: #b7ffe0; box-shadow: 0 0 8px var(--green); }
+
+    .bottom-panel {
+      grid-column: 3 / 5;
+      grid-row: 3;
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      background: #0b1323;
+      border-top: 1px solid var(--border);
+    }
+    .bottom-tabs {
+      display: flex;
+      align-items: center;
+      min-height: 43px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .bottom-tab {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      height: 43px;
+      margin-right: 22px;
+      color: var(--dim);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .bottom-tab.active { color: var(--text); box-shadow: inset 0 -2px var(--blue); }
+    .tab-count {
+      display: grid;
+      place-items: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 10px;
+      color: #cbd7ff;
+      background: rgba(108, 140, 255, .18);
+      font-size: 9px;
+    }
+    .bottom-content {
+      min-height: 0;
+      flex: 1;
+      padding: 15px 19px;
+      overflow: auto;
+    }
+    .bottom-content::-webkit-scrollbar { width: 5px; }
+    .bottom-content::-webkit-scrollbar-thumb { background: rgba(158, 177, 211, .2); border-radius: 10px; }
+    .terminal-line {
+      display: flex;
+      gap: 9px;
+      margin-bottom: 8px;
+      color: #a3b4cd;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11px;
+    }
+    .terminal-line .prompt { color: var(--green); }
+    .terminal-line .command { color: var(--text); }
+    .terminal-line .output { color: var(--muted); }
+    .terminal-input {
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      padding-top: 4px;
+      color: var(--green);
+      font-family: monospace;
+      font-size: 11px;
+    }
+    .terminal-input input {
+      width: 100%;
+      border: 0;
+      outline: none;
+      color: var(--text);
+      background: transparent;
+      font-family: inherit;
+      font-size: inherit;
+    }
+    .ports-view, .database-view, .workflow-view { display: none; }
+    .ports-view.visible, .database-view.visible, .workflow-view.visible { display: block; }
+    .service-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .service-row:last-child { border-bottom: 0; }
+    .service-name { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+    .service-name .dot { color: var(--green); }
+    .service-port { color: var(--cyan); font-family: monospace; font-size: 11px; }
+    .empty-state { padding: 16px 0; color: var(--muted); font-size: 11px; }
+
+    .status-bar {
+      grid-column: 2 / -1;
+      grid-row: 4;
+      display: flex;
+      align-items: center;
+      gap: 17px;
+      padding: 0 16px;
+      color: var(--dim);
+      background: #101a2c;
+      border-top: 1px solid var(--border);
+      font-size: 10px;
+    }
+    .status-bar .right { display: flex; gap: 17px; margin-left: auto; }
+    .status-bar strong { color: var(--muted); font-weight: 600; }
+    .status-bar .ok { color: var(--green); }
+
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 48px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      max-width: 280px;
+      padding: 12px 14px;
+      border: 1px solid rgba(90, 217, 160, .3);
+      border-radius: 10px;
+      color: #d6ffec;
+      background: #112b2a;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: .25s ease;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: none;
+      place-items: center;
+      background: rgba(3, 7, 14, .7);
+      backdrop-filter: blur(8px);
+    }
+    .modal-backdrop.open { display: grid; }
+    .modal {
+      width: 450px;
+      padding: 22px;
+      border: 1px solid var(--border-strong);
+      border-radius: 14px;
+      background: #111b2e;
+      box-shadow: 0 25px 80px rgba(0,0,0,.45);
+    }
+    .modal-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; }
+    .modal h2 { margin: 0 0 5px; font-size: 17px; }
+    .modal p { margin: 0; color: var(--muted); font-size: 11px; }
+    .form-grid { display: grid; gap: 13px; }
+    .form-field label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; font-weight: 600; }
+    .form-field input, .form-field select {
+      width: 100%;
+      height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--border-strong);
+      border-radius: 7px;
+      outline: none;
+      color: var(--text);
+      background: #0b1323;
+      font-size: 12px;
+    }
+    .form-field input:focus, .form-field select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(108,140,255,.12); }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+    @media (max-width: 1180px) {
+      body { min-width: 900px; }
+      .app-shell { grid-template-columns: 58px 190px minmax(450px, 1fr) 280px; }
+      .top-actions .top-button span { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="icon-rail">
+      <div class="brand-mark" aria-label="PremDev">P<span style="color:#79e6eb">·</span></div>
+      <nav class="rail-nav" aria-label="Navigasi utama">
+        <button class="rail-button active" title="Workspace" data-toast="Workspace aktif">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 5.8A1.8 1.8 0 0 1 5.8 4h4.6a1.8 1.8 0 0 1 1.8 1.8v4.6a1.8 1.8 0 0 1-1.8 1.8H5.8A1.8 1.8 0 0 1 4 10.4V5.8Z"/><path d="M12 13.6a1.8 1.8 0 0 1 1.8-1.8h4.4a1.8 1.8 0 0 1 1.8 1.8v4.6a1.8 1.8 0 0 1-1.8 1.8h-4.4a1.8 1.8 0 0 1-1.8-1.8v-4.6Z"/></svg>
+        </button>
+        <button class="rail-button" title="Files" data-toast="File Explorer">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3.8 6.7A1.7 1.7 0 0 1 5.5 5h4l1.6 1.8h7.4a1.7 1.7 0 0 1 1.7 1.7v8.8a1.7 1.7 0 0 1-1.7 1.7H5.5a1.7 1.7 0 0 1-1.7-1.7V6.7Z"/></svg>
+        </button>
+        <button class="rail-button" title="Search" data-toast="Pencarian global dibuka">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.8" cy="10.8" r="6.2"/><path d="m16 16 4.2 4.2"/></svg>
+        </button>
+        <button class="rail-button" title="Source Control" data-toast="Source Control">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="7" cy="6" r="2"/><circle cx="17" cy="18" r="2"/><path d="M7 8v5a5 5 0 0 0 5 5h3"/><path d="M17 16v-5a5 5 0 0 0-5-5H9"/></svg>
+        </button>
+        <button class="rail-button" title="Cron Jobs" data-toast="Cron Jobs workspace">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.7V12l3 1.8"/><path d="M8.6 3.8 6.8 2.5M15.4 3.8l1.8-1.3"/></svg>
+        </button>
+      </nav>
+      <div class="rail-spacer"></div>
+      <button class="rail-button" title="Settings" data-toast="Settings">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19.1 13.3 1.2.9-1.5 2.6-1.4-.6a7.4 7.4 0 0 1-1.8 1.1l-.2 1.5h-3l-.2-1.5a7.4 7.4 0 0 1-1.8-1.1l-1.4.6-1.5-2.6 1.2-.9a7.1 7.1 0 0 1 0-2.1l-1.2-.9 1.5-2.6 1.4.6a7.4 7.4 0 0 1 1.8-1.1l.2-1.5h3l.2 1.5a7.4 7.4 0 0 1 1.8 1.1l1.4-.6 1.5 2.6-1.2.9a7.1 7.1 0 0 1 0 2.1Z"/></svg>
+      </button>
+      <div class="avatar" title="Akun">AD</div>
+    </aside>
+
+    <header class="workspace-bar">
+      <div class="workspace-switcher">
+        <div class="workspace-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 5h14v14H5z"/><path d="m8 9 3 3-3 3M13.5 15H17"/></svg>
+        </div>
+        <div>
+          <div class="eyebrow">Workspace aktif</div>
+          <div class="workspace-name">premdev-console <span style="color:var(--dim)">⌄</span></div>
+        </div>
+      </div>
+      <div class="status-pill"><span class="dot"></span> Running <span style="color:var(--dim)">·</span> 32 MB</div>
+      <div class="top-actions">
+        <button class="top-button" data-toast="Command palette dibuka"><span style="font-family:monospace">⌘ K</span></button>
+        <button class="top-button" data-toast="Preview dibuka">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.8A1.8 1.8 0 0 1 5.8 4h12.4A1.8 1.8 0 0 1 20 5.8v12.4a1.8 1.8 0 0 1-1.8 1.8H5.8A1.8 1.8 0 0 1 4 18.2V5.8Z"/><path d="m10 8 5 4-5 4V8Z"/></svg><span>Preview</span>
+        </button>
+        <button class="primary-button" id="runButton">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 9 6-9 6V6Z"/></svg><span>Run</span>
+        </button>
+        <button class="top-button" data-toast="Menu akun dibuka">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3"/><path d="M5.5 19.2a6.5 6.5 0 0 1 13 0"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <aside class="explorer">
+      <div class="panel-heading">
+        <h2>Explorer</h2>
+        <div style="display:flex;gap:2px">
+          <button class="small-icon" title="File baru" data-toast="File baru"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button class="small-icon" title="Refresh" data-toast="Explorer diperbarui"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 11a8 8 0 0 0-14.8-4L4 9"/><path d="M4 4v5h5M4 13a8 8 0 0 0 14.8 4L20 15"/><path d="M20 20v-5h-5"/></svg></button>
+        </div>
+      </div>
+      <div class="project-badge"><span class="folder-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3.7 6.8A1.8 1.8 0 0 1 5.5 5h4.1l1.7 1.8h7.2a1.8 1.8 0 0 1 1.8 1.8v8.6a1.8 1.8 0 0 1-1.8 1.8H5.5a1.8 1.8 0 0 1-1.8-1.8V6.8Z"/></svg></span> premdev-console</div>
+      <div class="tree">
+        <div class="tree-row"><span class="chevron">⌄</span><span class="folder-icon" style="color:var(--amber)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3.7 6.8A1.8 1.8 0 0 1 5.5 5h4.1l1.7 1.8h7.2a1.8 1.8 0 0 1 1.8 1.8v8.6a1.8 1.8 0 0 1-1.8 1.8H5.5a1.8 1.8 0 0 1-1.8-1.8V6.8Z"/></svg></span> src</div>
+        <div class="tree-row indent-1 selected" data-file="src/app.ts"><span class="file-type">TS</span><span>app.ts</span><span style="margin-left:auto;color:var(--amber);font-size:10px">M</span></div>
+        <div class="tree-row indent-1" data-file="src/routes.ts"><span class="file-type">TS</span><span>routes.ts</span></div>
+        <div class="tree-row indent-1" data-file="src/worker.ts"><span class="file-type">TS</span><span>worker.ts</span></div>
+        <div class="tree-row"><span class="chevron">⌄</span><span class="folder-icon" style="color:var(--amber)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3.7 6.8A1.8 1.8 0 0 1 5.5 5h4.1l1.7 1.8h7.2a1.8 1.8 0 0 1 1.8 1.8v8.6a1.8 1.8 0 0 1-1.8 1.8H5.5a1.8 1.8 0 0 1-1.8-1.8V6.8Z"/></svg></span> config</div>
+        <div class="tree-row indent-1" data-file="config/premdev.json"><span class="file-type">JS</span><span>premdev.json</span></div>
+        <div class="tree-row"><span class="chevron">›</span><span class="folder-icon" style="color:var(--amber)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3.7 6.8A1.8 1.8 0 0 1 5.5 5h4.1l1.7 1.8h7.2a1.8 1.8 0 0 1 1.8 1.8v8.6a1.8 1.8 0 0 1-1.8 1.8H5.5a1.8 1.8 0 0 1-1.8-1.8V6.8Z"/></svg></span> public</div>
+        <div class="tree-row"><span class="chevron">›</span><span class="folder-icon" style="color:var(--amber)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3.7 6.8A1.8 1.8 0 0 1 5.5 5h4.1l1.7 1.8h7.2a1.8 1.8 0 0 1 1.8 1.8v8.6a1.8 1.8 0 0 1-1.8 1.8H5.5a1.8 1.8 0 0 1-1.8-1.8V6.8Z"/></svg></span> tests</div>
+        <div class="tree-row"><span class="chevron"></span><span class="file-type">JS</span><span>package.json</span></div>
+        <div class="tree-row"><span class="chevron"></span><span class="file-type">MD</span><span>README.md</span></div>
+        <div class="tree-row"><span class="chevron"></span><span class="file-type">CFG</span><span class="muted-file">.premdev</span></div>
+        <div class="tree-row"><span class="chevron"></span><span class="file-type">GIT</span><span class="muted-file">.gitignore</span></div>
+      </div>
+      <div class="explorer-footer">
+        <div class="resource-line"><span>Storage</span><strong>1.8 GB / 10 GB</strong></div>
+        <div class="progress"><span style="width:18%"></span></div>
+        <div class="resource-line" style="margin:13px 0 0"><span>Last saved</span><strong>Just now</strong></div>
+      </div>
+    </aside>
+
+    <main class="editor-area">
+      <div class="editor-toolbar">
+        <div class="crumbs"><span>src</span><span>/</span><strong>app.ts</strong><span style="color:var(--amber)">●</span></div>
+        <div class="editor-actions">
+          <button class="small-icon" title="Format" data-toast="File diformat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 4h12M6 8h8M6 12h12M6 16h8M6 20h12"/></svg></button>
+          <button class="small-icon" title="Split editor" data-toast="Editor split dibuka"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 5.8A1.8 1.8 0 0 1 5.8 4h12.4A1.8 1.8 0 0 1 20 5.8v12.4a1.8 1.8 0 0 1-1.8 1.8H5.8A1.8 1.8 0 0 1 4 18.2V5.8Z"/><path d="M12 4v16"/></svg></button>
+          <button class="small-icon" title="More" data-toast="Menu file dibuka"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></button>
+        </div>
+      </div>
+      <div class="editor-tabs"><div class="editor-tab active"><span style="color:#75c8e5">TS</span> app.ts <span class="modified-dot"></span></div><div class="editor-tab" style="color:var(--dim)">routes.ts</div></div>
+      <div class="code" aria-label="Code editor">
+        <div class="code-line"><span class="line-no">1</span><span class="code-content"><span class="kw">import</span> { <span class="fn">createServer</span> } <span class="kw">from</span> <span class="str">'node:http'</span>;</span></div>
+        <div class="code-line"><span class="line-no">2</span><span class="code-content"><span class="kw">import</span> { <span class="fn">loadConfig</span> } <span class="kw">from</span> <span class="str">'./config.js'</span>;</span></div>
+        <div class="code-line"><span class="line-no">3</span><span class="code-content"> </span></div>
+        <div class="code-line"><span class="line-no">4</span><span class="code-content"><span class="kw">const</span> config = <span class="fn">loadConfig</span>();</span></div>
+        <div class="code-line active"><span class="line-no">5</span><span class="code-content"><span class="kw">const</span> server = <span class="fn">createServer</span>(<span class="kw">async</span> (request, response) =&gt; {</span></div>
+        <div class="code-line"><span class="line-no">6</span><span class="code-content">  <span class="kw">if</span> (request.url === <span class="str">'/health'</span>) {</span></div>
+        <div class="code-line"><span class="line-no">7</span><span class="code-content">    response.<span class="fn">writeHead</span>(<span class="value">200</span>, { <span class="str">'content-type'</span>: <span class="str">'application/json'</span> });</span></div>
+        <div class="code-line"><span class="line-no">8</span><span class="code-content">    response.<span class="fn">end</span>(JSON.<span class="fn">stringify</span>({ ok: <span class="kw">true</span> }));</span></div>
+        <div class="code-line"><span class="line-no">9</span><span class="code-content">    <span class="kw">return</span>;</span></div>
+        <div class="code-line"><span class="line-no">10</span><span class="code-content">  }</span></div>
+        <div class="code-line"><span class="line-no">11</span><span class="code-content"> </span></div>
+        <div class="code-line"><span class="line-no">12</span><span class="code-content">  <span class="kw">try</span> {</span></div>
+        <div class="code-line"><span class="line-no">13</span><span class="code-content">    <span class="kw">const</span> result = <span class="kw">await</span> <span class="fn">runWorkspaceTask</span>(request);</span></div>
+        <div class="code-line"><span class="line-no">14</span><span class="code-content">    response.<span class="fn">end</span>(JSON.<span class="fn">stringify</span>(result));</span></div>
+        <div class="code-line"><span class="line-no">15</span><span class="code-content">  } <span class="kw">catch</span> (error) {</span></div>
+        <div class="code-line"><span class="line-no">16</span><span class="code-content">    response.<span class="fn">writeHead</span>(<span class="value">500</span>);</span></div>
+        <div class="code-line"><span class="line-no">17</span><span class="code-content">    response.<span class="fn">end</span>(JSON.<span class="fn">stringify</span>({ error: error.message }));</span></div>
+        <div class="code-line"><span class="line-no">18</span><span class="code-content">  }</span></div>
+        <div class="code-line"><span class="line-no">19</span><span class="code-content">});</span></div>
+        <div class="code-line"><span class="line-no">20</span><span class="code-content"> </span></div>
+        <div class="code-line"><span class="line-no">21</span><span class="code-content">server.<span class="fn">listen</span>(config.port, () =&gt; {</span></div>
+        <div class="code-line"><span class="line-no">22</span><span class="code-content">  console.<span class="fn">log</span>(<span class="str">`Ready on port ${config.port}`</span>);</span></div>
+        <div class="code-line"><span class="line-no">23</span><span class="code-content">});</span></div>
+        <div class="code-line"><span class="line-no">24</span><span class="code-content"> </span></div>
+        <div class="code-line"><span class="line-no">25</span><span class="code-content"><span class="comment">// Cron runner stays isolated inside this workspace</span></span></div>
+      </div>
+      <div class="editor-footer"><div>Ln 5, Col 43 <span>Spaces: 2</span><span>UTF-8</span></div><div><span>TypeScript</span><span class="ok">No issues</span></div></div>
+    </main>
+
+    <aside class="inspector">
+      <div class="inspector-tabs"><button class="inspector-tab active">Overview</button><button class="inspector-tab">AI Assistant</button></div>
+      <div class="inspector-body">
+        <div class="quick-card">
+          <div class="quick-card-head">
+            <div><h3>Selamat datang kembali</h3><p>Workspace kamu siap dipakai. Semua kontrol penting ada di satu tempat.</p></div>
+            <span class="shortcut">⌘ /</span>
+          </div>
+          <button class="ghost-button" style="width:100%;margin-top:13px;height:30px" data-toast="AI Assistant siap membantu">Tanya AI tentang project ini <span style="margin-left:auto">→</span></button>
+        </div>
+        <div class="section-label"><span>Workspace health</span><button data-toast="Resource Monitor dibuka">View details</button></div>
+        <div class="metric-grid">
+          <div class="metric"><strong class="green">98%</strong><span>Uptime process</span></div>
+          <div class="metric"><strong class="purple">42 ms</strong><span>Preview latency</span></div>
+          <div class="metric"><strong>1.8 GB</strong><span>Storage used</span></div>
+          <div class="metric"><strong>4 / 6</strong><span>Ports available</span></div>
+        </div>
+        <div class="section-label"><span>Recent activity</span><button data-toast="Activity lengkap dibuka">See all</button></div>
+        <div class="activity-list">
+          <div class="activity"><div class="activity-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 12 4 4L19 6"/></svg></div><p><strong>Deploy completed</strong><br>Production preview is ready</p><time>2m</time></div>
+          <div class="activity"><div class="activity-icon" style="color:var(--purple);background:rgba(185,145,255,.1)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4v16M4 12h16"/></svg></div><p><strong>AI updated app.ts</strong><br>Added health endpoint</p><time>16m</time></div>
+          <div class="activity"><div class="activity-icon" style="color:var(--amber);background:rgba(246,199,106,.1)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 1.5"/></svg></div><p><strong>Cron job succeeded</strong><br>sync-workspace • 3.2s</p><time>32m</time></div>
+        </div>
+        <div class="section-label"><span>Cron Jobs</span><button id="newCronButton">+ New job</button></div>
+        <div class="cron-list">
+          <div class="cron-item"><div class="cron-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 1.8"/></svg></div><div><div class="cron-title">sync-workspace</div><div class="cron-meta">Every 15 min · next in 8 min</div></div><button class="toggle on" aria-label="Aktifkan sync-workspace"></button></div>
+          <div class="cron-item"><div class="cron-icon" style="color:var(--dim);background:rgba(120,140,175,.09)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M8 8l8 8M16 8l-8 8"/></svg></div><div><div class="cron-title">daily-report</div><div class="cron-meta">Disabled · last run yesterday</div></div><button class="toggle" aria-label="Aktifkan daily-report"></button></div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="bottom-panel">
+      <div class="bottom-tabs">
+        <button class="bottom-tab active" data-panel="terminal">Terminal <span class="tab-count">1</span></button>
+        <button class="bottom-tab" data-panel="workflows">Workflows</button>
+        <button class="bottom-tab" data-panel="ports">Ports <span class="tab-count">2</span></button>
+        <button class="bottom-tab" data-panel="database">Database</button>
+        <button class="small-icon" style="margin-left:auto" data-toast="Panel ditutup" title="Tutup panel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="bottom-content">
+        <div id="terminal" class="panel-view">
+          <div class="terminal-line"><span class="prompt">workspace@premdev</span><span>:</span><span style="color:var(--blue)">~/console</span><span>$</span><span class="command">npm run dev</span></div>
+          <div class="terminal-line"><span class="output">ready &nbsp; preview server listening on</span><span style="color:var(--cyan)"> http://localhost:3000</span></div>
+          <div class="terminal-line"><span class="output">info &nbsp;&nbsp; watching 14 files for changes...</span></div>
+          <div class="terminal-input"><span>›</span><input aria-label="Terminal command" placeholder="Type a command and press Enter" /></div>
+        </div>
+        <div id="workflows" class="workflow-view panel-view">
+          <div class="service-row"><div class="service-name"><span class="dot"></span><span>dev-server</span><span style="color:var(--dim)">running for 18m</span></div><span class="service-port">:3000</span></div>
+          <div class="service-row"><div class="service-name"><span class="dot" style="color:var(--amber)"></span><span>cron-runner</span><span style="color:var(--dim)">idle · next tick 12s</span></div><span class="service-port">managed</span></div>
+        </div>
+        <div id="ports" class="ports-view panel-view">
+          <div class="service-row"><div class="service-name"><span class="dot"></span><span>Preview</span></div><span class="service-port">3000 · public</span></div>
+          <div class="service-row"><div class="service-name"><span class="dot" style="color:var(--amber)"></span><span>Database</span></div><span class="service-port">5432 · private</span></div>
+        </div>
+        <div id="database" class="database-view panel-view"><div class="empty-state">Database workspace terhubung. Pilih schema dari panel Database untuk mulai menjelajah tabel.</div></div>
+      </div>
+    </section>
+
+    <footer class="status-bar">
+      <span class="ok"><span class="dot" style="display:inline-block;margin-right:6px"></span>Connected</span>
+      <span>main*</span>
+      <span>0 errors</span>
+      <div class="right"><span>Node 20.12</span><span>Workspace ready</span><strong>PremDev</strong></div>
+    </footer>
+  </div>
+
+  <div class="toast" id="toast"><span class="dot" style="color:var(--green)"></span><span id="toastText">Aksi berhasil</span></div>
+
+  <div class="modal-backdrop" id="cronModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cronTitle">
+      <div class="modal-head">
+        <div><h2 id="cronTitle">Buat Cron Job</h2><p>Jalankan command secara aman di workspace ini.</p></div>
+        <button class="small-icon" id="closeModal" aria-label="Tutup"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="form-grid">
+        <div class="form-field"><label>Nama job</label><input value="sync-workspace" /></div>
+        <div class="form-field"><label>Command</label><input value="npm run sync" /></div>
+        <div class="form-field"><label>Jadwal cron</label><input value="*/15 * * * *" /></div>
+        <div class="form-field"><label>Timezone</label><select><option>Asia/Jakarta (UTC+07:00)</option><option>UTC</option><option>Asia/Singapore (UTC+08:00)</option></select></div>
+      </div>
+      <div class="modal-actions"><button class="ghost-button" id="cancelModal">Cancel</button><button class="primary-button" id="saveCron">Save job</button></div>
+    </div>
+  </div>
+
+  <script>
+    const toast = (message) => {
+      const el = document.getElementById('toast');
+      document.getElementById('toastText').textContent = message;
+      el.classList.add('show');
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+    };
+
+    document.querySelectorAll('[data-toast]').forEach((button) => {
+      button.addEventListener('click', () => toast(button.dataset.toast));
+    });
+
+    document.querySelectorAll('.rail-button').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.rail-button').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+      });
+    });
+
+    document.querySelectorAll('.tree-row[data-file]').forEach((row) => {
+      row.addEventListener('click', () => {
+        document.querySelectorAll('.tree-row').forEach((item) => item.classList.remove('selected'));
+        row.classList.add('selected');
+        const file = row.dataset.file.split('/').pop();
+        document.querySelector('.crumbs strong').textContent = file;
+        document.querySelector('.editor-tab.active').childNodes[2].textContent = ' ' + file + ' ';
+        toast(file + ' dibuka di editor');
+      });
+    });
+
+    document.querySelectorAll('.toggle').forEach((toggle) => {
+      toggle.addEventListener('click', () => {
+        toggle.classList.toggle('on');
+        toast(toggle.classList.contains('on') ? 'Cron job diaktifkan' : 'Cron job dinonaktifkan');
+      });
+    });
+
+    document.querySelectorAll('.bottom-tab[data-panel]').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.bottom-tab').forEach((item) => item.classList.remove('active'));
+        tab.classList.add('active');
+        document.querySelectorAll('.panel-view').forEach((panel) => panel.classList.remove('visible'));
+        document.getElementById(tab.dataset.panel).classList.add('visible');
+      });
+    });
+
+    const runButton = document.getElementById('runButton');
+    let running = true;
+    runButton.addEventListener('click', () => {
+      running = !running;
+      runButton.innerHTML = running
+        ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 9 6-9 6V6Z"/></svg><span>Run</span>'
+        : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6v12M16 6v12"/></svg><span>Stop</span>';
+      toast(running ? 'Workspace dijalankan kembali' : 'Workspace dihentikan');
+    });
+
+    const modal = document.getElementById('cronModal');
+    const openModal = () => modal.classList.add('open');
+    const closeModal = () => modal.classList.remove('open');
+    document.getElementById('newCronButton').addEventListener('click', openModal);
+    document.getElementById('closeModal').addEventListener('click', closeModal);
+    document.getElementById('cancelModal').addEventListener('click', closeModal);
+    document.getElementById('saveCron').addEventListener('click', () => {
+      closeModal();
+      toast('Cron job berhasil disimpan');
+    });
+    modal.addEventListener('click', (event) => { if (event.target === modal) closeModal(); });
+
+    document.querySelector('.terminal-input input').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && event.target.value.trim()) {
+        toast('Command dikirim ke workspace');
+        event.target.value = '';
+      }
+    });
+  </script>
+</body>
+</html>

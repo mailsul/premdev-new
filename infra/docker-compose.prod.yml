@@ -19,6 +19,7 @@ volumes:
   caddy_config:
   mysql_data:
   pma_sessions:
+  9router_data:
 
 services:
   caddy:
@@ -99,6 +100,25 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+
+  9router:
+    image: decolua/9router:latest
+    container_name: premdev-9router
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [premdev_net]
+    # Bind ONLY to loopback — Caddy reaches it via Docker network (9router:20128).
+    # Never expose 0.0.0.0:20128 on a public VPS — anyone could use your AI keys.
+    ports:
+      - "127.0.0.1:20128:20128"
+    volumes:
+      - 9router_data:/app/data
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      # Initial dashboard password — same as your PremDev admin password.
+      # Change it inside the 9Router dashboard after first login.
+      INITIAL_PASSWORD: ${ADMIN_PASSWORD}
 
   app:
     image: ${GHCR_IMAGE:-premdev/app:local}

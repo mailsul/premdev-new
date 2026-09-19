@@ -65,6 +65,12 @@ export const config = {
   // SnifoxAI Gateway — OpenAI-compatible aggregator at https://core.snifoxai.com/v1
   // Key format: snfx-... (see https://snifoxai.com/docs).
   SNIFOX_API_KEY: env("SNIFOX_API_KEY", ""),
+  // 9Router AI Gateway — self-hosted OpenAI-compatible proxy at router.${PRIMARY_DOMAIN}
+  // The dashboard API key is shown in Settings → API Key inside the 9Router UI.
+  // Default endpoint: http://9router:20128/v1  (internal Docker network — no auth needed
+  // if you want to skip the API key; set NINEROUTER_API_KEY to the value from the UI).
+  NINEROUTER_API_KEY: env("NINEROUTER_API_KEY", ""),
+  NINEROUTER_URL: env("NINEROUTER_URL", "http://9router:20128"),
 
   // Ollama — local LLM inference, no API key required.
   // Default: http://localhost:11434. Change if Ollama runs on a different host/port.
@@ -82,6 +88,12 @@ export const config = {
   // many minutes of no terminal input. 0 disables. Run containers (`pw_*`)
   // are NEVER reaped here — they pause/resume via IDLE_PAUSE_MINUTES instead.
   IDLE_SHELL_TIMEOUT_MIN: Number(env("IDLE_SHELL_TIMEOUT_MIN", "30")),
+
+  // Central workspace scheduler. Jobs run in the existing pw_<workspace>
+  // application container; they never use the browser terminal container.
+  CRON_POLL_INTERVAL_MS: Number(env("CRON_POLL_INTERVAL_MS", "15000")),
+  CRON_JOB_TIMEOUT_MS: Number(env("CRON_JOB_TIMEOUT_MS", "120000")),
+  CRON_JOB_RETENTION: Number(env("CRON_JOB_RETENTION", "100")),
 
   // Telegram admin notifications (Fase 2). Both must be set or the lib
   // becomes a silent no-op (safe to leave empty in dev / single-user installs).

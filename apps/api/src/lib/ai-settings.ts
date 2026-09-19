@@ -3,9 +3,9 @@ import { nanoid } from "nanoid";
 import { db } from "./db.js";
 import { config } from "./config.js";
 
-type Provider = "openai" | "anthropic" | "google" | "openrouter" | "groq" | "konektika" | "snifox";
+type Provider = "openai" | "anthropic" | "google" | "openrouter" | "groq" | "konektika" | "snifox" | "9router";
 
-const PROVIDERS: Provider[] = ["openai", "anthropic", "google", "openrouter", "groq", "konektika", "snifox"];
+const PROVIDERS: Provider[] = ["openai", "anthropic", "google", "openrouter", "groq", "konektika", "snifox", "9router"];
 
 const WEAK_JWT_SECRETS = new Set([
   "dev-secret-change-me-in-production",
@@ -67,6 +67,7 @@ function envFallback(provider: Provider): string {
     case "groq": return config.GROQ_API_KEY;
     case "konektika": return config.KONEKTIKA_API_KEY;
     case "snifox": return config.SNIFOX_API_KEY;
+    case "9router": return config.NINEROUTER_API_KEY;
   }
 }
 

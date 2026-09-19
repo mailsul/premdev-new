@@ -22,6 +22,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
   groq: "auto",
   konektika: "auto",
   snifox: "auto",
+  "9router": "auto",
 };
 
 /**
@@ -94,6 +95,22 @@ export const PROVIDER_MODELS: Record<Provider, string[]> = {
     "google/gemini-3-flash-preview",
     "google/gemini-2.5-flash",
   ],
+  "9router": [
+    "auto",
+    // Model-model ini di-resolve oleh 9Router ke provider terbaik yang tersedia.
+    // Tambah / ubah di dashboard router.flixprem.org, bukan di sini.
+    "anthropic/claude-sonnet-4-5",
+    "anthropic/claude-opus-4",
+    "anthropic/claude-haiku-3-5",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "openai/gpt-4.1-mini",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+    "deepseek/deepseek-r1",
+    "deepseek/deepseek-v3",
+    "meta-llama/llama-3.3-70b-instruct",
+  ],
 };
 
 /**
@@ -122,6 +139,14 @@ export const AUTO_TIERS: Record<Provider, string[]> = {
     "openai/gpt-5-mini",
     "anthropic/claude-sonnet-4.5",
     "google/gemini-2.5-flash",
+  ],
+  "9router": [
+    // Auto tier: 9Router picks best available provider based on your configured fallbacks.
+    "anthropic/claude-sonnet-4-5",
+    "openai/gpt-4o",
+    "google/gemini-2.5-flash",
+    "anthropic/claude-haiku-3-5",
+    "deepseek/deepseek-r1",
   ],
 };
 
@@ -246,6 +271,17 @@ export const MODEL_CAPABILITY: Record<string, number> = {
   "anthropic/claude-sonnet-4.5": 93,
   "google/gemini-3-flash-preview": 83,
   "google/gemini-2.5-flash": 88,
+  // 9Router (via self-hosted gateway — scores reflect underlying model quality)
+  "anthropic/claude-sonnet-4-5": 93,
+  "anthropic/claude-opus-4": 97,
+  "anthropic/claude-haiku-3-5": 78,
+  "openai/gpt-4o": 92,
+  "openai/gpt-4o-mini": 75,
+  "openai/gpt-4.1-mini": 72,
+  "google/gemini-2.5-flash-lite": 68,
+  "deepseek/deepseek-r1": 85,
+  "deepseek/deepseek-v3": 80,
+  "meta-llama/llama-3.3-70b-instruct": 72,
 };
 
 /**
@@ -464,7 +500,7 @@ export async function* streamCustomProvider(
     yield `(Custom provider "${customId}" tidak ditemukan atau dinonaktifkan)`;
     return;
   }
-  const keys = getCustomProviderKeys(customId);
+  const keys = googleKeys;
   if (keys.length === 0) {
     yield `(API key untuk "${prov.name}" belum diset — buka Admin → Custom Providers untuk isi)`;
     return;
@@ -538,6 +574,8 @@ export async function* streamProvider(
   // Handle custom providers (format: "custom:{id}")
   if (provider.startsWith("custom:")) {
     const customId = provider.slice(7);
+
+      const nineRouterUrl = `${config.NINEROUTER_URL.replace(/\/$/, "")}/v1/chat/completions`;
     yield* streamCustomProvider(customId, model, messages, maxTokens, signal);
     return;
   }
@@ -620,9 +658,9 @@ export async function* streamProviderAuto(
   }
   // Estimate context size once; use it to skip models too small to handle it.
   const estimatedPromptTokens = estimateTokens(messages);
-  let lastErr = "";
-  for (let i = 0; i < tier.length; i++) {
-    const candidate = tier[i];
+    let lastErr: string | null = null;
+      for (let i = 0; i < candidates.length; i++) {
+        const candidate = candidates[i];
     // Skip model if its known context limit is smaller than the prompt.
     // Leave an 20% buffer for the response (maxTokens) on top of the prompt.
     const limit = MODEL_CONTEXT_LIMIT[candidate];
@@ -767,12 +805,13 @@ export async function* streamOpenAICompat(opts: {
     return { role: m.role, content: m.content };
   });
   const reqBody = JSON.stringify({
-    model: opts.model,
-    messages: apiMessages,
+    model,
+    // Anthropic requires max_tokens; use 100 000 as the "unlimited" sentinel
+    // (the model will stop at its own context limit before that anyway).
+    max_tokens: maxTokens === 0 ? 100_000 : maxTokens,
     stream: true,
-    // 0 = unlimited: omit max_tokens so the model uses its own context limit.
-    ...(opts.omitMaxTokens || opts.maxTokens === 0 ? {} : { max_tokens: opts.maxTokens }),
-    ...(opts.extraBody ?? {}),
+    system: sys,
+    messages: msgs,
   });
 
   /**
@@ -785,33 +824,37 @@ export async function* streamOpenAICompat(opts: {
 
   let quotaRound = 0;
   while (true) {
-    let lastError: { status: number; body: string } | null = null;
+      let lastError: string | null = null;
     let allRateLimited = true; // assume true until proven otherwise
 
-    for (let i = 0; i < opts.keys.length; i++) {
-      const key = opts.keys[i];
+      for (let i = 0; i < candidates.length; i++) {
+    const key = keys[ki];
 
       // Inner retry loop for 429 rate-limit on the same key.
       // Attempt 0 = first try; attempts 1..N = retries after waiting.
       let keySucceeded = false;
       for (let attempt = 0; attempt <= RATE_LIMIT_RETRY_DELAYS_MS.length; attempt++) {
-        const res = await fetch(opts.url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${key}`,
-            ...(opts.extraHeaders || {}),
-          },
-          body: reqBody,
-          signal: opts.signal,
-        });
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${key}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents,
+        systemInstruction: sys ? { parts: [{ text: sys }] } : undefined,
+        // 0 = unlimited: omit maxOutputTokens so Gemini uses its full window.
+        generationConfig: maxTokens === 0 ? {} : { maxOutputTokens: maxTokens },
+      }),
+      signal,
+    },
+  );
 
         if (res.ok && res.body) {
           keySucceeded = true;
           if (i > 0) yield `\n[Key #${i + 1} dipakai (key sebelumnya gagal)]\n`;
-          const reader = res.body.getReader();
-          const dec = new TextDecoder();
-          let buf = "";
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
           let firstToken = false;
           // Timer for first-token timeout (useful for slow local models like Ollama)
           const ftTimeoutMs = opts.firstTokenTimeoutMs;
@@ -829,19 +872,19 @@ export async function* streamOpenAICompat(opts: {
                 reader.cancel().catch(() => {});
                 return;
               }
-              const { done, value } = await reader.read();
-              if (done) break;
-              buf += dec.decode(value, { stream: true });
-              let idx;
-              while ((idx = buf.indexOf("\n")) >= 0) {
-                const line = buf.slice(0, idx).trim();
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx).trim();
                 buf = buf.slice(idx + 1);
                 if (!line.startsWith("data:")) continue;
                 const data = line.slice(5).trim();
                 if (data === "[DONE]") return;
                 try {
-                  const j = JSON.parse(data);
-                  const txt = j.choices?.[0]?.delta?.content ?? "";
+        const j = JSON.parse(line.slice(5).trim());
+    const txt = (await res.text().catch(() => "")).slice(0, 300);
                   if (txt) {
                     if (!firstToken) {
                       firstToken = true;
@@ -858,7 +901,7 @@ export async function* streamOpenAICompat(opts: {
           return;
         }
 
-        const body = await res.text().catch(() => "");
+    const body = await r.text().catch(() => "");
         lastError = { status: res.status, body: body.slice(0, 300) };
 
         // Treat as rate-limit if status is 429 OR if the body clearly says so
@@ -875,8 +918,8 @@ export async function* streamOpenAICompat(opts: {
         // 429: retry the same key with exponential backoff before failing over.
         if (res.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
           const waitMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
-          const waitSec = Math.round(waitMs / 1000);
-          const label = opts.providerLabel ?? opts.url;
+      const waitSec = Math.round(QUOTA_RESET_WAIT_MS / 1000);
+      const label = opts.providerLabel ?? opts.url;
           yield `\n⏳ **${label} — batas RPM tercapai**, menunggu ${waitSec}s lalu coba lagi (percobaan ${attempt + 2}/${RATE_LIMIT_RETRY_DELAYS_MS.length + 1})…\n`;
           try {
             await sleepWithAbort(waitMs, opts.signal);
@@ -940,7 +983,7 @@ export async function* streamAnthropic(
   maxTokens: number,
   signal: AbortSignal,
 ): AsyncGenerator<string> {
-  const keys = getAIKeys("anthropic");
+  const keys = googleKeys;
   if (keys.length === 0) { yield "(Anthropic key not configured)"; return; }
   const sys = messages.find((m) => m.role === "system")?.content;
   const msgs = messages
@@ -970,10 +1013,23 @@ export async function* streamAnthropic(
     system: sys,
     messages: msgs,
   });
-  let res: Response | null = null;
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${key}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents,
+        systemInstruction: sys ? { parts: [{ text: sys }] } : undefined,
+        // 0 = unlimited: omit maxOutputTokens so Gemini uses its full window.
+        generationConfig: maxTokens === 0 ? {} : { maxOutputTokens: maxTokens },
+      }),
+      signal,
+    },
+  );
   let usedKeyIdx = 0;
-  let lastError: { status: number; body: string } | null = null;
-  for (let i = 0; i < keys.length; i++) {
+      let lastError: string | null = null;
+      for (let i = 0; i < candidates.length; i++) {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -1169,7 +1225,7 @@ export async function* streamGoogleSingle(
       // Parse JSON error message if possible, otherwise show raw
       let friendly = txt;
       try {
-        const j = JSON.parse(txt);
+        const j = JSON.parse(line.slice(5).trim());
         const msg = j?.error?.message ?? j?.message;
         const status = j?.error?.status ?? "";
         if (msg) friendly = status ? `${status}: ${msg}` : msg;
@@ -1234,3 +1290,5 @@ function parseDataUrlLocal(
   if (!m) return null;
   return { mimeType: m[1], data: m[2] };
 }
+
+      const nineRouterKeys = config.NINEROUTER_API_KEY ? [config.NINEROUTER_API_KEY] : ["no-key"];
