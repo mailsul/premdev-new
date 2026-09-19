@@ -31,7 +31,13 @@ DOMAIN="$(echo "$DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/^[. ]*//;s/[. ]*$
 
 CADDY_EXTRA_DIR="/opt/premdev/data/caddy/extra"
 SNIPPET="$CADDY_EXTRA_DIR/$DOMAIN.caddy"
-COMPOSE_FILE="/opt/premdev/docker-compose.yml"
+COMPOSE_FILE="${COMPOSE_FILE:-/opt/premdev/infra/docker-compose.prod.yml}"
+ENV_FILE="${ENV_FILE:-/opt/premdev/.env}"
+
+[[ -f "$COMPOSE_FILE" ]] || {
+  echo "❌  Compose file not found: $COMPOSE_FILE"
+  exit 1
+}
 
 # Load CF_API_TOKEN from .env so we can embed it in the snippet
 if [[ -f /opt/premdev/.env ]]; then
@@ -88,7 +94,8 @@ cat > "$SNIPPET" <<CADDY
 CADDY
 
 echo "→ Reloading Caddy..."
-docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile 2>&1 || true
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" \
+  exec -T caddy caddy reload --config /etc/caddy/Caddyfile
 
 echo ""
 echo "✅  Done! Caddy will now request a wildcard cert for *.${DOMAIN}"

@@ -15,6 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
+import { getActiveDomains } from "./db.js";
 import { docker } from "./runtime.js";
 
 const EXTRA_DIR = path.join(config.DATA_DIR, "caddy", "extra");
@@ -58,13 +59,29 @@ function domainSnippet(domain: string): string {
 
 /** Write a snippet file for the given domain. No-op in dev (no CF token). */
 export function writeDomainSnippet(domain: string): void {
-  if (!CF_TOKEN) return;
+  if (!CF_TOKEN) {
+    console.warn(`[caddy] Cannot write snippet for ${domain}: CF_API_TOKEN is not configured`);
+    return;
+  }
   try {
     fs.mkdirSync(EXTRA_DIR, { recursive: true });
     fs.writeFileSync(path.join(EXTRA_DIR, `${domain}.caddy`), domainSnippet(domain), "utf8");
   } catch (e) {
     console.warn(`[caddy] Failed to write snippet for ${domain}:`, e);
   }
+}
+
+/**
+ * Rebuild snippets for domains that are already active in SQLite.
+ *
+ * The domain registry and the Caddy snippets are separate persistence
+ * surfaces. A redeploy can preserve the registry while losing the generated
+ * files, so the API must reconcile them on every startup.
+ */
+export function syncActiveDomainSnippets(): number {
+  const domains = getActiveDomains();
+  for (const domain of domains) writeDomainSnippet(domain);
+  return domains.length;
 }
 
 /** Delete the snippet file for the given domain. */

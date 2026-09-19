@@ -27,6 +27,7 @@ import { cronJobRoutes } from "./routes/cron-jobs.js";
 import { shareRoutes, publicShareRoutes } from "./routes/share.js";
 import { startCrashMonitor, getLifecycleState } from "./lib/crash-monitor.js";
 import { startScheduler, getSchedulerState } from "./lib/scheduler.js";
+import { reloadCaddy, syncActiveDomainSnippets } from "./lib/caddy.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -63,6 +64,10 @@ await app.register(fastifyMultipart, {
 
 initDb();
 ensureFirstAdmin();
+// Reconcile the persisted custom-domain registry with the generated Caddy
+// snippets. The snippets are mounted from the shared data directory and can
+// disappear independently during a redeploy, while the SQLite rows remain.
+syncActiveDomainSnippets();
 
 // Apply any AI runtime settings persisted in the DB so they take effect
 // immediately at startup (before the first chat request arrives).
@@ -180,6 +185,16 @@ const host = config.HOST;
 
 try {
   await app.listen({ port, host });
+  // Caddy may start in parallel with the API. Reload now and once more after
+  // a short delay so regenerated custom-domain snippets are loaded even when
+  // the first Docker probe races service startup.
+  syncActiveDomainSnippets();
+  void reloadCaddy();
+  const caddyRetry = setTimeout(() => {
+    syncActiveDomainSnippets();
+    void reloadCaddy();
+  }, 5000);
+  caddyRetry.unref?.();
   startScheduler();
   startCrashMonitor();
 } catch (e) {
