@@ -437,7 +437,12 @@ export async function stopContainer(workspaceId: string) {
   } catch {}
 }
 
-export async function execInContainer(workspaceId: string, cmd: string[], timeoutMs = 60_000): Promise<{ output: string; exitCode: number }> {
+export async function execInContainer(
+  workspaceId: string,
+  cmd: string[],
+  timeoutMs = 60_000,
+  maxOutputBytes = 64 * 1024,
+): Promise<{ output: string; exitCode: number }> {
   if (!docker) throw new Error("Docker not available");
   const c = docker.getContainer(`pw_${workspaceId}`);
   // Pin cwd + user explicitly. Without WorkingDir, `docker exec` lands in `/`
@@ -469,8 +474,13 @@ export async function execInContainer(workspaceId: string, cmd: string[], timeou
 
     const stdoutPt = new PassThrough();
     const stderrPt = new PassThrough();
-    stdoutPt.on("data", (d: Buffer) => (buf += d.toString()));
-    stderrPt.on("data", (d: Buffer) => (buf += d.toString()));
+    const append = (d: Buffer) => {
+      const currentBytes = Buffer.byteLength(buf, "utf8");
+      if (currentBytes >= maxOutputBytes) return;
+      buf += d.subarray(0, maxOutputBytes - currentBytes).toString();
+    };
+    stdoutPt.on("data", append);
+    stderrPt.on("data", append);
     (docker as any).modem.demuxStream(muxStream, stdoutPt, stderrPt);
 
     muxStream.on("end", () => { clearTimeout(t); resolve(); });
@@ -481,6 +491,77 @@ export async function execInContainer(workspaceId: string, cmd: string[], timeou
   }
   const inspect = await exec.inspect().catch(() => ({ ExitCode: 1 } as any));
   return { output: buf, exitCode: inspect.ExitCode ?? 0 };
+}
+
+/**
+ * Execute a scheduled job only in the persistent application runtime
+ * container. Unlike runOneOff, this never creates a pwx_* container and never
+ * targets pwsh_*. A stopped workspace is recorded as skipped so a closed
+ * browser terminal does not affect scheduled work.
+ */
+export async function runScheduledCommand(
+  workspaceId: string,
+  command: string,
+  timeoutMs = 120_000,
+): Promise<{ output: string; exitCode: number; skipped?: boolean }> {
+  if (!docker) {
+    return new Promise((resolve) => {
+      const proc = spawn("bash", ["-lc", command], { cwd: workspacePath(workspaceId) });
+      let out = "";
+      let timedOut = false;
+      const append = (d: Buffer) => {
+        const currentBytes = Buffer.byteLength(out, "utf8");
+        if (currentBytes < 64 * 1024) {
+          out += d.subarray(0, 64 * 1024 - currentBytes).toString();
+        }
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try { proc.kill("SIGKILL"); } catch {}
+      }, timeoutMs);
+      proc.stdout?.on("data", append);
+      proc.stderr?.on("data", append);
+      proc.on("close", (code) => {
+        clearTimeout(timer);
+        resolve({
+          output: timedOut ? `${out}\n[command killed after ${timeoutMs}ms timeout]` : out,
+          exitCode: timedOut ? 124 : (code ?? 0),
+        });
+      });
+    });
+  }
+
+  const container = docker.getContainer(`pw_${workspaceId}`);
+  let info: any;
+  try {
+    info = await container.inspect();
+    if (info.State?.Paused) {
+      await container.unpause();
+      info = await container.inspect();
+    }
+  } catch {
+    return {
+      output: "Workspace runtime is not running. Start the workspace to run scheduled jobs.",
+      exitCode: 125,
+      skipped: true,
+    };
+  }
+  if (!info.State?.Running || info.State?.Dead) {
+    return {
+      output: "Workspace runtime is not running. Start the workspace to run scheduled jobs.",
+      exitCode: 125,
+      skipped: true,
+    };
+  }
+
+  const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+  const escaped = command.replace(/'/g, `'\\''`);
+  return execInContainer(
+    workspaceId,
+    ["bash", "-lc", `timeout --kill-after=2s ${seconds}s bash -lc '${escaped}'`],
+    timeoutMs + 5_000,
+    64 * 1024,
+  );
 }
 
 /**

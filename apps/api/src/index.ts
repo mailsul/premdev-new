@@ -26,7 +26,7 @@ import { applyAIBudgets } from "./lib/ai-prompt.js";
 import { cronJobRoutes } from "./routes/cron-jobs.js";
 import { shareRoutes, publicShareRoutes } from "./routes/share.js";
 import { startCrashMonitor, getLifecycleState } from "./lib/crash-monitor.js";
-import { getSchedulerState } from "./lib/scheduler.js";
+import { startScheduler, getSchedulerState } from "./lib/scheduler.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -178,6 +178,8 @@ if (fs.existsSync(webDist)) {
 const port = Number(config.PORT);
 const host = config.HOST;
 
+try {
+  await app.listen({ port, host });
   startScheduler();
   startCrashMonitor();
 } catch (e) {

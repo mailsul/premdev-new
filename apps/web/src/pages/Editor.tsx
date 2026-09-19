@@ -71,6 +71,7 @@ import { API } from "@/lib/api";
 import { TerminalPane } from "@/components/Terminal";
 import { AIChat } from "@/components/AIChat";
 import { SecretsPanel } from "@/components/SecretsPanel";
+import { CronJobsPanel } from "@/components/CronJobsPanel";
 import { useConfirm } from "@/lib/useConfirm";
 
 type Workspace = {
@@ -138,6 +139,7 @@ export default function EditorPage() {
   });
   const [showSubdomain, setShowSubdomain] = useState(false);
   const [showGit, setShowGit] = useState(false);
+  const [showCronJobs, setShowCronJobs] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [showWorkspaceSearch, setShowWorkspaceSearch] = useState(false);
@@ -610,6 +612,13 @@ export default function EditorPage() {
           onClick={() => setShowGit(true)}
         >
           <GitBranch size={14} />
+        </button>
+        <button
+          className="btn-secondary"
+          title="Cron Jobs — scheduled tasks for this workspace"
+          onClick={() => setShowCronJobs(true)}
+        >
+          <Clock size={14} />
         </button>
         <div className="relative">
           <button
@@ -1126,6 +1135,12 @@ export default function EditorPage() {
         <GitPanel
           workspaceId={id!}
           onClose={() => setShowGit(false)}
+        />
+      )}
+      {showCronJobs && (
+        <CronJobsPanel
+          workspaceId={id!}
+          onClose={() => setShowCronJobs(false)}
         />
       )}
       {showCommandPalette && (

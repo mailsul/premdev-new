@@ -43,7 +43,6 @@ export const GEMINI_FREE_TIER = [
 ] as const;
 
 export const PROVIDER_MODELS: Record<Provider, string[]> = {
-  "9router": ["auto"],   // populated at runtime from /v1/models
   openai: ["auto", "gpt-4o", "gpt-4o-mini", "gpt-4.1-mini"],
   anthropic: ["auto", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
   google: [
@@ -98,8 +97,7 @@ export const PROVIDER_MODELS: Record<Provider, string[]> = {
   ],
   "9router": [
     "auto",
-    // Model-model ini di-resolve oleh 9Router ke provider terbaik yang tersedia.
-    // Tambah / ubah di dashboard router.flixprem.org, bukan di sini.
+    // Diisi saat runtime dari GET /v1/models di 9Router
     "anthropic/claude-sonnet-4-5",
     "anthropic/claude-opus-4",
     "anthropic/claude-haiku-3-5",
@@ -120,7 +118,6 @@ export const PROVIDER_MODELS: Record<Provider, string[]> = {
  * live model list per-key), so its tier here is unused by the dispatcher.
  */
 export const AUTO_TIERS: Record<Provider, string[]> = {
-  "9router": [],  // auto-tier populated at runtime from fetchNineRouterModels
   openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini"],
   anthropic: ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
   google: [...GEMINI_FREE_TIER],
@@ -143,7 +140,6 @@ export const AUTO_TIERS: Record<Provider, string[]> = {
     "google/gemini-2.5-flash",
   ],
   "9router": [
-    // Auto tier: 9Router picks best available provider based on your configured fallbacks.
     "anthropic/claude-sonnet-4-5",
     "openai/gpt-4o",
     "google/gemini-2.5-flash",
@@ -179,6 +175,10 @@ export const MODEL_CONTEXT_LIMIT: Record<string, number> = {
 /**
  * Estimate token count from a message array (4 chars ≈ 1 token).
  */
+
+// Cache for 9Router model list (2-minute TTL)
+let cachedNineRouterModels: { at: number; list: string[] } | null = null;
+
 function estimateTokens(messages: ChatMsg[]): number {
   return Math.ceil(messages.reduce((s, m) => s + (m.content?.length || 0), 0) / 4);
 }
@@ -386,7 +386,7 @@ export async function fetchGoogleModels(): Promise<string[]> {
   return list;
 }
 
-let cachedNineRouterModels: { at: number; list: string[] } | null = null;
+
 let cachedOpenRouterModels: { at: number; list: string[] } | null = null;
 export async function fetchOpenRouterModels(): Promise<string[]> {
   if (cachedOpenRouterModels && Date.now() - cachedOpenRouterModels.at < 10 * 60 * 1000) {
@@ -502,16 +502,18 @@ export async function* streamCustomProvider(
     yield `(Custom provider "${customId}" tidak ditemukan atau dinonaktifkan)`;
     return;
   }
-  const keys = googleKeys;
+  const keys = getCustomProviderKeys(customId);
   if (keys.length === 0) {
     yield `(API key untuk "${prov.name}" belum diset — buka Admin → Custom Providers untuk isi)`;
     return;
   }
-      const baseUrl = config.NINE_ROUTER_BASE_URL;
-      const url = baseUrl.replace(/\/v1\/?$/, "") + "/v1/chat/completions";
-      let resolvedModel = model;
-
-        const live = await fetchNineRouterModels().catch(() => []);
+  const baseUrl = prov.base_url.replace(/\/$/, "");
+  const url = baseUrl.endsWith("/v1")
+    ? `${baseUrl}/chat/completions`
+    : `${baseUrl}/v1/chat/completions`;
+  const resolvedModel = model === "auto"
+    ? (prov.default_model || (prov.models[0] ?? "gpt-4o-mini"))
+    : model;
 
   // Proactive RPM throttle — wait if needed before sending the request.
   if (prov.rpm > 0) {
@@ -633,6 +635,17 @@ export async function* streamProvider(
         model, messages, signal, maxTokens,
       });
       return;
+    case "9router": {
+      const baseUrl = config.NINE_ROUTER_BASE_URL.replace(/\/v1\/?$/, "") || "http://9router:20128";
+      const apiKey  = config.NINE_ROUTER_API_KEY;
+      yield* streamOpenAICompat({
+        url: baseUrl + "/v1/chat/completions",
+        keys: apiKey ? [apiKey] : ["no-key-needed"],
+        providerLabel: "9Router",
+        model, messages, signal, maxTokens,
+      });
+      return;
+    }
   }
 }
 
@@ -656,9 +669,9 @@ export async function* streamProviderAuto(
   }
   // Estimate context size once; use it to skip models too small to handle it.
   const estimatedPromptTokens = estimateTokens(messages);
-    let lastErr: string | null = null;
-      for (let i = 0; i < candidates.length; i++) {
-        const candidate = candidates[i];
+  let lastErr = "";
+  for (let i = 0; i < tier.length; i++) {
+    const candidate = tier[i];
     // Skip model if its known context limit is smaller than the prompt.
     // Leave an 20% buffer for the response (maxTokens) on top of the prompt.
     const limit = MODEL_CONTEXT_LIMIT[candidate];
@@ -803,13 +816,12 @@ export async function* streamOpenAICompat(opts: {
     return { role: m.role, content: m.content };
   });
   const reqBody = JSON.stringify({
-    model,
-    // Anthropic requires max_tokens; use 100 000 as the "unlimited" sentinel
-    // (the model will stop at its own context limit before that anyway).
-    max_tokens: maxTokens === 0 ? 100_000 : maxTokens,
+    model: opts.model,
+    messages: apiMessages,
     stream: true,
-    system: sys,
-    messages: msgs,
+    // 0 = unlimited: omit max_tokens so the model uses its own context limit.
+    ...(opts.omitMaxTokens || opts.maxTokens === 0 ? {} : { max_tokens: opts.maxTokens }),
+    ...(opts.extraBody ?? {}),
   });
 
   /**
@@ -822,37 +834,33 @@ export async function* streamOpenAICompat(opts: {
 
   let quotaRound = 0;
   while (true) {
-      let lastError: string | null = null;
+    let lastError: { status: number; body: string } | null = null;
     let allRateLimited = true; // assume true until proven otherwise
 
-      for (let i = 0; i < candidates.length; i++) {
-    const key = keys[ki];
+    for (let i = 0; i < opts.keys.length; i++) {
+      const key = opts.keys[i];
 
       // Inner retry loop for 429 rate-limit on the same key.
       // Attempt 0 = first try; attempts 1..N = retries after waiting.
       let keySucceeded = false;
       for (let attempt = 0; attempt <= RATE_LIMIT_RETRY_DELAYS_MS.length; attempt++) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${key}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents,
-        systemInstruction: sys ? { parts: [{ text: sys }] } : undefined,
-        // 0 = unlimited: omit maxOutputTokens so Gemini uses its full window.
-        generationConfig: maxTokens === 0 ? {} : { maxOutputTokens: maxTokens },
-      }),
-      signal,
-    },
-  );
+        const res = await fetch(opts.url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${key}`,
+            ...(opts.extraHeaders || {}),
+          },
+          body: reqBody,
+          signal: opts.signal,
+        });
 
         if (res.ok && res.body) {
           keySucceeded = true;
           if (i > 0) yield `\n[Key #${i + 1} dipakai (key sebelumnya gagal)]\n`;
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
+          const reader = res.body.getReader();
+          const dec = new TextDecoder();
+          let buf = "";
           let firstToken = false;
           // Timer for first-token timeout (useful for slow local models like Ollama)
           const ftTimeoutMs = opts.firstTokenTimeoutMs;
@@ -870,19 +878,19 @@ export async function* streamOpenAICompat(opts: {
                 reader.cancel().catch(() => {});
                 return;
               }
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let idx;
-    while ((idx = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, idx).trim();
+              const { done, value } = await reader.read();
+              if (done) break;
+              buf += dec.decode(value, { stream: true });
+              let idx;
+              while ((idx = buf.indexOf("\n")) >= 0) {
+                const line = buf.slice(0, idx).trim();
                 buf = buf.slice(idx + 1);
                 if (!line.startsWith("data:")) continue;
                 const data = line.slice(5).trim();
                 if (data === "[DONE]") return;
                 try {
-        const j = JSON.parse(line.slice(5).trim());
-    const txt = (await res.text().catch(() => "")).slice(0, 300);
+                  const j = JSON.parse(data);
+                  const txt = j.choices?.[0]?.delta?.content ?? "";
                   if (txt) {
                     if (!firstToken) {
                       firstToken = true;
@@ -899,7 +907,7 @@ export async function* streamOpenAICompat(opts: {
           return;
         }
 
-    const body = await r.text().catch(() => "");
+        const body = await res.text().catch(() => "");
         lastError = { status: res.status, body: body.slice(0, 300) };
 
         // Treat as rate-limit if status is 429 OR if the body clearly says so
@@ -916,8 +924,8 @@ export async function* streamOpenAICompat(opts: {
         // 429: retry the same key with exponential backoff before failing over.
         if (res.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
           const waitMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
-      const waitSec = Math.round(QUOTA_RESET_WAIT_MS / 1000);
-      const label = opts.providerLabel ?? opts.url;
+          const waitSec = Math.round(waitMs / 1000);
+          const label = opts.providerLabel ?? opts.url;
           yield `\n⏳ **${label} — batas RPM tercapai**, menunggu ${waitSec}s lalu coba lagi (percobaan ${attempt + 2}/${RATE_LIMIT_RETRY_DELAYS_MS.length + 1})…\n`;
           try {
             await sleepWithAbort(waitMs, opts.signal);
@@ -981,7 +989,7 @@ export async function* streamAnthropic(
   maxTokens: number,
   signal: AbortSignal,
 ): AsyncGenerator<string> {
-  const keys = googleKeys;
+  const keys = getAIKeys("anthropic");
   if (keys.length === 0) { yield "(Anthropic key not configured)"; return; }
   const sys = messages.find((m) => m.role === "system")?.content;
   const msgs = messages
@@ -1011,23 +1019,10 @@ export async function* streamAnthropic(
     system: sys,
     messages: msgs,
   });
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${key}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents,
-        systemInstruction: sys ? { parts: [{ text: sys }] } : undefined,
-        // 0 = unlimited: omit maxOutputTokens so Gemini uses its full window.
-        generationConfig: maxTokens === 0 ? {} : { maxOutputTokens: maxTokens },
-      }),
-      signal,
-    },
-  );
+  let res: Response | null = null;
   let usedKeyIdx = 0;
-      let lastError: string | null = null;
-      for (let i = 0; i < candidates.length; i++) {
+  let lastError: { status: number; body: string } | null = null;
+  for (let i = 0; i < keys.length; i++) {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -1223,7 +1218,7 @@ export async function* streamGoogleSingle(
       // Parse JSON error message if possible, otherwise show raw
       let friendly = txt;
       try {
-        const j = JSON.parse(line.slice(5).trim());
+        const j = JSON.parse(txt);
         const msg = j?.error?.message ?? j?.message;
         const status = j?.error?.status ?? "";
         if (msg) friendly = status ? `${status}: ${msg}` : msg;
@@ -1289,15 +1284,13 @@ function parseDataUrlLocal(
   return { mimeType: m[1], data: m[2] };
 }
 
-
 /**
  * Fetch the live model list from a 9Router instance.
- * Returns only models whose provider is actually connected in 9Router
- * (i.e. the endpoint returns them in GET /v1/models).
+ * Returns only models whose provider is actually connected in 9Router.
  * Result is cached for 2 minutes so repeated /providers calls are cheap.
  */
 export async function fetchNineRouterModels(): Promise<string[]> {
-  const baseUrl = config.NINE_ROUTER_BASE_URL;
+  const baseUrl = config.NINE_ROUTER_BASE_URL.replace(/\/v1\/?$/, "") || "http://9router:20128";
   const apiKey  = config.NINE_ROUTER_API_KEY;
   if (!baseUrl) return [];
   if (cachedNineRouterModels && Date.now() - cachedNineRouterModels.at < 2 * 60 * 1000) {
@@ -1306,7 +1299,7 @@ export async function fetchNineRouterModels(): Promise<string[]> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const url = baseUrl.replace(/\/v1\/?$/, "") + "/v1/models";
+    const url = baseUrl + "/v1/models";
     const headers: Record<string, string> = { Accept: "application/json" };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
     const res = await fetch(url, { headers, signal: ctrl.signal });
