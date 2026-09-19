@@ -16,10 +16,13 @@ export type Action =
   | { kind: "test"; command?: string }
   | { kind: "web"; query: string }
   | { kind: "webFetch"; url: string; offset?: number }
+  | { kind: "preview"; path?: string }
   | { kind: "memorySave"; content: string }
   | { kind: "setRun"; command: string }
   | { kind: "setEnv"; vars: Record<string, string> }
   | { kind: "setProcesses"; processes: Record<string, { run: string; port: number }> }
+  | { kind: "start" }
+  | { kind: "stop" }
   | { kind: "restart" }
   | { kind: "checkpoint"; message: string }
   | { kind: "db"; sql: string }
@@ -185,6 +188,21 @@ export async function runAction(
           : "";
         return { ok: true, output: `Content of ${action.url}:\n\n${r.content}${pageInfo}` };
       }
+      case "preview": {
+        const previewPath = action.path || "/";
+        if (/[\r\n]/.test(previewPath)) {
+          return { ok: false, output: "Preview path contains a newline and was rejected." };
+        }
+        const safePath = previewPath.startsWith("/") ? previewPath : `/${previewPath}`;
+        const shellPath = safePath.replace(/(["\\$`])/g, "\\$1");
+        const r = await fetchJson("POST", `/workspaces/${workspaceId}/exec`, {
+          command: `curl -fsS --max-time 15 -D - "http://localhost:\${PORT:-5000}${shellPath}" | head -c 16000`,
+        });
+        return {
+          ok: r.exitCode === 0,
+          output: `Preview ${safePath} (exit=${r.exitCode}):\n${r.output ?? ""}`,
+        };
+      }
       case "memorySave": {
         const lines = action.content.split("\n").length;
         if (provider) {
@@ -198,6 +216,12 @@ export async function runAction(
         if (!r.ok) return { ok: false, output: r.error || "Memory save failed" };
         return { ok: true, output: `Memory saved (${lines} lines → .premdev-data/memory.md)` };
       }
+      case "start":
+        await fetchJson("POST", `/workspaces/${workspaceId}/start`);
+        return { ok: true, output: "Workspace started using the resolved .premdev run configuration" };
+      case "stop":
+        await fetchJson("POST", `/workspaces/${workspaceId}/stop`);
+        return { ok: true, output: "Workspace stopped" };
       case "open":
         window.dispatchEvent(new CustomEvent("premdev:open-file", { detail: { path: action.path } }));
         return { ok: true, output: `Opened ${action.path}` };
@@ -229,6 +253,7 @@ export function getActionRisk(action: Action): ActionRisk {
       .replace(/\/\*[\s\S]*?\*\//g, "");
     return _DESTRUCTIVE_SQL.test(stripped) ? "high" : "low";
   }
+  if (action.kind === "start" || action.kind === "stop") return "medium";
   if (action.kind === "setEnv") {
     const keys = Object.keys(action.vars ?? {});
     if (keys.some((k) => _SENSITIVE_ENV_KEYS.test(k))) return "high";
@@ -255,6 +280,7 @@ export function actionLabel(a: Action): string {
     case "test":       return `test:run${a.command ? ` \`${a.command.slice(0, 60)}\`` : ""}`;
     case "web":        return `web:search ${a.query.slice(0, 60)}`;
     case "webFetch":   return `web:fetch ${a.url.slice(0, 80)}`;
+    case "preview":    return `preview:check ${a.path || "/"}`;
     case "memorySave": return `memory:save (${a.content.split("\n").length} baris)`;
     case "setRun":     return `workspace:setRun \`${a.command.slice(0, 80)}\``;
     case "setEnv": {
@@ -265,6 +291,8 @@ export function actionLabel(a: Action): string {
       const names = Object.keys(a.processes);
       return `workspace:setProcesses (${names.join(", ")})`;
     }
+    case "start":      return "workspace:start";
+    case "stop":       return "workspace:stop";
     case "restart":    return "workspace:restart";
     case "checkpoint": return `workspace:checkpoint "${a.message}"`;
     case "db":         return `db:query \`${a.sql.split("\n")[0].slice(0, 80)}\``;
@@ -298,10 +326,13 @@ export function actionFingerprint(a: Action): string {
     case "db":         return `db:${fnv1a32(a.sql)}`;
     case "web":        return `web:${fnv1a32(a.query)}`;
     case "webFetch":   return `webFetch:${fnv1a32(a.url)}`;
+    case "preview":    return `preview:${fnv1a32(a.path ?? "/")}`;
     case "memorySave": return `memorySave:${fnv1a32(a.content)}`;
     case "setRun":        return `setRun:${fnv1a32(a.command)}`;
     case "setEnv":        return `setEnv:${fnv1a32(JSON.stringify(a.vars))}`;
     case "setProcesses":  return `setProcesses:${fnv1a32(JSON.stringify(a.processes))}`;
+    case "start":         return "start:";
+    case "stop":          return "stop:";
     case "checkpoint":    return `checkpoint:${fnv1a32(a.message)}`;
     case "open":       return `open:${a.path}`;
     default:           return `${(a as Action).kind}:`;
@@ -323,10 +354,13 @@ function _actionTarget(a: Action): string {
     case "test":       return a.command?.slice(0, 200) ?? "";
     case "web":        return a.query.slice(0, 200);
     case "webFetch":   return a.url.slice(0, 200);
+    case "preview":    return a.path ?? "/";
     case "memorySave": return a.content.split("\n")[0].slice(0, 200);
     case "setRun":        return a.command.slice(0, 200);
     case "setEnv":        return Object.keys(a.vars).join(",");
     case "setProcesses":  return Object.keys(a.processes).join(",");
+    case "start":
+    case "stop":
     case "restart":       return "";
     case "checkpoint": return a.message;
     case "db":         return a.sql.split("\n")[0].slice(0, 200);

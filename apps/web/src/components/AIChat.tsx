@@ -346,7 +346,8 @@ function formatToolResults(actions: Action[], results: ActionResult[]): string {
     const kind = a.kind;
     const isSilent = kind === "file" || kind === "patch" || kind === "mkdir" ||
       kind === "delete" || kind === "rename" || kind === "setRun" ||
-      kind === "setEnv" || kind === "setProcesses" || kind === "restart" || kind === "checkpoint";
+      kind === "setEnv" || kind === "setProcesses" || kind === "start" ||
+      kind === "stop" || kind === "restart" || kind === "checkpoint";
 
     if (isSilent && ok) {
       // For patch, surface fuzzy/replaceAll info if present
@@ -412,7 +413,7 @@ function filterStreamAnnotations(text: string): string {
 // per-fence walk lives in parseActions() below; copying the entire bracket
 // stack here would just be redundant.
 function hasUnclosedActionFence(text: string): boolean {
-  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "db", "open", "plan", "memory"]);
+  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "preview", "db", "open", "plan", "memory"]);
   const lines = text.split("\n");
   let i = 0;
   while (i < lines.length) {
@@ -439,7 +440,7 @@ function hasUnclosedActionFence(text: string): boolean {
 }
 
 function parseActions(text: string): { actions: Action[]; cleaned: string; plan?: string } {
-  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "db", "open", "plan", "memory"]);
+  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "preview", "db", "open", "plan", "memory"]);
   const actions: Action[] = [];
   const kept: string[] = [];
   let planStr: string | undefined;
@@ -645,6 +646,9 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
         const offset = offsetMatch ? parseInt(offsetMatch[2], 10) : undefined;
         actions.push({ kind: "webFetch", url, ...(offset != null ? { offset } : {}) });
       }
+    } else if (kind === "preview" && (header === "check" || header === "")) {
+      const first = (body.find((l) => l.trim() !== "") ?? "").trim();
+      actions.push({ kind: "preview", path: first || "/" });
     } else if (kind === "plan" && (header === "" || header === "run")) {
       // plan: block — not executed, stored as anchor for the orchestrator.
       // Rendered inline as a blockquote so the user can see the AI's plan.
@@ -671,7 +675,11 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
     } else if (kind === "open" && header) {
       actions.push({ kind: "open", path: header.trim() });
     } else if (kind === "workspace") {
-      if (header === "restart") {
+      if (header === "start") {
+        actions.push({ kind: "start" });
+      } else if (header === "stop") {
+        actions.push({ kind: "stop" });
+      } else if (header === "restart") {
         actions.push({ kind: "restart" });
       } else if (header.startsWith("checkpoint")) {
         const m = header.match(/message="([^"]*)"/);
@@ -2783,7 +2791,7 @@ export function AIChat({
         });
         const k = toRun[i].kind;
         if (k === "file" || k === "setRun" || k === "setEnv" || k === "setProcesses") onFilesMutated?.();
-        if (k === "restart" || k === "setRun" || k === "setProcesses") onWorkspaceMutated?.();
+         if (k === "start" || k === "stop" || k === "restart" || k === "setRun" || k === "setProcesses") onWorkspaceMutated?.();
         // If user clicked Stop mid-action, the abort propagates as a
         // "Cancelled by user" result — bail before running the rest.
         if (stoppedRef.current) break;
@@ -3936,7 +3944,7 @@ function ActionCard({
     // Manual approval — record alongside autonomous actions in the audit log.
     logAudit({ workspaceId, provider, model, action: eff, result: r });
     if (eff.kind === "file" || eff.kind === "setRun" || eff.kind === "setEnv" || eff.kind === "setProcesses") onFilesMutated?.();
-    if (eff.kind === "restart" || eff.kind === "setRun" || eff.kind === "setProcesses") onWorkspaceMutated?.();
+    if (eff.kind === "start" || eff.kind === "stop" || eff.kind === "restart" || eff.kind === "setRun" || eff.kind === "setProcesses") onWorkspaceMutated?.();
   }
 
   function cancelManual() {
@@ -3973,10 +3981,13 @@ function ActionCard({
       case "test":   return { icon: <FlaskConical size={12} />, label: action.command ? action.command.slice(0, 60) : "Run tests", color: "text-text-muted" };
       case "web":    return { icon: <Globe size={12} />,     label: action.query.slice(0, 70), color: "text-text-muted" };
       case "webFetch": return { icon: <Globe size={12} />,   label: action.url.slice(0, 70), color: "text-text-muted" };
+      case "preview": return { icon: <Globe size={12} />,   label: `Preview ${action.path || "/"}`, color: "text-accent" };
       case "memorySave": return { icon: <Brain size={12} />, label: `Memory (${action.content.split("\n").length} baris)`, color: "text-success" };
       case "setRun": return { icon: <Zap size={12} />,       label: "Set run command", color: "text-accent" };
       case "setEnv": return { icon: <FileEdit size={12} />,  label: `Env vars (${Object.keys(action.vars).length} key${Object.keys(action.vars).length === 1 ? "" : "s"})`, color: "text-accent" };
       case "restart": return { icon: <RotateCw size={12} />, label: "Restart workspace", color: "text-warning" };
+      case "start": return { icon: <Play size={12} />, label: "Start workspace", color: "text-success" };
+      case "stop": return { icon: <Square size={12} />, label: "Stop workspace", color: "text-warning" };
       case "checkpoint": return { icon: <Save size={12} />, label: `Save checkpoint: ${action.message}`, color: "text-success" };
       case "db": return { icon: <Search size={12} />, label: "DB query", color: "text-text-muted" };
       case "open": return { icon: <FileEdit size={12} />, label: `Open ${action.path}`, color: "text-accent" };
@@ -3996,6 +4007,7 @@ function ActionCard({
     action.kind === "test" ? (action.command ?? "(auto-detect test command)") :
     action.kind === "web" ? `query: ${action.query}` :
     action.kind === "webFetch" ? `url: ${action.url}` :
+    action.kind === "preview" ? `path: ${action.path || "/"}` :
     action.kind === "memorySave" ? action.content :
     action.kind === "db" ? action.sql :
     "";
