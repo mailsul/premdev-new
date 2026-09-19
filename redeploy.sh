@@ -19,6 +19,7 @@
 #   RESTART_CMD='systemctl restart my-service'
 #   RESTART_MODE=none
 #   HEALTH_URL=http://127.0.0.1:3001/api/health
+#   ROLLBACK_COMMIT=refs/premdev/deploy-current
 #
 set -Eeuo pipefail
 
@@ -33,12 +34,15 @@ RESTART_MODE="${RESTART_MODE:-auto}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${PORT:-3001}/api/health}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-15}"
 HEALTH_DELAY_SECONDS="${HEALTH_DELAY_SECONDS:-2}"
+DEPLOY_STATE_REF="${DEPLOY_STATE_REF:-refs/premdev/deploy-current}"
+ROLLBACK_COMMIT="${ROLLBACK_COMMIT:-}"
 RUN_ID="$(date -u +%Y%m%d-%H%M%S)"
 LOG_FILE="${LOG_FILE:-/tmp/premdev-redeploy-${RUN_ID}.log}"
 BACKUP_DIR="${BACKUP_DIR:-/tmp/premdev-redeploy-backup-${RUN_ID}}"
 STEP="startup"
 STASH_CREATED=0
 ACTIVE_COMPOSE_FILE=""
+DEPLOY_TARGET=""
 
 normalize_repo_url() {
   case "$REPO_URL" in
@@ -71,6 +75,13 @@ run_step() {
   printf '%q ' "$@"
   printf '\n'
   "$@"
+}
+
+record_deploy_state() {
+  local commit="$1"
+  git update-ref "$DEPLOY_STATE_REF" "$commit"
+  printf '[INFO] Commit deployment sehat disimpan sebagai %s: %s\n' \
+    "$DEPLOY_STATE_REF" "$commit"
 }
 
 restore_preserved_files() {
@@ -333,13 +344,29 @@ else
 fi
 printf '[INFO] origin diarahkan ke repository baru.\n'
 
-run_step "fetch repository" git fetch --prune origin "$BRANCH"
-git show-ref --verify --quiet "refs/remotes/origin/$BRANCH" ||
-  fail "Branch origin/$BRANCH tidak ditemukan di repository: $REPO_URL"
+if [[ -n "$ROLLBACK_COMMIT" ]]; then
+  git rev-parse --verify --quiet "$ROLLBACK_COMMIT^{commit}" ||
+    fail "Commit rollback tidak ditemukan: $ROLLBACK_COMMIT"
+  DEPLOY_TARGET="$ROLLBACK_COMMIT"
+  printf '[WARN] Mode rollback aktif. Target: %s\n' "$DEPLOY_TARGET"
+else
+  run_step "fetch repository" git fetch --prune origin "$BRANCH"
+  git show-ref --verify --quiet "refs/remotes/origin/$BRANCH" ||
+    fail "Branch origin/$BRANCH tidak ditemukan di repository: $REPO_URL"
+  DEPLOY_TARGET="origin/$BRANCH"
+fi
 
-run_step "checkout target branch" git checkout -B "$BRANCH" "origin/$BRANCH"
-run_step "reset ke remote commit" git reset --hard "origin/$BRANCH"
-git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null
+# Keep a recovery point in .git before replacing the current checkout. This
+# survives a failed deployment and is not included in the local-change stash.
+if ! git show-ref --verify --quiet "$DEPLOY_STATE_REF"; then
+  record_deploy_state "$(git rev-parse HEAD)"
+fi
+
+run_step "checkout target branch" git checkout -B "$BRANCH" "$DEPLOY_TARGET"
+run_step "reset ke target commit" git reset --hard "$DEPLOY_TARGET"
+if [[ -z "$ROLLBACK_COMMIT" ]]; then
+  git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null
+fi
 
 restore_preserved_files
 
@@ -362,6 +389,7 @@ run_step "build application" npm run build
 restart_application
 check_health
 
+record_deploy_state "$(git rev-parse HEAD)"
 printf '\n[OK] Redeploy selesai.\n'
 printf '[OK] Commit aktif: %s\n' "$(git rev-parse --short HEAD)"
 printf '[OK] Branch aktif: %s\n' "$(git branch --show-current)"
