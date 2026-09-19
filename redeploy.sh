@@ -15,6 +15,7 @@
 #   BRANCH=main
 #   SERVICE_NAME=premdev
 #   PM2_APP=premdev
+#   DEPLOY_COMPOSE_FILE=/opt/premdev/infra/docker-compose.prod.yml
 #   RESTART_CMD='systemctl restart my-service'
 #   RESTART_MODE=none
 #   HEALTH_URL=http://127.0.0.1:3001/api/health
@@ -27,6 +28,7 @@ REPO_URL="${REPO_URL:-https://github.com/mailsul/premdev-new.git}"
 BRANCH="${BRANCH:-main}"
 SERVICE_NAME="${SERVICE_NAME:-premdev}"
 PM2_APP="${PM2_APP:-premdev}"
+DEPLOY_COMPOSE_FILE="${DEPLOY_COMPOSE_FILE:-}"
 RESTART_MODE="${RESTART_MODE:-auto}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${PORT:-3001}/api/health}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-15}"
@@ -80,9 +82,30 @@ restore_preserved_files() {
   done
 }
 
+select_compose_file() {
+  if [[ -n "$DEPLOY_COMPOSE_FILE" ]]; then
+    [[ -f "$DEPLOY_COMPOSE_FILE" ]] ||
+      fail "DEPLOY_COMPOSE_FILE tidak ditemukan: $DEPLOY_COMPOSE_FILE"
+    printf '%s\n' "$DEPLOY_COMPOSE_FILE"
+    return 0
+  fi
+
+  local candidate
+  for candidate in \
+    "$APP_DIR/docker-compose.yml" \
+    "$APP_DIR/docker-compose.yaml" \
+    "$APP_DIR/infra/docker-compose.prod.yml"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 restart_application() {
   STEP="restart application"
-  local compose_file=""
+  local compose_file
 
   if [[ "$RESTART_MODE" == "none" ]]; then
     printf '[INFO] RESTART_MODE=none; aplikasi tidak direstart.\n'
@@ -115,13 +138,9 @@ restart_application() {
 
   if [[ "$RESTART_MODE" == "docker" || "$RESTART_MODE" == "auto" ]] &&
      command -v docker >/dev/null 2>&1 &&
-     { [[ -f "$APP_DIR/docker-compose.yml" ]] || [[ -f "$APP_DIR/docker-compose.yaml" ]]; }; then
-    if [[ -f "$APP_DIR/docker-compose.yml" ]]; then
-      compose_file="$APP_DIR/docker-compose.yml"
-    else
-      compose_file="$APP_DIR/docker-compose.yaml"
-    fi
-    printf '[INFO] Rebuild/restart Docker Compose deployment.\n'
+     docker compose version >/dev/null 2>&1 &&
+     compose_file="$(select_compose_file)"; then
+    printf '[INFO] Rebuild/restart Docker Compose deployment: %s\n' "$compose_file"
     docker compose -f "$compose_file" up -d --build
     return 0
   fi
