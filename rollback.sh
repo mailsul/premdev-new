@@ -33,12 +33,18 @@ fi
   { printf '[ERROR] redeploy.sh tidak executable: %s\n' "$SCRIPT_DIR/redeploy.sh" >&2; exit 1; }
 
 cd "$APP_DIR"
-git rev-parse --verify --quiet "$ROLLBACK_COMMIT^{commit}" ||
-  {
+if ! git rev-parse --verify --quiet "$ROLLBACK_COMMIT^{commit}"; then
+  if [[ "$ROLLBACK_COMMIT" == "$DEPLOY_STATE_REF" ]] &&
+     git rev-parse --verify --quiet 'HEAD@{1}^{commit}'; then
+    ROLLBACK_COMMIT='HEAD@{1}'
+    printf '[WARN] Ref deployment sehat belum ada; memakai commit sebelumnya dari reflog: %s\n' \
+      "$(git rev-parse "$ROLLBACK_COMMIT^{commit}")"
+  else
     printf '[ERROR] Referensi rollback tidak ditemukan: %s\n' "$ROLLBACK_COMMIT" >&2
     printf '[ERROR] Cek kandidat manual dengan: git reflog --date=local\n' >&2
     exit 1
-  }
+  fi
+fi
 
 TARGET_COMMIT="$(git rev-parse "$ROLLBACK_COMMIT^{commit}")"
 printf '[WARN] Rollback target: %s (%s)\n' \
