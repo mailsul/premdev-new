@@ -1,0 +1,25 @@
+# Never copy host-installed dependencies into the image. Native modules such
+# as better-sqlite3 must be installed inside the Node 20 builder stage.
+node_modules
+**/node_modules
+
+# Runtime data and generated output are mounted or rebuilt separately.
+data
+**/data
+dist
+**/dist
+build
+**/build
+logs
+**/*.log
+
+# Local/project metadata and secrets.
+.git
+.gitignore
+.env
+.env.*
+.cache
+.local
+.agents
+attached_assets
+screenshots

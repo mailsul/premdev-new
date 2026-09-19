@@ -356,9 +356,12 @@ else
   DEPLOY_TARGET="origin/$BRANCH"
 fi
 
-# Keep a recovery point in .git before replacing the current checkout. This
-# survives a failed deployment and is not included in the local-change stash.
-if ! git show-ref --verify --quiet "$DEPLOY_STATE_REF"; then
+# Keep a recovery point in .git before replacing the current checkout for a
+# normal deployment. During rollback, do not overwrite the recovery ref with
+# the possibly broken commit currently checked out; only a healthy target may
+# update it at the end of this script.
+if [[ -z "$ROLLBACK_COMMIT" ]] &&
+   ! git show-ref --verify --quiet "$DEPLOY_STATE_REF"; then
   record_deploy_state "$(git rev-parse HEAD)"
 fi
 
