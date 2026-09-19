@@ -38,6 +38,7 @@ LOG_FILE="${LOG_FILE:-/tmp/premdev-redeploy-${RUN_ID}.log}"
 BACKUP_DIR="${BACKUP_DIR:-/tmp/premdev-redeploy-backup-${RUN_ID}}"
 STEP="startup"
 STASH_CREATED=0
+ACTIVE_COMPOSE_FILE=""
 
 normalize_repo_url() {
   case "$REPO_URL" in
@@ -174,6 +175,7 @@ prepare_compose_assets() {
 restart_application() {
   STEP="restart application"
   local compose_file
+  ACTIVE_COMPOSE_FILE=""
 
   if [[ "$RESTART_MODE" == "none" ]]; then
     printf '[INFO] RESTART_MODE=none; aplikasi tidak direstart.\n'
@@ -209,6 +211,7 @@ restart_application() {
      docker compose version >/dev/null 2>&1 &&
      compose_file="$(select_compose_file)"; then
     prepare_compose_assets "$compose_file"
+    ACTIVE_COMPOSE_FILE="$compose_file"
     printf '[INFO] Rebuild/restart Docker Compose deployment: %s\n' "$compose_file"
     docker compose --env-file "$APP_DIR/.env" -f "$compose_file" up -d --build
     return 0
@@ -224,6 +227,11 @@ check_health() {
   fi
 
   STEP="health check"
+  if [[ -n "$ACTIVE_COMPOSE_FILE" ]]; then
+    check_compose_health
+    return 0
+  fi
+
   local attempt
   for ((attempt = 1; attempt <= HEALTH_RETRIES; attempt++)); do
     if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
@@ -235,6 +243,49 @@ check_health() {
   done
 
   fail "Aplikasi sudah direstart tetapi health check gagal: $HEALTH_URL"
+}
+
+check_compose_health() {
+  local attempt
+  local container_id=""
+  local status=""
+  local compose_args=(docker compose --env-file "$APP_DIR/.env" -f "$ACTIVE_COMPOSE_FILE")
+
+  for ((attempt = 1; attempt <= HEALTH_RETRIES; attempt++)); do
+    container_id="$("${compose_args[@]}" ps -q app 2>/dev/null || true)"
+    if [[ -n "$container_id" ]]; then
+      status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+        "$container_id" 2>/dev/null || true)"
+
+      case "$status" in
+        healthy)
+          printf '[OK] Container app sehat melalui Docker health check.\n'
+          return 0
+          ;;
+        unhealthy)
+          printf '[WAIT] Container app berstatus unhealthy (%s/%s).\n' "$attempt" "$HEALTH_RETRIES"
+          ;;
+        none)
+          if "${compose_args[@]}" exec -T app sh -c \
+            'wget -q -O - http://127.0.0.1:3001/api/health >/dev/null'; then
+            printf '[OK] API app merespons dari dalam container.\n'
+            return 0
+          fi
+          printf '[WAIT] API app belum merespons dari dalam container (%s/%s).\n' \
+            "$attempt" "$HEALTH_RETRIES"
+          ;;
+        *)
+          printf '[WAIT] Container app berstatus %s (%s/%s).\n' \
+            "${status:-unknown}" "$attempt" "$HEALTH_RETRIES"
+          ;;
+      esac
+    else
+      printf '[WAIT] Container app belum tersedia (%s/%s).\n' "$attempt" "$HEALTH_RETRIES"
+    fi
+    sleep "$HEALTH_DELAY_SECONDS"
+  done
+
+  fail "Container app tidak sehat setelah restart. Periksa: ${compose_args[*]} logs --tail=100 app"
 }
 
 trap on_error ERR
