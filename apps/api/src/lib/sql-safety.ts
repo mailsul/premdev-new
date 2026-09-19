@@ -1,11 +1,11 @@
 /**
- * sql-safety.ts — quick AST-style SQL safety classifier for the AI's
- * autonomous `db:query` action. NOT a full parser; just deny-list scan
- * to catch destructive SQL the LLM can emit by accident.
+ * sql-safety.ts — optional AST-style SQL safety classifier for callers that
+ * want a deny-list scan before executing SQL. The autonomous workspace
+ * database action now permits reads, writes, and DDL; this helper is retained
+ * for future opt-in safeguards and is not the ownership boundary.
  *
- * In autonomous mode only SELECT/WITH/EXPLAIN/SHOW/DESCRIBE are permitted.
- * Everything else (writes, DDL, admin commands) is blocked and the error
- * message is returned to the AI so it can adapt its strategy.
+ * The workspace database route enforces ownership server-side. This helper
+ * can still be used by a caller that explicitly wants conservative SQL.
  */
 
 const FORBIDDEN_VERBS = [
@@ -34,17 +34,17 @@ export function checkSqlReadOnly(rawSql: string): string | null {
   if (trimmed.includes(";")) return "SQL contains multiple statements — only one statement per block";
   if (!ALLOWED_LEADING.test(rawSql)) {
     const firstWord = rawSql.trim().split(/\s+/, 1)[0]?.toUpperCase() ?? "(empty)";
-    return `only SELECT/WITH/EXPLAIN/SHOW/DESCRIBE is allowed in autonomous mode, got ${firstWord}`;
+    return `conservative SQL mode allows only SELECT/WITH/EXPLAIN/SHOW/DESCRIBE, got ${firstWord}`;
   }
   const stripped = stripStringsAndIdentifiers(rawSql).toUpperCase();
   for (const verb of FORBIDDEN_VERBS) {
     const re = new RegExp(`\\b${verb}\\b`, "i");
     if (re.test(stripped)) {
-      return `forbidden keyword in autonomous mode: ${verb.replace(/\\s+/g, " ")}`;
+    return `forbidden keyword in conservative SQL mode: ${verb.replace(/\\s+/g, " ")}`;
     }
   }
   if (/@\w+\s*:=/.test(rawSql)) {
-    return "user-defined variable assignment (@x := ...) is not allowed in autonomous mode";
+    return "user-defined variable assignment (@x := ...) is not allowed in conservative SQL mode";
   }
   return null;
 }

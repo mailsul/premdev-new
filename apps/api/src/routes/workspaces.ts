@@ -28,7 +28,6 @@ import { config } from "../lib/config.js";
 import { closeWorkspaceDb } from "../lib/semantic-search.js";
 import { createProjectDb, dropProjectDb, ensureMysqlUser, ensureWorkspaceAdminUser, warmupMysqlUserCache, runWorkspaceQuery } from "../lib/mysql.js";
 import { createCheckpoint, listCheckpoints, listCheckpointFiles, restoreCheckpoint, deleteCheckpoint, deleteAllCheckpointsFor } from "../lib/checkpoints.js";
-import { checkSqlReadOnly } from "../lib/sql-safety.js";
 
 /**
  * Build the full set of MySQL env vars to inject into a workspace container.
@@ -767,8 +766,9 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   const DbQueryBody = z.object({
     sql: z.string().min(1).max(20_000),
     rowLimit: z.number().int().positive().max(1000).optional(),
-    // When true (sent by the autonomous orchestrator), SQL is restricted to
-    // read-only statements. Human users via the Query tab can write freely.
+    // Sent by the autonomous orchestrator. The agent may read/write the
+    // current workspace database; the server still derives the database name
+    // from workspace ownership and never accepts a client-selected database.
     autonomous: z.boolean().optional(),
     // DROP DATABASE is allowed for the workspace database only after the
     // browser has obtained an explicit confirmation from the user.
@@ -795,10 +795,9 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     }
     const dbName = `${safeUser}_${safeProj}`;
 
-    // Autonomous mode remains read-only except for the one explicitly
-    // supported destructive workflow: dropping this workspace's own database
-    // after a browser confirmation. This avoids silently destroying data while
-    // still allowing an explicit user request to complete through the agent.
+    // The agent has full SQL access to this workspace database. Dropping the
+    // database itself remains scoped to this workspace and requires explicit
+    // confirmation, so "full access" cannot become cross-workspace deletion.
     const dropMatch = body.sql.trim().replace(/;\s*$/, "").match(
       /^DROP\s+(?:DATABASE|SCHEMA)\s+(?:IF\s+EXISTS\s+)?[`"]?([A-Za-z0-9_$-]+)[`"]?$/i,
     );
@@ -815,14 +814,6 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
           return reply.code(409).send({
             confirmationRequired: true,
             error: `Konfirmasi diperlukan untuk menghapus database ${dbName}.`,
-            database: dbName,
-          });
-        }
-      } else {
-        const reason = checkSqlReadOnly(body.sql);
-        if (reason) {
-          return reply.code(403).send({
-            error: `Autonomous mode is read-only: ${reason}. To run writes, INSERT, UPDATE, or DDL, ask the user to execute the query manually in the phpMyAdmin panel or a terminal MySQL session.`,
             database: dbName,
           });
         }

@@ -91,7 +91,11 @@ function parseAIError(raw: string): string {
     return `Konteks chat terlalu besar ${model} — coba klik Clear chat di atas atau switch ke model dengan context window lebih besar.`;
   }
   if (/rate.?limit|quota|RESOURCE_EXHAUSTED|too many request/i.test(s)) {
-    return `Rate limit / quota habis — AI akan coba model lain secara otomatis. Jika terus gagal, tunggu sebentar atau tambah API key lain di Admin.`;
+    const detail = s.length > 360 ? `${s.slice(0, 357)}…` : s;
+    if (/9router/i.test(s)) {
+      return `9Router mengembalikan rate-limit/quota dari provider upstream:\n${detail}`;
+    }
+    return `Provider mengembalikan rate-limit/quota:\n${detail}`;
   }
   if (/invalid.*api.*key|unauthorized|authentication|api.?key.*invalid|incorrect api key/i.test(s)) {
     return `API key tidak valid atau belum diset — cek halaman Admin → AI provider keys.`;

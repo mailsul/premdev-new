@@ -643,6 +643,7 @@ export async function* streamProvider(
         keys: apiKey ? [apiKey] : ["no-key-needed"],
         providerLabel: "9Router",
         model, messages, signal, maxTokens,
+        retryRateLimit: false,
       });
       return;
     }
@@ -728,6 +729,7 @@ function formatProviderError(
 ): string {
   const label = providerLabel ?? "Provider";
   const isOpenRouter = providerLabel === "OpenRouter";
+  const isNineRouter = providerLabel === "9Router";
 
   // Try to extract a meaningful message from the JSON body.
   let detail = "";
@@ -737,8 +739,11 @@ function formatProviderError(
     if (err) {
       // OpenRouter wraps upstream errors in metadata.raw
       const raw: string = err?.metadata?.raw ?? "";
-      const msg: string = err?.message ?? "";
+      const msg: string = err?.message ?? (typeof err === "string" ? err : "");
       detail = (raw || msg).slice(0, 300);
+    } else {
+      const msg = j?.message ?? j?.detail ?? "";
+      if (msg) detail = String(msg).slice(0, 300);
     }
   } catch {
     detail = body.slice(0, 300);
@@ -749,15 +754,25 @@ function formatProviderError(
     const autoHint = isOpenRouter
       ? "\n\n💡 **Tip:** Pilih **Auto** di dropdown model — AI otomatis coba model lain saat satu kena rate-limit."
       : "";
+    const nineRouterHint = isNineRouter
+      ? "\n\n9Router mengembalikan HTTP 429. Ini berasal dari 9Router atau provider di belakangnya, bukan rate limiter internal PremDev."
+      : "";
     return (
-      `⚠️ **${label} kena rate-limit${modelHint}** — model ini sedang penuh di sisi provider (free tier).` +
+      `⚠️ **${label} mengembalikan rate-limit (HTTP 429)${modelHint}**.` +
       (detail ? `\n\nDetail: ${detail}` : "") +
-      autoHint
+      autoHint +
+      nineRouterHint
     );
   }
 
   if (status === 401 || status === 403) {
     const allFailed = keyCount !== undefined && keyCount > 1;
+    if (isNineRouter) {
+      return (
+        `🔑 **9Router menolak API key (HTTP ${status})** — cek API key di menu Endpoint & Key 9Router.` +
+        (detail ? `\n\nDetail: ${detail}` : "")
+      );
+    }
     return (
       `🔑 **${label} API key tidak valid${allFailed ? ` (semua ${keyCount} key gagal)` : ""}** — ` +
       `cek atau update key di Admin → AI Keys.` +
@@ -766,6 +781,12 @@ function formatProviderError(
   }
 
   if (status === 402) {
+    if (isNineRouter) {
+      return (
+        `💳 **9Router/provider upstream menolak request (HTTP 402)** — cek koneksi provider, kredit, atau quota di dashboard 9Router.` +
+        (detail ? `\n\nDetail: ${detail}` : "")
+      );
+    }
     return (
       `💳 **${label} kredit habis** — top-up atau ganti ke model free (\`:free\`).` +
       (detail ? `\n\nDetail: ${detail}` : "")
@@ -773,6 +794,12 @@ function formatProviderError(
   }
 
   if (status >= 500) {
+    if (isNineRouter) {
+      return (
+        `🔴 **9Router/provider upstream error (${status})** — cek Console Log 9Router dan provider yang dipakai.` +
+        (detail ? `\n\nDetail: ${detail}` : "")
+      );
+    }
     return (
       `🔴 **${label} server error (${status})** — provider sedang bermasalah, coba lagi sebentar.` +
       (detail ? `\n\nDetail: ${detail}` : "")
@@ -799,6 +826,8 @@ export async function* streamOpenAICompat(opts: {
   extraBody?: Record<string, unknown>;
   providerLabel?: string;
   firstTokenTimeoutMs?: number;
+  /** Let gateway 429 responses pass through instead of adding PremDev backoff. */
+  retryRateLimit?: boolean;
 }): AsyncGenerator<string> {
   if (!opts.keys || opts.keys.length === 0) {
     yield `(${opts.providerLabel ?? opts.url} key not configured)`;
@@ -831,6 +860,7 @@ export async function* streamOpenAICompat(opts: {
    * an error.  Any non-429 failure still breaks out immediately.
    */
   const QUOTA_RESET_WAIT_MS = 60_000;
+  const retryRateLimit = opts.retryRateLimit !== false;
 
   let quotaRound = 0;
   while (true) {
@@ -922,7 +952,7 @@ export async function* streamOpenAICompat(opts: {
         if (!isRateLimitResponse) allRateLimited = false;
 
         // 429: retry the same key with exponential backoff before failing over.
-        if (res.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
+        if (retryRateLimit && res.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
           const waitMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
           const waitSec = Math.round(waitMs / 1000);
           const label = opts.providerLabel ?? opts.url;
@@ -956,7 +986,7 @@ export async function* streamOpenAICompat(opts: {
 
     // All keys exhausted.  If every failure was a rate-limit (status 429 or body says so),
     // wait for quota reset and retry automatically.
-    if (allRateLimited && lastError) {
+    if (retryRateLimit && allRateLimited && lastError) {
       quotaRound++;
       const waitSec = Math.round(QUOTA_RESET_WAIT_MS / 1000);
       const label = opts.providerLabel ?? opts.url;
