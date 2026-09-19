@@ -22,7 +22,6 @@ import {
 import { requireUser } from "../lib/auth-helpers.js";
 import { db, DbWorkspace } from "../lib/db.js";
 import { getAIKey, listCustomProviders } from "../lib/ai-settings.js";
-import { config } from "../lib/config.js";
 import {
   type Provider,
   type ChatMsg,
