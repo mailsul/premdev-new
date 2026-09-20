@@ -183,6 +183,163 @@ function estimateTokens(messages: ChatMsg[]): number {
   return Math.ceil(messages.reduce((s, m) => s + (m.content?.length || 0), 0) / 4);
 }
 
+type CompatMessage = {
+  role: "user" | "assistant" | "system";
+  content: unknown;
+};
+
+function providerErrorMarker(
+  status: number,
+  retryable: boolean,
+  code?: string,
+): string {
+  const safeCode = (code || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 80);
+  // HTML comments keep the machine-readable state in the streamed assistant
+  // text without exposing an implementation marker in the chat bubble.
+  return `<!--__PROVIDER_ERROR__ status=${status} retryable=${retryable ? "true" : "false"}${safeCode ? ` code=${safeCode}` : ""}-->\n`;
+}
+
+function effectiveProviderStatus(status: number, body: string): number {
+  // Gateways such as 9Router may return HTTP 503 while embedding the actual
+  // upstream status in the body. Retry policy must follow the upstream status
+  // for validation errors, otherwise a permanent 400 enters the retry loop.
+  const upstream = body.match(/\]\s*\[(\d{3})\]|HTTP\s*(\d{3})/i);
+  const parsed = Number(upstream?.[1] || upstream?.[2] || 0);
+  return parsed >= 400 && parsed <= 599 ? parsed : status;
+}
+
+function normalizeCompatMessages(messages: ChatMsg[], ensureFinalUser: boolean): CompatMessage[] {
+  const mapped = messages
+    .filter((m) => !(m.role === "assistant" && !m.content.trim() && !m.images?.length))
+    .map((m) => {
+      if (m.images && m.images.length > 0 && m.role === "user") {
+        const parts: any[] = [];
+        if (m.content) parts.push({ type: "text", text: m.content });
+        for (const img of m.images) {
+          parts.push({ type: "image_url", image_url: { url: img } });
+        }
+        return { role: m.role, content: parts } satisfies CompatMessage;
+      }
+      return { role: m.role, content: m.content } satisfies CompatMessage;
+    });
+
+  if (!ensureFinalUser || mapped.length === 0) return mapped;
+
+  // Keep real system instructions at the beginning. Older browser sessions
+  // may contain synthetic system messages in the history; treating them as
+  // system instructions here is safer than leaving one as the final turn.
+  const system = mapped
+    .filter((m) => m.role === "system")
+    .map((m) => String(m.content))
+    .filter(Boolean)
+    .join("\n\n");
+  const conversation = mapped.filter((m) => m.role !== "system");
+  const ordered: CompatMessage[] = system
+    ? [{ role: "system", content: system }, ...conversation]
+    : conversation;
+  const normalized: CompatMessage[] = [];
+
+  for (const message of ordered) {
+    const previous = normalized[normalized.length - 1];
+    if (previous?.role === message.role) {
+      if (typeof previous.content === "string" && typeof message.content === "string") {
+        previous.content = `${previous.content}\n\n${message.content}`;
+      } else {
+        const previousParts = Array.isArray(previous.content)
+          ? previous.content
+          : [{ type: "text", text: String(previous.content ?? "") }];
+        const currentParts = Array.isArray(message.content)
+          ? message.content
+          : [{ type: "text", text: String(message.content ?? "") }];
+        previous.content = [...previousParts, ...currentParts];
+      }
+    } else {
+      normalized.push(message);
+    }
+  }
+
+  if (normalized[0]?.role === "assistant") {
+    normalized.unshift({
+      role: "user",
+      content: "Gunakan konteks percakapan berikut untuk menjawab permintaan terakhir.",
+    });
+  }
+
+  const last = normalized[normalized.length - 1];
+  if (last && last.role === "assistant") {
+    normalized.push({
+      role: "user",
+      content: "Lanjutkan dari konteks sebelumnya dan jawab permintaan terakhir.",
+    });
+  } else if (last && last.role === "system") {
+    normalized.push({
+      role: "user",
+      content: "Jawab permintaan terakhir berdasarkan instruksi sistem.",
+    });
+  }
+  return normalized;
+}
+
+function normalizeGeminiMessages(messages: ChatMsg[]): {
+  system: string;
+  contents: { role: "user" | "model"; parts: any[] }[];
+} {
+  const system = messages
+    .filter((m) => m.role === "system")
+    .map((m) => m.content.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const contents: { role: "user" | "model"; parts: any[] }[] = [];
+
+  for (const message of messages) {
+    if (message.role === "system") continue;
+    if (message.role === "assistant" && !message.content.trim() && !message.images?.length) continue;
+
+    const role = message.role === "assistant" ? "model" : "user";
+    const parts: any[] = [];
+    if (message.content) parts.push({ text: message.content });
+    if (message.images && role === "user") {
+      for (const img of message.images) {
+        const parsed = parseDataUrlLocal(img);
+        if (parsed) parts.push({ inlineData: { mimeType: parsed.mimeType, data: parsed.data } });
+      }
+    }
+    if (parts.length === 0) parts.push({ text: "" });
+
+    const previous = contents[contents.length - 1];
+    if (previous?.role === role) {
+      // Gemini requires alternating user/model turns. Merge consecutive
+      // turns instead of forwarding an invalid transcript.
+      const previousText = previous.parts.find((p) => typeof p?.text === "string");
+      const currentText = parts.find((p) => typeof p?.text === "string");
+      if (previousText && currentText) {
+        previousText.text = `${previousText.text}\n\n${currentText.text}`;
+        for (const part of parts) {
+          if (part !== currentText) previous.parts.push(part);
+        }
+      } else {
+        previous.parts.push(...parts);
+      }
+    } else {
+      contents.push({ role, parts });
+    }
+  }
+
+  if (contents.length === 0 || contents[0].role === "model") {
+    contents.unshift({
+      role: "user",
+      parts: [{ text: "Gunakan konteks percakapan berikut untuk menjawab permintaan terakhir." }],
+    });
+  }
+  if (contents[contents.length - 1]?.role === "model") {
+    contents.push({
+      role: "user",
+      parts: [{ text: "Lanjutkan dari konteks sebelumnya dan jawab permintaan terakhir." }],
+    });
+  }
+  return { system, contents };
+}
+
 /**
  * Models known to ignore the structured action format and respond with
  * plain prose only. Surfaced in the /providers response so the UI can
@@ -749,6 +906,13 @@ function formatProviderError(
     detail = body.slice(0, 300);
   }
 
+  const effectiveStatus = effectiveProviderStatus(status, body);
+  const retryable = effectiveStatus === 408 || effectiveStatus === 425 ||
+    effectiveStatus === 429 || effectiveStatus >= 500;
+  const code = effectiveStatus === 400 ? "INVALID_ARGUMENT" : undefined;
+  const marker = providerErrorMarker(effectiveStatus, retryable, code);
+  const withMarker = (message: string) => marker + message;
+
   if (status === 429) {
     const modelHint = model && model !== "auto" ? ` (model: \`${model}\`)` : "";
     const autoHint = isOpenRouter
@@ -757,7 +921,7 @@ function formatProviderError(
     const nineRouterHint = isNineRouter
       ? "\n\n9Router mengembalikan HTTP 429. Ini berasal dari 9Router atau provider di belakangnya, bukan rate limiter internal PremDev."
       : "";
-    return (
+    return withMarker(
       `⚠️ **${label} mengembalikan rate-limit (HTTP 429)${modelHint}**.` +
       (detail ? `\n\nDetail: ${detail}` : "") +
       autoHint +
@@ -768,12 +932,12 @@ function formatProviderError(
   if (status === 401 || status === 403) {
     const allFailed = keyCount !== undefined && keyCount > 1;
     if (isNineRouter) {
-      return (
+      return withMarker(
         `🔑 **9Router menolak API key (HTTP ${status})** — cek API key di menu Endpoint & Key 9Router.` +
         (detail ? `\n\nDetail: ${detail}` : "")
       );
     }
-    return (
+    return withMarker(
       `🔑 **${label} API key tidak valid${allFailed ? ` (semua ${keyCount} key gagal)` : ""}** — ` +
       `cek atau update key di Admin → AI Keys.` +
       (detail ? `\n\nDetail: ${detail}` : "")
@@ -782,12 +946,12 @@ function formatProviderError(
 
   if (status === 402) {
     if (isNineRouter) {
-      return (
+      return withMarker(
         `💳 **9Router/provider upstream menolak request (HTTP 402)** — cek koneksi provider, kredit, atau quota di dashboard 9Router.` +
         (detail ? `\n\nDetail: ${detail}` : "")
       );
     }
-    return (
+    return withMarker(
       `💳 **${label} kredit habis** — top-up atau ganti ke model free (\`:free\`).` +
       (detail ? `\n\nDetail: ${detail}` : "")
     );
@@ -795,19 +959,19 @@ function formatProviderError(
 
   if (status >= 500) {
     if (isNineRouter) {
-      return (
+      return withMarker(
         `🔴 **9Router/provider upstream error (${status})** — cek Console Log 9Router dan provider yang dipakai.` +
         (detail ? `\n\nDetail: ${detail}` : "")
       );
     }
-    return (
+    return withMarker(
       `🔴 **${label} server error (${status})** — provider sedang bermasalah, coba lagi sebentar.` +
       (detail ? `\n\nDetail: ${detail}` : "")
     );
   }
 
   // Generic fallback — still cleaner than raw JSON
-  return `Error ${status} dari ${label}${detail ? `: ${detail}` : "."}`;
+  return withMarker(`Error ${status} dari ${label}${detail ? `: ${detail}` : "."}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -833,33 +997,10 @@ export async function* streamOpenAICompat(opts: {
     yield `(${opts.providerLabel ?? opts.url} key not configured)`;
     return;
   }
-  const apiMessages = opts.messages.map((m) => {
-    if (m.images && m.images.length > 0 && m.role === "user") {
-      const parts: any[] = [];
-      if (m.content) parts.push({ type: "text", text: m.content });
-      for (const img of m.images) {
-        parts.push({ type: "image_url", image_url: { url: img } });
-      }
-      return { role: m.role, content: parts };
-    }
-    return { role: m.role, content: m.content };
-  });
-  // Gemini behind 9Router rejects a request whose effective final turn is a
-  // model turn. Older clients marked synthetic tool/continuation messages as
-  // `system`, and some gateways ignore a trailing system message. Normalize
-  // only the 9Router boundary so other OpenAI-compatible providers retain
-  // their original role semantics.
-  if (opts.providerLabel === "9Router" && apiMessages.length > 1) {
-    const last = apiMessages[apiMessages.length - 1];
-    if (last.role === "system") {
-      last.role = "user";
-    } else if (last.role === "assistant") {
-      apiMessages.push({
-        role: "user",
-        content: "Lanjutkan dari konteks sebelumnya dan jawab permintaan terakhir.",
-      });
-    }
-  }
+  const apiMessages = normalizeCompatMessages(
+    opts.messages,
+    true,
+  );
   const reqBody = JSON.stringify({
     model: opts.model,
     messages: apiMessages,
@@ -1164,7 +1305,7 @@ export async function* streamGoogle(
         }
         if (emitted) return;
         if (!skipReason) {
-          if (lastError) yield `\n\n[Gemini error: ${lastError}]`;
+          if (lastError) yield lastError;
           return;
         }
         if (skipReason === "keydead") break;
@@ -1201,7 +1342,7 @@ export async function* streamGoogle(
         advanceKey = true; lastErr = chunk.slice(9); lastQuotaMsg = lastErr; break;
       }
       if (chunk.startsWith("__ERROR__")) {
-        yield `\n[Gemini error: ${chunk.slice(9)}]`; return;
+        yield chunk.slice(9); return;
       }
       emittedSingle = true;
       yield chunk;
@@ -1223,20 +1364,9 @@ export async function* streamGoogleSingle(
   maxTokens: number,
   signal: AbortSignal,
 ): AsyncGenerator<string> {
-  const sys = messages.find((m) => m.role === "system")?.content;
-  const contents = messages.filter((m) => m.role !== "system").map((m) => {
-    const parts: any[] = [];
-    if (m.content) parts.push({ text: m.content });
-    if (m.images && m.role === "user") {
-      for (const img of m.images) {
-        const parsed = parseDataUrlLocal(img);
-        if (!parsed) continue;
-        parts.push({ inlineData: { mimeType: parsed.mimeType, data: parsed.data } });
-      }
-    }
-    if (parts.length === 0) parts.push({ text: "" });
-    return { role: m.role === "assistant" ? "model" : "user", parts };
-  });
+  const normalized = normalizeGeminiMessages(messages);
+  const sys = normalized.system;
+  const contents = normalized.contents;
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${key}`,
     {
@@ -1269,7 +1399,11 @@ export async function* streamGoogleSingle(
         const status = j?.error?.status ?? "";
         if (msg) friendly = status ? `${status}: ${msg}` : msg;
       } catch {}
-      yield `__ERROR__${res.status} ${friendly}`;
+      const effectiveStatus = effectiveProviderStatus(res.status, txt);
+      const retryable = effectiveStatus === 408 || effectiveStatus === 425 ||
+        effectiveStatus === 429 || effectiveStatus >= 500;
+      const code = effectiveStatus === 400 ? "INVALID_ARGUMENT" : undefined;
+      yield `__ERROR__${providerErrorMarker(effectiveStatus, retryable, code)}${friendly}`;
     }
     return;
   }

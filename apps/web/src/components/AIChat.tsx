@@ -107,6 +107,12 @@ function publishAIExecution(workspaceId: string, action: Action, result: ActionR
  */
 function parseAIError(raw: string): string {
   if (!raw) return "Terjadi kesalahan tidak diketahui.";
+  // Provider errors carry a machine-readable retry flag before the friendly
+  // text. Keep the marker out of the chat bubble.
+  raw = raw.replace(
+    /^(?:<!--)?__PROVIDER_ERROR__\s+status=\d+\s+retryable=(?:true|false)(?:\s+code=\S+)?(?:-->)?\s*\n?/i,
+    "",
+  );
   // Strip leading "Error: NNN " prefix that fetchJson adds
   let s = raw.replace(/^Error:\s*\d+\s*/i, "").trim();
   // Try to extract the human message from nested JSON
@@ -151,11 +157,26 @@ function isPremDevInternalError(text: string): boolean {
 
 function isProviderErrorText(text: string): boolean {
   if (isPremDevInternalError(text)) return false;
+  if (/^(?:<!--)?__PROVIDER_ERROR__\s+status=\d+\s+retryable=(?:true|false)/i.test(text)) {
+    return true;
+  }
   return text.includes("__ai_error__:") ||
     text.startsWith("⚠️ **") ||
     text.startsWith("🔑 **") ||
     text.startsWith("💳 **") ||
     /API key tidak valid|tidak mengembalikan respons|server error|provider mengembalikan/i.test(text);
+}
+
+function isRetryableProviderErrorText(text: string): boolean {
+  if (isPremDevInternalError(text)) return false;
+  const marker = text.match(
+    /^(?:<!--)?__PROVIDER_ERROR__\s+status=\d+\s+retryable=(true|false)/i,
+  );
+  if (marker) return marker[1].toLowerCase() === "true";
+  // Legacy provider messages without a marker are retryable only when they
+  // clearly describe a transient condition. Generic warnings and HTTP 400
+  // validation errors must stop immediately.
+  return /rate.?limit|HTTP\s*429|server error\s*\((?:5\d\d)\)|overload|timeout/i.test(text);
 }
 
 // Match the backend's per-image cap (~5 MB raw → ~7 MB base64).
@@ -2639,7 +2660,9 @@ export function AIChat({
         // ✅ Selesai — the task is NOT done.  Auto-retry after 65s to give the
         // quota window time to reset.  The user can also click "Coba lagi"
         // manually at any time via the error box button.
-        if (lastIsProviderError && providerRetryCountRef.current < agentLimits.maxProviderRetries) {
+        if (lastIsProviderError &&
+            isRetryableProviderErrorText(lastAssistantContent) &&
+            providerRetryCountRef.current < agentLimits.maxProviderRetries) {
           // 35s cukup — RPM throttler di backend sudah mencegah 429 proaktif.
           // 65s lama dulu karena backend punya 60s quota-wait sendiri yang
           // numpuk di atas timer ini; sekarang dengan RPM set, backend jarang

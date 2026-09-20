@@ -196,7 +196,9 @@ export const RT_BOUNDS: Record<RtSettingKey, { min: number; max: number }> = {
   "ai.agent.maxRuntimeSeconds":       { min: 30, max: 3600 },
   "ai.agent.maxContinuations":        { min: 0, max: 20 },
   "ai.agent.maxProviderRetries":      { min: 0, max: 5 },
-  "ai.agent.maxToolOutputChars":      { min: 1000, max: 50000 },
+  // 1k is too small for diagnostics and error output: it causes the agent to
+  // continue with an incomplete tool result and makes recovery less reliable.
+  "ai.agent.maxToolOutputChars":      { min: 4000, max: 50000 },
   "ai.agent.maxProviderRoundSeconds": { min: 30, max: 600 },
   "ai.agent.maxConcurrentRuns":       { min: 1, max: 4 },
 };
