@@ -2010,6 +2010,30 @@ function AIRuntimeSettingsSection() {
             />
           ))}
         </div>
+        <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-bg-border pt-4">
+          <button
+            className="btn-secondary !py-1.5 text-xs"
+            onClick={() => {
+              const profile: RtSettings = {
+                "ai.agent.maxActions": 100,
+                "ai.agent.maxRuntimeSeconds": 1800,
+                "ai.agent.maxContinuations": 8,
+                "ai.agent.maxProviderRetries": 3,
+                "ai.agent.maxToolOutputChars": 20000,
+                "ai.agent.maxProviderRoundSeconds": 300,
+                "ai.agent.maxConcurrentRuns": 1,
+              };
+              setDraft((d) => ({ ...d, ...profile }));
+              setSaved(false);
+              setErr("");
+            }}
+          >
+            <Sparkles size={12} /> Terapkan profil Website Builder
+          </button>
+          <span className="text-[11px] text-text-muted">
+            Batas lebih besar tetapi tetap finite; concurrency tetap 1 untuk mencegah konflik file.
+          </span>
+        </div>
       </section>
 
       {/* Rate limiters */}

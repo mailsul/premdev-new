@@ -800,7 +800,7 @@ export async function* streamProvider(
         keys: apiKey ? [apiKey] : ["no-key-needed"],
         providerLabel: "9Router",
         model, messages, signal, maxTokens,
-        retryRateLimit: false,
+        retryRateLimit: true,
       });
       return;
     }
@@ -1110,7 +1110,15 @@ export async function* streamOpenAICompat(opts: {
 
         // 429: retry the same key with exponential backoff before failing over.
         if (retryRateLimit && res.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
-          const waitMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+          // 9Router may provide a provider-specific Retry-After hint. Honor
+          // it, but cap the wait so a malformed gateway response cannot hold
+          // an Agent Run forever. Deterministic 4xx/schema errors never enter
+          // this branch.
+          const retryAfter = Number(res.headers.get("retry-after") ?? "");
+          const hintedMs = Number.isFinite(retryAfter) && retryAfter > 0
+            ? Math.min(60_000, Math.round(retryAfter * 1000))
+            : 0;
+          const waitMs = hintedMs || RATE_LIMIT_RETRY_DELAYS_MS[attempt];
           const waitSec = Math.round(waitMs / 1000);
           const label = opts.providerLabel ?? opts.url;
           yield `\n⏳ **${label} — batas RPM tercapai**, menunggu ${waitSec}s lalu coba lagi (percobaan ${attempt + 2}/${RATE_LIMIT_RETRY_DELAYS_MS.length + 1})…\n`;

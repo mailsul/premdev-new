@@ -946,10 +946,22 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     try {
       const r = await runOneOff(id, browserCheckCommand(body.path, body.steps), 45_000);
       const output = r.output.length > 18_000 ? r.output.slice(-18_000) : r.output;
+      let evidence: Record<string, unknown> | undefined;
+      const jsonLines = output.split("\n").map((line) => line.trim()).filter(Boolean);
+      for (let i = jsonLines.length - 1; i >= 0; i--) {
+        try {
+          const parsed = JSON.parse(jsonLines[i]);
+          if (parsed && typeof parsed === "object" && ("consoleErrors" in parsed || "pageErrors" in parsed || "controls" in parsed)) {
+            evidence = parsed;
+            break;
+          }
+        } catch {}
+      }
       return {
         ok: r.exitCode === 0,
         output: output || "Browser check produced no output.",
         exitCode: r.exitCode,
+        evidence,
       };
     } catch (e: any) {
       return reply.code(500).send({ error: e.message });
@@ -997,6 +1009,48 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       const r = await runOneOff(id, cmd, 180_000);
       const out = r.output.length > 12_000 ? r.output.slice(-12_000) : r.output;
       return { tool, exitCode: r.exitCode, ok: r.exitCode === 0, output: out };
+    } catch (e: any) {
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
+  // ── Project validator ────────────────────────────────────────────────────
+  // This is intentionally a fixed, project-aware command. It never accepts a
+  // shell command from the caller, and all checks run through the workspace
+  // runtime container via runOneOff.
+  app.post("/:id/validate", async (req, reply) => {
+    const u = await requireUser(req, reply);
+    if (!u) return;
+    const id = (req.params as any).id;
+    const w = db.prepare("SELECT id FROM workspaces WHERE id = ? AND user_id = ?").get(id, u.id);
+    if (!w) return reply.code(404).send({ error: "Not found" });
+
+    const validator = [
+      "set -o pipefail",
+      "overall=0",
+      "if find . -path './node_modules' -prune -o -path './.git' -prune -o -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \\) -print0 | xargs -0 -r -n1 node --check >/tmp/premdev-jscheck.out 2>&1; then echo '[syntax] PASS'; else echo '[syntax] FAIL'; cat /tmp/premdev-jscheck.out; overall=1; fi",
+      "if find . -path './node_modules' -prune -o -path './.git' -prune -o -type f -name '*.py' -print0 | xargs -0 -r -n1 python3 -m py_compile >/tmp/premdev-pycheck.out 2>&1; then echo '[python] PASS'; else echo '[python] FAIL'; cat /tmp/premdev-pycheck.out; overall=1; fi",
+      "if [ -f tsconfig.json ] && command -v npx >/dev/null 2>&1; then if npx --no-install tsc --noEmit --pretty false >/tmp/premdev-tsc.out 2>&1; then echo '[types] PASS'; else echo '[types] FAIL'; tail -120 /tmp/premdev-tsc.out; overall=1; fi; else echo '[types] SKIP'; fi",
+      "if [ -f package.json ] && grep -q '\"build\"[[:space:]]*:' package.json && command -v npm >/dev/null 2>&1; then if npm run build --if-present >/tmp/premdev-build.out 2>&1; then echo '[build] PASS'; else echo '[build] FAIL'; tail -120 /tmp/premdev-build.out; overall=1; fi; else echo '[build] SKIP'; fi",
+      "exit $overall",
+    ].join("; ");
+    try {
+      const r = await runOneOff(id, validator, 180_000);
+      const output = r.output.length > 18_000 ? r.output.slice(-18_000) : r.output;
+      const checks = output.split("\n")
+        .filter((line) => /^\[(syntax|python|types|build)\] /.test(line))
+        .map((line) => {
+          const match = line.match(/^\[([^\]]+)\] (PASS|FAIL|SKIP)/);
+          return match ? { name: match[1], status: match[2].toLowerCase() } : null;
+        })
+        .filter(Boolean);
+      return {
+        ok: r.exitCode === 0,
+        status: r.exitCode === 0 ? "validated" : "failed",
+        exitCode: r.exitCode,
+        checks,
+        output: output || "Validator produced no output.",
+      };
     } catch (e: any) {
       return reply.code(500).send({ error: e.message });
     }

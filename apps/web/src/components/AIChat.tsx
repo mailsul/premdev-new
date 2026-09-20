@@ -486,7 +486,7 @@ function filterStreamAnnotations(text: string): string {
 }
 
 function parseActions(text: string): { actions: Action[]; cleaned: string; plan?: string } {
-  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "preview", "browser", "db", "open", "plan", "memory"]);
+  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "preview", "browser", "validate", "db", "open", "plan", "memory"]);
   const actions: Action[] = [];
   const kept: string[] = [];
   let planStr: string | undefined;
@@ -499,7 +499,7 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
   // immediately ("✅ Selesai") even though the AI still had work to do.
   // Fix: split off any leading text and add a synthetic closing fence for
   // single-line bash commands so the parser can process them correctly.
-  const INLINE_OPEN_RE = /^(.*?)(`{3,})((?:bash|file|workspace|patch|search|diag|test|web|preview|browser|db|open|plan|memory):.*)$/;
+  const INLINE_OPEN_RE = /^(.*?)(`{3,})((?:bash|file|workspace|patch|search|diag|test|web|preview|browser|validate|db|open|plan|memory):.*)$/;
   const preprocessedLines: string[] = [];
   for (const rawLine of text.split("\n")) {
     const m = rawLine.match(INLINE_OPEN_RE);
@@ -713,6 +713,8 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
           steps: headerMatch[1] === "check" ? lines : [],
         });
       }
+    } else if (kind === "validate" && (header === "run" || header === "")) {
+      actions.push({ kind: "validate" });
     } else if (kind === "plan" && (header === "" || header === "run")) {
       // plan: block — not executed, stored as anchor for the orchestrator.
       // Rendered inline as a blockquote so the user can see the AI's plan.
@@ -1426,6 +1428,14 @@ export function AIChat({
   const sessionActionsRef = useRef<number>(0);     // total actions run this session
   const sessionCheckpointRef = useRef<string | null>(null); // checkpoint created at start of this session
   const sessionActionLogRef = useRef<string[]>([]); // ordered action labels run this session (for activity log)
+  const sessionFailureStreakRef = useRef<number>(0);
+  const sessionStrategyRef = useRef<"normal" | "diagnostic" | "minimal">("normal");
+  const sessionEvidenceRef = useRef<{
+    validated: boolean;
+    browserVerified: boolean;
+    browserAttempted: boolean;
+    failed: boolean;
+  }>({ validated: false, browserVerified: false, browserAttempted: false, failed: false });
   // Per-message action results: msgIdx -> [results]. Filled sequentially by
   // the autonomous orchestrator below; ActionCard reads from this map to
   // display the outcome without ever running the action itself.
@@ -2315,6 +2325,9 @@ export function AIChat({
     sessionActionsRef.current = 0;
     sessionCheckpointRef.current = null;
     sessionActionLogRef.current = [];
+    sessionFailureStreakRef.current = 0;
+    sessionStrategyRef.current = "normal";
+    sessionEvidenceRef.current = { validated: false, browserVerified: false, browserAttempted: false, failed: false };
     loopStateRef.current = createLoopState();
     planRef.current = null;
     preFlightRef.current = null;
@@ -2518,6 +2531,9 @@ export function AIChat({
     loopStateRef.current = createLoopState();
     iterationRef.current = 0;
     planRef.current = null;
+    sessionFailureStreakRef.current = 0;
+    sessionStrategyRef.current = "normal";
+    sessionEvidenceRef.current = { validated: false, browserVerified: false, browserAttempted: false, failed: false };
     lastAutoSavedTurnRef.current = 0;
     try { localStorage.removeItem(TAB_MSGS_KEY(workspaceId, activeTabId)); } catch {}
   }
@@ -2651,49 +2667,46 @@ export function AIChat({
           return;
         }
 
-        // AI ended naturally — run a final verification pass ONCE per session
-        // before showing ✅ Selesai. If the verify output has red flags
-        // (fatal errors, no running process after restart, etc.) inject them
-        // back to the AI so it can fix before the session closes.
+        // AI ended naturally — run a project-aware validation pass ONCE per
+        // clean cycle before showing completion. A transport error, failed
+        // check, or unavailable validator is evidence of failure, never a
+        // reason to claim success.
         // Skip if last message was a provider/rate-limit error — firing another
         // AI call while rate-limited just creates a second error and burns the
         // session's recovery slots.
         if (!lastIsProviderError && autonomous && sessionActionsRef.current > 0 && !finalVerifyDoneRef.current) {
-          finalVerifyDoneRef.current = true; // prevent re-entry on the next "done"
-          const FV_CMD = [
-            "printf '=== STATUS PROSES ===\\n'",
-            "ps aux | grep -E 'php|node|python|ruby|nginx|apache|go |deno' | grep -v grep | head -10 || echo '(tidak ada proses app)'",
-            "printf '\\n=== PORT LISTEN ===\\n'",
-            "ss -tlnp 2>/dev/null | grep LISTEN | head -8 || echo '(tidak ada)'",
-            "printf '\\n=== ERROR LOG (tail 20) ===\\n'",
-            "tail -20 .premdev-data/error.log 2>/dev/null || tail -20 logs/error.log 2>/dev/null || tail -20 storage/logs/laravel.log 2>/dev/null || echo '(tidak ada error log)'",
-          ].join("; ");
+          finalVerifyDoneRef.current = true;
           try {
-            const fvRes = await fetch(`/api/workspaces/${workspaceId}/exec`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              credentials: "include",
-              body: JSON.stringify({ command: FV_CMD }),
+            const validation = await runAction(workspaceId, { kind: "validate" }, undefined, {
+              provider,
+              model,
             });
-            if (fvRes.ok) {
-              const fvData = await fvRes.json() as { output?: string };
-              const fvOut = (fvData.output ?? "").trim();
-              // Detect red flags: PHP fatal, JS errors, no process at all,
-              // or uncaught exceptions in error log.
-              const RED_FLAGS = /fatal error|uncaught|exception|error:|failed to|cannot|enoent|eaddrinuse|econnrefused|tidak ada proses/i;
-              if (fvOut && RED_FLAGS.test(fvOut)) {
-                // Inject back to AI with clear framing so it knows this is
-                // the final verification, not a new user request.
-                await sendRaw(
-                  `Final verification (cek otomatis setelah AI selesai):\n\`\`\`\n${fvOut.slice(0, 2000)}\n\`\`\`\n\nAda indikasi masalah di output di atas. Periksa dan perbaiki sebelum benar-benar selesai. Jika semua sudah OK, cukup tulis konfirmasi singkat (tanpa action blocks).`,
-                  undefined,
-                  { synthetic: true, continuation: true, eventType: "tool_result" },
-                );
-                return; // don't show ✅ yet — wait for AI response
-              }
+            sessionEvidenceRef.current.validated = validation.ok;
+            recordExecution({ kind: "validate" }, validation);
+            if (!validation.ok) {
+              sessionEvidenceRef.current.failed = true;
+              finalVerifyDoneRef.current = false;
+              await sendRaw(
+                `Final project validation FAILED. Status tetap failed/unverified; jangan laporkan selesai.\n\`\`\`\n${validation.output.slice(0, 6000)}\n\`\`\`\nPeriksa root cause berdasarkan output tersebut, ubah strategi jika pendekatan sebelumnya gagal, perbaiki masalahnya, lalu jalankan validate:run lagi.`,
+                undefined,
+                { synthetic: true, continuation: true, eventType: "tool_result" },
+              );
+              return;
             }
-          } catch {
-            // Non-fatal — verification failure must never block session close.
+          } catch (e: any) {
+            sessionEvidenceRef.current.failed = true;
+            finalVerifyDoneRef.current = false;
+            setAgentRunStatus("failed");
+            setMsgs((prev) => [
+              ...prev,
+              {
+                role: "system" as const,
+                content: `❌ **Validasi tidak tersedia** — status: unverified. Run tidak ditandai selesai karena validator gagal dipanggil.${e?.message ? `\n\n${String(e.message).slice(0, 500)}` : ""}`,
+                synthetic: true,
+                sentAt: Date.now(),
+              },
+            ]);
+            return;
           }
         }
 
@@ -2764,7 +2777,23 @@ export function AIChat({
           return;
         }
 
-        // All clear (or verify passed / not applicable) — show session summary.
+        if (sessionEvidenceRef.current.browserAttempted && !sessionEvidenceRef.current.browserVerified) {
+          stoppedRef.current = true;
+          setAgentRunStatus("failed");
+          setMsgs((prev) => [
+            ...prev,
+            {
+              role: "system" as const,
+              content: "❌ **Browser verification gagal** — status: implemented · validated · browser-failed. Run tidak ditandai selesai karena console/page evidence tidak lolos.",
+              synthetic: true,
+              sentAt: Date.now(),
+            },
+          ]);
+          return;
+        }
+
+        // All clear — expose separate implementation, validation, and browser
+        // evidence states instead of collapsing them into one "done" label.
         setAgentRunStatus("completed");
         if (autonomous && sessionActionsRef.current > 0) {
           const elapsed = Math.round((Date.now() - sessionStartRef.current) / 1000);
@@ -2773,11 +2802,19 @@ export function AIChat({
           const timeStr = mins > 0 ? `${mins} mnt ${secs} dtk` : `${secs} dtk`;
           const ckId = sessionCheckpointRef.current ?? undefined;
           const actionLog = sessionActionLogRef.current.slice();
+          const evidence = sessionEvidenceRef.current;
+          const statusLine = [
+            "implemented",
+            evidence.validated ? "validated" : "unverified",
+            evidence.browserAttempted
+              ? (evidence.browserVerified ? "browser-verified" : "browser-failed")
+              : "browser-not-run",
+          ].join(" · ");
           setMsgs((prev) => [
             ...prev,
             {
               role: "system" as const,
-              content: `✅ **Selesai** — ${timeStr} · ${sessionActionsRef.current} aksi dijalankan`,
+              content: `✅ **Selesai berdasarkan bukti** — ${statusLine}\n${timeStr} · ${sessionActionsRef.current} aksi dijalankan`,
               synthetic: true,
               sentAt: Date.now(),
               ...(ckId ? { sessionCheckpointId: ckId } : {}),
@@ -2941,6 +2978,25 @@ export function AIChat({
         results[i] = r;
         recordExecution(toRun[i], r);
         sessionActionsRef.current += 1;
+        if (toRun[i].kind === "browser") {
+          sessionEvidenceRef.current.browserAttempted = true;
+          if (r.ok && r.evidence?.status === "browser-verified") {
+            sessionEvidenceRef.current.browserVerified = true;
+          } else {
+            sessionEvidenceRef.current.failed = true;
+          }
+        }
+        if (r.ok) {
+          sessionFailureStreakRef.current = 0;
+        } else {
+          sessionFailureStreakRef.current += 1;
+          sessionEvidenceRef.current.failed = true;
+          if (sessionFailureStreakRef.current >= 3) {
+            sessionStrategyRef.current = "minimal";
+          } else if (sessionFailureStreakRef.current >= 2) {
+            sessionStrategyRef.current = "diagnostic";
+          }
+        }
         // Track action label for the session activity log.
         sessionActionLogRef.current.push(actionLabel(toRun[i]));
         // Audit each action with the provider/model that triggered it. Fire
@@ -2974,11 +3030,16 @@ export function AIChat({
       const planAnchor = planRef.current
         ? `[ANCHOR — Rencana aktif, lanjutkan sesuai rencana ini]\n${planRef.current}\n\n`
         : "";
+      const strategyHint = sessionStrategyRef.current === "diagnostic"
+        ? "[STRATEGY CHANGE — dua action terakhir gagal. Berhenti mengulang patch/command yang sama; baca output error lengkap, periksa root cause, lalu pilih pendekatan berbeda.]\n\n"
+        : sessionStrategyRef.current === "minimal"
+          ? "[STRATEGY CHANGE — tiga kegagalan beruntun. Gunakan langkah minimal yang dapat diverifikasi: satu perubahan kecil, validate:run, lalu lanjut hanya jika lolos.]\n\n"
+          : "";
       // Pass `toRun` (not `acts`) so the AI receives results for injected
       // verification steps too (diag output, curl response).
       setAgentRunStatus("waiting_tool");
       await sendRaw(
-        planAnchor + formatToolResults(toRun, results, agentLimits.maxToolOutputChars),
+        planAnchor + strategyHint + formatToolResults(toRun, results, agentLimits.maxToolOutputChars),
         undefined,
         { synthetic: true, continuation: true, eventType: "tool_result" },
       );
@@ -4192,6 +4253,8 @@ function ActionCard({
       case "web":    return { icon: <Globe size={12} />,     label: action.query.slice(0, 70), color: "text-text-muted" };
       case "webFetch": return { icon: <Globe size={12} />,   label: action.url.slice(0, 70), color: "text-text-muted" };
       case "preview": return { icon: <Globe size={12} />,   label: `Preview ${action.path || "/"}`, color: "text-accent" };
+      case "browser": return { icon: <Globe size={12} />,   label: `Browser ${action.path || "/"}`, color: "text-accent" };
+      case "validate": return { icon: <Check size={12} />,  label: "Project validation", color: "text-success" };
       case "memorySave": return { icon: <Brain size={12} />, label: `Memory (${action.content.split("\n").length} baris)`, color: "text-success" };
       case "setRun": return { icon: <Zap size={12} />,       label: "Set run command", color: "text-accent" };
       case "setEnv": return { icon: <FileEdit size={12} />,  label: `Env vars (${Object.keys(action.vars).length} key${Object.keys(action.vars).length === 1 ? "" : "s"})`, color: "text-accent" };

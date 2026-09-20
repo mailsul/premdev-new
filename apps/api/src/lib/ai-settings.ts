@@ -213,6 +213,23 @@ export type AgentLimits = {
   maxConcurrentRuns: number;
 };
 
+// Named, bounded profiles keep larger website tasks practical without
+// introducing an unlimited execution mode. The admin UI can apply these
+// values through the existing persisted settings endpoint.
+export type AgentProfile = "default" | "website-builder";
+export const AGENT_PROFILES: Record<AgentProfile, Partial<AgentLimits>> = {
+  default: {},
+  "website-builder": {
+    maxActions: 100,
+    maxRuntimeSeconds: 1800,
+    maxContinuations: 8,
+    maxProviderRetries: 3,
+    maxToolOutputChars: 20000,
+    maxProviderRoundSeconds: 300,
+    maxConcurrentRuns: 1,
+  },
+};
+
 export function getRtSetting(key: RtSettingKey): number {
   const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
   if (row?.value) {

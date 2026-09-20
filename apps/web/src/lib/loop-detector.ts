@@ -36,6 +36,7 @@ function actionTarget(a: Action): string {
     case "webFetch":   return a.url.slice(0, 200);
     case "preview":    return a.path ?? "/";
     case "browser":    return `${a.path ?? "/"} ${a.steps.join(" | ")}`.slice(0, 200);
+    case "validate":   return "";
     case "memorySave": return a.content.split("\n")[0].slice(0, 200);
     case "setRun":        return a.command.slice(0, 200);
     case "setEnv":        return Object.keys(a.vars).join(",");

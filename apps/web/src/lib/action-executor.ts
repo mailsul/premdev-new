@@ -18,6 +18,7 @@ export type Action =
   | { kind: "webFetch"; url: string; offset?: number }
   | { kind: "preview"; path?: string }
   | { kind: "browser"; path?: string; steps: string[] }
+  | { kind: "validate" }
   | { kind: "memorySave"; content: string }
   | { kind: "setRun"; command: string }
   | { kind: "setEnv"; vars: Record<string, string> }
@@ -29,7 +30,15 @@ export type Action =
   | { kind: "db"; sql: string }
   | { kind: "open"; path: string };
 
-export type ActionResult = { ok: boolean; output: string };
+export type VerificationEvidence = {
+  status: "implemented" | "validated" | "browser-verified" | "unverified" | "failed";
+  checks?: Array<{ name: string; status: string }>;
+  consoleErrors?: string[];
+  pageErrors?: string[];
+  controls?: Array<{ tag: string; text: string; id?: string; name?: string; href?: string }>;
+};
+
+export type ActionResult = { ok: boolean; output: string; evidence?: VerificationEvidence };
 
 export type ExecOptions = {
   signal?: AbortSignal;
@@ -212,6 +221,23 @@ export async function runAction(
         return {
           ok: r.ok === true,
           output: r.output || (r.ok ? "Browser check passed." : "Browser check failed."),
+          evidence: {
+            status: r.ok === true ? "browser-verified" : "failed",
+            ...(r.evidence?.consoleErrors ? { consoleErrors: r.evidence.consoleErrors } : {}),
+            ...(r.evidence?.pageErrors ? { pageErrors: r.evidence.pageErrors } : {}),
+            ...(r.evidence?.controls ? { controls: r.evidence.controls } : {}),
+          },
+        };
+      }
+      case "validate": {
+        const r = await fetchJson("POST", `/workspaces/${workspaceId}/validate`);
+        return {
+          ok: r.ok === true,
+          output: `Project validation (${r.status ?? (r.ok ? "validated" : "failed")}):\n${r.output || "(no output)"}`,
+          evidence: {
+            status: r.ok === true ? "validated" : "failed",
+            checks: Array.isArray(r.checks) ? r.checks : undefined,
+          },
         };
       }
       case "memorySave": {
@@ -293,6 +319,7 @@ export function actionLabel(a: Action): string {
     case "webFetch":   return `web:fetch ${a.url.slice(0, 80)}`;
     case "preview":    return `preview:check ${a.path || "/"}`;
     case "browser":    return `browser:check ${a.path || "/"}${a.steps.length ? ` (${a.steps.length} step${a.steps.length === 1 ? "" : "s"})` : ""}`;
+    case "validate":   return "project:validate";
     case "memorySave": return `memory:save (${a.content.split("\n").length} baris)`;
     case "setRun":     return `workspace:setRun \`${a.command.slice(0, 80)}\``;
     case "setEnv": {
@@ -340,6 +367,7 @@ export function actionFingerprint(a: Action): string {
     case "webFetch":   return `webFetch:${fnv1a32(a.url)}`;
     case "preview":    return `preview:${fnv1a32(a.path ?? "/")}`;
     case "browser":    return `browser:${fnv1a32((a.path ?? "/") + "\0" + a.steps.join("\n"))}`;
+    case "validate":   return "validate:";
     case "memorySave": return `memorySave:${fnv1a32(a.content)}`;
     case "setRun":        return `setRun:${fnv1a32(a.command)}`;
     case "setEnv":        return `setEnv:${fnv1a32(JSON.stringify(a.vars))}`;
@@ -369,6 +397,7 @@ function _actionTarget(a: Action): string {
     case "webFetch":   return a.url.slice(0, 200);
     case "preview":    return a.path ?? "/";
     case "browser":    return `${a.path ?? "/"} ${a.steps.join(" | ")}`.slice(0, 200);
+    case "validate":  return "";
     case "memorySave": return a.content.split("\n")[0].slice(0, 200);
     case "setRun":        return a.command.slice(0, 200);
     case "setEnv":        return Object.keys(a.vars).join(",");
