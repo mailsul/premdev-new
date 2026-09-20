@@ -17,6 +17,7 @@ export type Action =
   | { kind: "web"; query: string }
   | { kind: "webFetch"; url: string; offset?: number }
   | { kind: "preview"; path?: string }
+  | { kind: "browser"; path?: string; steps: string[] }
   | { kind: "memorySave"; content: string }
   | { kind: "setRun"; command: string }
   | { kind: "setEnv"; vars: Record<string, string> }
@@ -203,6 +204,16 @@ export async function runAction(
           output: `Preview ${safePath} (exit=${r.exitCode}):\n${r.output ?? ""}`,
         };
       }
+      case "browser": {
+        const r = await fetchJson("POST", `/workspaces/${workspaceId}/browser-check`, {
+          path: action.path || "/",
+          steps: action.steps,
+        });
+        return {
+          ok: r.ok === true,
+          output: r.output || (r.ok ? "Browser check passed." : "Browser check failed."),
+        };
+      }
       case "memorySave": {
         const lines = action.content.split("\n").length;
         if (provider) {
@@ -281,6 +292,7 @@ export function actionLabel(a: Action): string {
     case "web":        return `web:search ${a.query.slice(0, 60)}`;
     case "webFetch":   return `web:fetch ${a.url.slice(0, 80)}`;
     case "preview":    return `preview:check ${a.path || "/"}`;
+    case "browser":    return `browser:check ${a.path || "/"}${a.steps.length ? ` (${a.steps.length} step${a.steps.length === 1 ? "" : "s"})` : ""}`;
     case "memorySave": return `memory:save (${a.content.split("\n").length} baris)`;
     case "setRun":     return `workspace:setRun \`${a.command.slice(0, 80)}\``;
     case "setEnv": {
@@ -327,6 +339,7 @@ export function actionFingerprint(a: Action): string {
     case "web":        return `web:${fnv1a32(a.query)}`;
     case "webFetch":   return `webFetch:${fnv1a32(a.url)}`;
     case "preview":    return `preview:${fnv1a32(a.path ?? "/")}`;
+    case "browser":    return `browser:${fnv1a32((a.path ?? "/") + "\0" + a.steps.join("\n"))}`;
     case "memorySave": return `memorySave:${fnv1a32(a.content)}`;
     case "setRun":        return `setRun:${fnv1a32(a.command)}`;
     case "setEnv":        return `setEnv:${fnv1a32(JSON.stringify(a.vars))}`;
@@ -355,6 +368,7 @@ function _actionTarget(a: Action): string {
     case "web":        return a.query.slice(0, 200);
     case "webFetch":   return a.url.slice(0, 200);
     case "preview":    return a.path ?? "/";
+    case "browser":    return `${a.path ?? "/"} ${a.steps.join(" | ")}`.slice(0, 200);
     case "memorySave": return a.content.split("\n")[0].slice(0, 200);
     case "setRun":        return a.command.slice(0, 200);
     case "setEnv":        return Object.keys(a.vars).join(",");

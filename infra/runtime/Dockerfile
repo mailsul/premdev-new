@@ -17,7 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl wget ca-certificates gnupg lsb-release \
-      bash zsh git make build-essential pkg-config \
+      bash zsh git make build-essential pkg-config chromium \
       sudo tini openssh-client unzip zip jq tree \
       passwd login adduser \
       vim nano less htop procps net-tools iputils-ping \
@@ -46,7 +46,7 @@ RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
 # need a per-workspace `npm install` for hello-world apps.
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
-    npm install -g pnpm yarn tsx ts-node typescript nodemon \
+    npm install -g pnpm yarn tsx ts-node typescript nodemon playwright-core \
                   express cors body-parser dotenv \
                   http-server serve vite && \
     rm -rf /var/lib/apt/lists/*

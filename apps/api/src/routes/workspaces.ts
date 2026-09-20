@@ -900,6 +900,62 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  // ── Browser smoke-test ────────────────────────────────────────────────────
+  // Unlike preview:check (which only performs an HTTP request), this runs a
+  // headless browser inside the workspace runtime container. It deliberately
+  // accepts only a path and a small declarative step list; arbitrary browser
+  // JavaScript never crosses the API boundary.
+  const BrowserBody = z.object({
+    path: z.string().max(300).regex(/^\/(?!\/)[^\r\n]*$/).optional().default("/"),
+    steps: z.array(z.string().min(1).max(500)).max(12).default([]),
+  });
+
+  function browserCheckCommand(pathname: string, steps: string[]): string {
+    const spec = Buffer.from(JSON.stringify({ path: pathname, steps }), "utf8").toString("base64");
+    const script = [
+      "const { chromium } = require('playwright-core');",
+      `const spec = JSON.parse(Buffer.from('${spec}', 'base64').toString('utf8'));`,
+      "(async()=>{",
+      "const consoleErrors=[]; const consoleWarnings=[]; const pageErrors=[]; const stepResults=[];",
+      "const browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});",
+      "const page=await browser.newPage({viewport:{width:1280,height:800}});",
+      "page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.type()+': '+m.text()); else if(m.type()==='warning')consoleWarnings.push(m.type()+': '+m.text())});",
+      "page.on('pageerror',e=>pageErrors.push(String(e&&e.stack||e)));",
+      "const base=new URL('http://127.0.0.1:'+(process.env.PORT||'5000')); const urlObj=new URL(spec.path||'/',base); if(urlObj.origin!==base.origin)throw new Error('Browser path must stay inside the workspace preview'); const url=urlObj.toString();",
+      "const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:15000});",
+      "await page.waitForTimeout(300);",
+      "const controls=await page.locator('button,a,input,select,textarea,[role=button]').evaluateAll(es=>es.slice(0,80).map(e=>({tag:e.tagName.toLowerCase(),text:(e.innerText||e.getAttribute('aria-label')||e.getAttribute('placeholder')||'').trim().slice(0,120),id:e.id||'',name:e.getAttribute('name')||'',href:e.getAttribute('href')||''})));",
+      "const clean=v=>String(v||'').replace(/^text=/,'').replace(/^['\"]|['\"]$/g,'').trim();",
+      "const locatorFor=raw=>{const s=String(raw||'').trim(); if(s.startsWith('css='))return page.locator(s.slice(4)).first(); if(s.startsWith('text='))return page.getByText(clean(s),{exact:false}).first(); if(s.startsWith('role=')){const m=s.match(/^role=([^\\s]+)(?:\\s+name=(.*))?$/); return m&&m[2]?page.getByRole(m[1],{name:clean(m[2])}).first():page.getByRole(m&&m[1]||'button').first();} return page.locator(s).first();};",
+      "for(const raw of spec.steps||[]){const s=String(raw).trim(); if(!s)continue; if(/^wait\\s+/i.test(s)){const n=Math.min(5000,Math.max(0,Number(s.replace(/^wait\\s+/i,'').trim())||300)); await page.waitForTimeout(n); stepResults.push({step:s,ok:true}); continue;} if(/^expect\\s+text=/i.test(s)){const wanted=clean(s.replace(/^expect\\s+/i,'')); const body=await page.locator('body').innerText(); const ok=body.includes(wanted); stepResults.push({step:s,ok}); if(!ok)throw new Error('Expected text not found: '+wanted); continue;} if(/^click\\s+/i.test(s)){const target=locatorFor(s.replace(/^click\\s+/i,'')); await target.click({timeout:5000}); await page.waitForTimeout(200); stepResults.push({step:s,ok:true}); continue;} if(/^inspect$/i.test(s)){stepResults.push({step:s,ok:true}); continue;} throw new Error('Unsupported browser step: '+s);}",
+      "const body=(await page.locator('body').innerText()).slice(0,6000);",
+      "const status=response&&response.status(); const result={ok:!!response&&status<400&&consoleErrors.length===0&&pageErrors.length===0,status,url,title:await page.title(),controls,consoleErrors,consoleWarnings,pageErrors,stepResults,body};",
+      "console.log(JSON.stringify(result)); await browser.close(); if(!result.ok)process.exitCode=2;",
+      "})().catch(async e=>{console.log(JSON.stringify({ok:false,error:String(e&&e.stack||e)}));process.exitCode=1});",
+    ].join("");
+    return `node -e ${JSON.stringify(script)}`;
+  }
+
+  app.post("/:id/browser-check", async (req, reply) => {
+    const u = await requireUser(req, reply);
+    if (!u) return;
+    const id = (req.params as any).id;
+    const w = db.prepare("SELECT id FROM workspaces WHERE id = ? AND user_id = ?").get(id, u.id);
+    if (!w) return reply.code(404).send({ error: "Not found" });
+    const body = BrowserBody.parse(req.body ?? {});
+    try {
+      const r = await runOneOff(id, browserCheckCommand(body.path, body.steps), 45_000);
+      const output = r.output.length > 18_000 ? r.output.slice(-18_000) : r.output;
+      return {
+        ok: r.exitCode === 0,
+        output: output || "Browser check produced no output.",
+        exitCode: r.exitCode,
+      };
+    } catch (e: any) {
+      return reply.code(500).send({ error: e.message });
+    }
+  });
+
   // ── Test runner (Batch B #11) ─────────────────────────────────────────────
   // Auto-detects the right test command from project metadata when the caller
   // doesn't pass one. Output is capped to keep the AI loop fast even when a

@@ -211,6 +211,12 @@ function modelSupportsVision(provider: string, model: string): boolean {
     // kimi-pro is text-only per https://konektika.web.id/docs.
     return false;
   }
+  if (provider === "9router") {
+    // 9Router exposes the upstream model id (for example
+    // ag/gemini-3.8-flash). Its OpenAI-compatible gateway preserves image
+    // parts, so classify known multimodal upstream families correctly.
+    return /(?:^|\/)(?:gemini-(1\.5|2|3)|gpt-4(?:o|\.1)|claude-(3|4)|.*vision)/.test(m);
+  }
   if (provider === "snifox") {
     // Snifox is OpenRouter-style — every modern OpenAI/Claude/Gemini model
     // accepts images. Match those families plus a generic "vision" tag.
@@ -480,7 +486,7 @@ function filterStreamAnnotations(text: string): string {
 }
 
 function parseActions(text: string): { actions: Action[]; cleaned: string; plan?: string } {
-  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "preview", "db", "open", "plan", "memory"]);
+  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "preview", "browser", "db", "open", "plan", "memory"]);
   const actions: Action[] = [];
   const kept: string[] = [];
   let planStr: string | undefined;
@@ -493,7 +499,7 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
   // immediately ("✅ Selesai") even though the AI still had work to do.
   // Fix: split off any leading text and add a synthetic closing fence for
   // single-line bash commands so the parser can process them correctly.
-  const INLINE_OPEN_RE = /^(.*?)(`{3,})((?:bash|file|workspace|patch|search|diag|test|web|db|open|plan|memory):.*)$/;
+  const INLINE_OPEN_RE = /^(.*?)(`{3,})((?:bash|file|workspace|patch|search|diag|test|web|preview|browser|db|open|plan|memory):.*)$/;
   const preprocessedLines: string[] = [];
   for (const rawLine of text.split("\n")) {
     const m = rawLine.match(INLINE_OPEN_RE);
@@ -689,6 +695,24 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
     } else if (kind === "preview" && (header === "check" || header === "")) {
       const first = (body.find((l) => l.trim() !== "") ?? "").trim();
       actions.push({ kind: "preview", path: first || "/" });
+    } else if (kind === "browser" && (header === "inspect" || header.startsWith("check"))) {
+      // browser:inspect / — inspect the page and interactive controls.
+      // browser:check / — inspect, then run one step per body line:
+      //   click css=#submit
+      //   click text="Mulai"
+      //   expect text="Dashboard"
+      const headerMatch = header.match(/^(inspect|check)(?:\s+(\S+))?$/);
+      if (!headerMatch) {
+        kept.push(`> Invalid browser action: "${header}" (use browser:inspect or browser:check).`);
+      } else {
+        const lines = body.map((l) => l.trim()).filter(Boolean);
+        const bodyPath = lines[0]?.startsWith("/") ? lines.shift() : undefined;
+        actions.push({
+          kind: "browser",
+          path: bodyPath || headerMatch[2] || "/",
+          steps: headerMatch[1] === "check" ? lines : [],
+        });
+      }
     } else if (kind === "plan" && (header === "" || header === "run")) {
       // plan: block — not executed, stored as anchor for the orchestrator.
       // Rendered inline as a blockquote so the user can see the AI's plan.
