@@ -167,7 +167,9 @@ export default function EditorPage() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [savingState, setSavingState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [showAI, setShowAI] = useState(false);
+  // The reference workspace keeps AI available beside the main editor. Users
+  // can collapse it from the top tab or the AI toolbar control.
+  const [showAI, setShowAI] = useState(true);
   const [showCheckpoints, setShowCheckpoints] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
   const [secretsOpenDbTemplate, setSecretsOpenDbTemplate] = useState(false);
@@ -924,24 +926,25 @@ export default function EditorPage() {
 
       <div className="flex flex-1 overflow-hidden">
         <PanelGroup direction={compactLayout ? "vertical" : "horizontal"}>
-          <Panel
-            defaultSize={compactLayout ? 24 : 18}
-            minSize={compactLayout ? 16 : 12}
-            maxSize={compactLayout ? 45 : 30}
-          >
-            <WorkspaceSidePanel
-              workspaceId={id!}
-              confirm={confirm}
-              tab={sidePanelTab}
-              onTabChange={setSidePanelTab}
-              onSelect={openFile}
-              activePath={activePath}
-              onOpenTool={openTool}
-            />
-          </Panel>
-          <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
+          {showAI && (
+            <>
+              <Panel defaultSize={compactLayout ? 30 : 22} minSize={compactLayout ? 18 : 18}>
+                <AIChat
+                  workspaceId={id!}
+                  activeFile={
+                    activePath && !isImageFile(activePath) && content
+                      ? { path: activePath, content }
+                      : undefined
+                  }
+                  onWorkspaceMutated={() => qc.invalidateQueries({ queryKey: ["workspace", id] })}
+                  onFilesMutated={() => qc.invalidateQueries({ queryKey: ["files", id] })}
+                />
+              </Panel>
+              <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
+            </>
+          )}
 
-          <Panel defaultSize={compactLayout ? (showAI ? 54 : 76) : (showAI ? 50 : 60)}>
+          <Panel defaultSize={compactLayout ? 70 : (showAI ? 56 : 72)}>
             <PanelGroup direction="vertical">
               <Panel defaultSize={65} minSize={20}>
                 {/* ── Breadcrumb ─────────────────────────────────────── */}
@@ -960,6 +963,12 @@ export default function EditorPage() {
                   activePath={activePath}
                   newTabOpen={newTabOpen}
                   bottomTab={bottomTab}
+                  sidePanelTab={sidePanelTab}
+                  showAI={showAI}
+                  showCronJobs={showCronJobs}
+                  onOpenFiles={() => setSidePanelTab("files")}
+                  onOpenAI={() => setShowAI((value) => !value)}
+                  onOpenCron={() => setShowCronJobs(true)}
                   onOpenTool={openTool}
                   onOpenFile={openFile}
                   onCloseFile={closeTab}
@@ -1197,23 +1206,22 @@ export default function EditorPage() {
               </Panel>
             </>
           )}
-          {showAI && (
-            <>
-              <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
-              <Panel defaultSize={compactLayout ? 30 : 30} minSize={compactLayout ? 18 : 20}>
-                <AIChat
-                  workspaceId={id!}
-                  activeFile={
-                    activePath && !isImageFile(activePath) && content
-                      ? { path: activePath, content }
-                      : undefined
-                  }
-                  onWorkspaceMutated={() => qc.invalidateQueries({ queryKey: ["workspace", id] })}
-                  onFilesMutated={() => qc.invalidateQueries({ queryKey: ["files", id] })}
-                />
-              </Panel>
-            </>
-          )}
+          <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
+          <Panel
+            defaultSize={compactLayout ? 24 : 18}
+            minSize={compactLayout ? 16 : 12}
+            maxSize={compactLayout ? 45 : 30}
+          >
+            <WorkspaceSidePanel
+              workspaceId={id!}
+              confirm={confirm}
+              tab={sidePanelTab}
+              onTabChange={setSidePanelTab}
+              onSelect={openFile}
+              activePath={activePath}
+              onOpenTool={openTool}
+            />
+          </Panel>
         </PanelGroup>
       </div>
 
@@ -3141,6 +3149,12 @@ function WorkspaceTabBar({
   activePath,
   newTabOpen,
   bottomTab,
+  sidePanelTab,
+  showAI,
+  showCronJobs,
+  onOpenFiles,
+  onOpenAI,
+  onOpenCron,
   onOpenTool,
   onOpenFile,
   onCloseFile,
@@ -3152,6 +3166,12 @@ function WorkspaceTabBar({
   activePath: string | null;
   newTabOpen: boolean;
   bottomTab: "console" | "terminal" | "preview" | "database";
+  sidePanelTab: "files" | "library";
+  showAI: boolean;
+  showCronJobs: boolean;
+  onOpenFiles: () => void;
+  onOpenAI: () => void;
+  onOpenCron: () => void;
   onOpenTool: (tool: WorkspaceTool) => void;
   onOpenFile: (path: string) => void;
   onCloseFile: (path: string, event: React.MouseEvent) => void;
@@ -3159,6 +3179,16 @@ function WorkspaceTabBar({
   onCloseNewTab: () => void;
   dirty: boolean;
 }) {
+  const workspaceTabs: Array<{
+    id: string;
+    label: string;
+    icon: React.ReactNode;
+    active: boolean;
+    onClick: () => void;
+  }> = [
+    { id: "ai", label: "AI", icon: <Sparkles size={11} />, active: showAI, onClick: onOpenAI },
+    { id: "files", label: "Files", icon: <FileSearch size={11} />, active: sidePanelTab === "files", onClick: onOpenFiles },
+  ];
   const toolTabs: Array<{ id: WorkspaceTool; label: string; icon: React.ReactNode; active: boolean }> = [
     { id: "console", label: "Tools", icon: <Layers size={11} />, active: bottomTab === "console" },
     { id: "preview", label: "Preview", icon: <Eye size={11} />, active: bottomTab === "preview" },
@@ -3167,6 +3197,28 @@ function WorkspaceTabBar({
   ];
   return (
     <div className="flex min-w-0 shrink-0 overflow-x-auto border-b border-bg-border bg-bg-subtle/80" style={{ scrollbarWidth: "thin" }}>
+      {workspaceTabs.map((tab) => (
+        <button
+          key={tab.id}
+          onClick={tab.onClick}
+          className={`flex shrink-0 items-center gap-1.5 border-r border-bg-border px-3 py-2 text-[11px] font-medium transition ${
+            tab.active ? "bg-bg text-text" : "text-text-muted hover:bg-bg-hover hover:text-text"
+          }`}
+        >
+          {tab.icon}
+          {tab.label}
+        </button>
+      ))}
+      <button
+        onClick={onOpenCron}
+        className={`flex shrink-0 items-center gap-1.5 border-r border-bg-border px-3 py-2 text-[11px] font-medium transition ${
+          showCronJobs ? "bg-bg text-text" : "text-text-muted hover:bg-bg-hover hover:text-text"
+        }`}
+      >
+        <Clock size={11} />
+        Cron Jobs
+      </button>
+      <div className="mx-1 my-1 w-px shrink-0 bg-bg-border" />
       {toolTabs.map((tab) => (
         <button
           key={tab.id}
