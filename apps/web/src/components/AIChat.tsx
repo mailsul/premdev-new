@@ -6,7 +6,7 @@ import {
   Plus, MessageSquare, Mic, MicOff, Bookmark, FlaskConical,
   Clock, Zap, ChevronDown, ChevronUp, Loader2, Brain,
   Terminal, BookOpen, PenLine, Wrench, RefreshCw,
-  Users, GitMerge, ChevronRight, Shield, AlertTriangle, RotateCcw,
+  Users, GitMerge, ChevronRight, AlertTriangle, RotateCcw,
   ListChecks,
 } from "lucide-react";
 import { API } from "@/lib/api";
@@ -1261,13 +1261,12 @@ export function AIChat({
   // Keeps Stop button visible so the user can cancel the retry at any time.
   const [rateLimitWaiting, setRateLimitWaiting] = useState(false);
   const rateLimitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Always ON — AI proposes approve-able action blocks.
+  // The main chat is always an autonomous coding agent. The user can opt into
+  // a single plan-first turn with the checkbox in the toolbar below.
   const [autoPilot] = useState(true);
-  // Autonomous: always ON — AI auto-executes all actions.
-  // Becomes false only when the user's FIRST message in a new chat contains
-  // "konfirmasi dulu" / "confirm first" / "tanya dulu" (detected in send()).
-  const [autonomous, setAutonomous] = useState(true);
-  // Plan mode: auto-detected from message keywords only (no manual toggle).
+  const autonomous = true;
+  // Plan mode is explicit and one-shot: checking it makes the next request
+  // produce a plan and wait for the user's next message before editing.
   const [planMode, setPlanMode] = useState(false);
 
   // ---------------------------------------------------------------------------
@@ -2236,15 +2235,10 @@ export function AIChat({
     }
     // Strip any in-flight voice interim marker before sending.
     let txt = input.replace(/\s*⟨[^⟩]*⟩\s*$/, "").trim();
-
-    // If this is the user's FIRST message and it asks for confirmation, switch to
-    // manual mode (require Approve on every action) for the whole session.
     const isFirstUserMsg = msgs.filter((m) => m.role === "user" && !m.synthetic).length === 0;
-    if (isFirstUserMsg && /konfirmasi\s*dulu|confirm\s*first|tanya\s*dulu|minta\s*persetujuan|approve\s*dulu/i.test(txt)) {
-      setAutonomous(false);
-    }
 
-    // Auto-detect plan intent from message keywords (no manual toggle).
+    // Plan is explicit from the checkbox; intent detection is intentionally
+    // disabled so casual questions never unexpectedly pause the agent.
     const intent = detectMessageIntent(txt);
     if (intent.plan || planMode) {
       txt = `[PLAN MODE — JANGAN emit action blocks. Tampilkan rencana terstruktur dulu (numbered steps + file targets + risiko), tunggu konfirmasi user.]\n\n${txt}`;
@@ -3132,93 +3126,24 @@ export function AIChat({
               );
             })}
           </select>
-          {/* Otonom/Plan/Memori/Lokal buttons removed — always auto-execute.
-              Manual confirm mode activates automatically when first message contains "konfirmasi dulu". */}
-          {!autonomous && (
-            <div className="flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-medium text-warning">
-              <Shield size={9} />
-              Konfirmasi aktif
-            </div>
-          )}
-          <div
-            className={`flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
-              councilMode ? "bg-purple-500/15 text-purple-400" : "bg-bg-hover text-text-muted hover:text-text"
+          <label
+            className={`flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              planMode
+                ? "bg-accent/15 text-accent"
+                : "bg-bg-hover text-text-muted hover:text-text"
             }`}
-            title="Council: multiple AI models answer in parallel, then one synthesises the best response"
-            onClick={() => {
-              const next = !councilMode;
-              setCouncilMode(next);
-              if (next) setCouncilPickerOpen(true);
-            }}
+            title="Minta AI membuat rencana dulu. Setelah itu kirim persetujuan untuk menjalankan rencana secara otomatis."
           >
-            <Users size={9} />
-            Council
-          </div>
+            <input
+              type="checkbox"
+              className="h-3 w-3 accent-accent"
+              checked={planMode}
+              onChange={(e) => setPlanMode(e.target.checked)}
+            />
+            <ListChecks size={10} />
+            Rencana dulu
+          </label>
         </div>
-        {councilMode && (
-          <div className="rounded-md border border-purple-500/30 bg-purple-500/5 p-2">
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-[10px] font-semibold text-purple-400 flex items-center gap-1">
-                <Users size={9} /> Council members
-              </span>
-              <button
-                className="text-[10px] text-text-muted hover:text-text"
-                onClick={() => setCouncilPickerOpen((v) => !v)}
-              >
-                {councilPickerOpen ? "Hide" : "Edit"}
-              </button>
-            </div>
-            {councilPickerOpen && (
-              <div className="space-y-1">
-                <p className="text-[10px] text-text-muted">Pick 2–6 providers to debate (uses their default models). Leave empty to use all configured.</p>
-                <div className="flex flex-wrap gap-1">
-                  {(providers?.providers ?? []).map((p) => {
-                    const on = councilMembers.some((m) => m.provider === p.id);
-                    return (
-                      <button
-                        key={p.id}
-                        disabled={!p.configured}
-                        onClick={() => {
-                          if (!p.configured) return;
-                          setCouncilMembers((cur) =>
-                            on
-                              ? cur.filter((m) => m.provider !== p.id)
-                              : [...cur, { provider: p.id, model: p.defaultModel }]
-                          );
-                        }}
-                        className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
-                          !p.configured
-                            ? "border-bg-border text-text-muted opacity-40 cursor-not-allowed"
-                            : on
-                            ? "border-purple-500 bg-purple-500/20 text-purple-300"
-                            : "border-bg-border text-text-muted hover:border-purple-500/50 hover:text-text"
-                        }`}
-                      >
-                        {getProviderLabel(p.id, p.name)}
-                      </button>
-                    );
-                  })}
-                </div>
-                {councilMembers.length > 0 && (
-                  <button
-                    className="text-[10px] text-text-muted hover:text-danger"
-                    onClick={() => setCouncilMembers([])}
-                  >
-                    Clear (use all configured)
-                  </button>
-                )}
-              </div>
-            )}
-            {!councilPickerOpen && (
-              <p className="text-[10px] text-text-muted">
-                {councilMembers.length > 0
-                  ? councilMembers.map((m) => m.provider).join(", ")
-                  : `All configured providers (${(providers?.providers ?? []).filter(p => p.configured).length})`}
-                {" "}→ <span className="text-purple-400">synthesis by {provider}/{model || "auto"}</span>
-              </p>
-            )}
-          </div>
-        )}
         {executionOpen && (
           <ExecutionPanel events={executionEvents} onClose={() => setExecutionOpen(false)} />
         )}
