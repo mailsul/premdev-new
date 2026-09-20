@@ -112,18 +112,59 @@ function isImageFile(p: string) {
   return IMAGE_EXTS.has(ext);
 }
 
+const BINARY_EXTS = new Set([
+  ".7z", ".avi", ".bin", ".class", ".dll", ".dmg", ".doc", ".docx", ".eot",
+  ".exe", ".flac", ".jar", ".mov", ".mp3", ".mp4", ".o", ".otf", ".pdb",
+  ".so", ".tar", ".ttf", ".wav", ".woff", ".woff2", ".xls", ".xlsx", ".zip",
+]);
+function isPdfFile(p: string) {
+  return p.toLowerCase().endsWith(".pdf");
+}
+function isBinaryFile(p: string) {
+  const ext = p.slice(p.lastIndexOf(".")).toLowerCase();
+  return BINARY_EXTS.has(ext);
+}
+
+type WorkspaceTool = "console" | "terminal" | "preview" | "database" | "cron" | "secrets" | "git";
+
+function hashState(): { file: string | null; tool: WorkspaceTool | null } {
+  if (typeof window === "undefined") return { file: null, tool: null };
+  const raw = window.location.hash.replace(/^#/, "");
+  if (!raw) return { file: null, tool: null };
+  if (!raw.includes("=")) {
+    try { return { file: decodeURIComponent(raw), tool: null }; } catch { return { file: raw, tool: null }; }
+  }
+  const params = new URLSearchParams(raw);
+  const file = params.get("file");
+  const tool = params.get("tool") as WorkspaceTool | null;
+  return {
+    file: file ? file.replace(/^\/+/, "") : null,
+    tool: tool && ["console", "terminal", "preview", "database", "cron", "secrets", "git"].includes(tool) ? tool : null,
+  };
+}
+
+function setWorkspaceHash(kind: "file" | "tool", value: string) {
+  if (typeof window === "undefined") return;
+  const next = `#${kind}=${encodeURIComponent(value)}`;
+  if (window.location.hash !== next) window.history.pushState({}, "", next);
+}
+
 export default function EditorPage() {
   const { id } = useParams();
   const nav = useNavigate();
   const qc = useQueryClient();
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const initialHash = hashState();
   const [compactLayout, setCompactLayout] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches,
   );
   const [activePath, setActivePath] = useState<string | null>(() => {
+    if (initialHash.file) return initialHash.file;
     try { return localStorage.getItem(`premdev.activePath.${id}`) || null; } catch { return null; }
   });
   const [content, setContent] = useState<string>("");
+  const [loadingPath, setLoadingPath] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [savingState, setSavingState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [showAI, setShowAI] = useState(false);
@@ -178,6 +219,8 @@ export default function EditorPage() {
   });
   const [newTabOpen, setNewTabOpen] = useState(false);
   const [bottomTab, setBottomTab] = useState<"console" | "terminal" | "preview" | "database">("console");
+  const [sidePanelTab, setSidePanelTab] = useState<"files" | "library">("files");
+  const [splitTabs, setSplitTabs] = useState<string[]>([]);
   // Monaco editor instance — captured in onMount so we can read the active
   // selection from anywhere (Ask AI, quick actions, etc.).
   const editorRef = useRef<any>(null);
@@ -189,6 +232,8 @@ export default function EditorPage() {
   // Monotonic save generation so stale completions cannot clear newer dirty state.
   const saveGenRef = useRef(0);
   const lastEditGenRef = useRef(0);
+  const openRequestRef = useRef(0);
+  const splitRequestRef = useRef(0);
 
   // The desktop editor has three side-by-side panes. On a phone those panes
   // must stack vertically; forcing the desktop horizontal layout made every
@@ -245,23 +290,32 @@ export default function EditorPage() {
   }
 
   // ── File tab helpers ──────────────────────────────────────────────────────
-  async function openFile(p: string) {
+  async function openFile(p: string, options: { syncUrl?: boolean } = {}) {
+    const syncUrl = options.syncUrl !== false;
+    const normalizedPath = p.replace(/^\/+/, "");
+    if (!normalizedPath) return;
+    const requestId = ++openRequestRef.current;
     if (dirty && activePath) {
       if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
       await saveNow(activePath, content);
     }
     setNewTabOpen(false);
-    setOpenTabs((prev) => (prev.includes(p) ? prev : [...prev, p]));
+    setFileError(null);
+    setLoadingPath(normalizedPath);
+    setOpenTabs((prev) => (prev.includes(normalizedPath) ? prev : [...prev, normalizedPath]));
+    if (syncUrl) setWorkspaceHash("file", normalizedPath);
     // Track recent files (max 10, no duplicates, most recent first)
     setRecentFiles((prev) => {
-      const next = [p, ...prev.filter((r) => r !== p)].slice(0, 10);
+      const next = [normalizedPath, ...prev.filter((r) => r !== normalizedPath)].slice(0, 10);
       try { localStorage.setItem(`premdev.recent.${id}`, JSON.stringify(next)); } catch {}
       return next;
     });
-    // For image files there is no text content to load — switch immediately.
-    if (isImageFile(p)) {
+    // Preview-only and binary files do not go through Monaco.
+    if (isImageFile(normalizedPath) || isPdfFile(normalizedPath) || isBinaryFile(normalizedPath)) {
+      if (requestId !== openRequestRef.current) return;
       setContent(""); setDirty(false); setSavingState("idle");
-      setActivePath(p);
+      setActivePath(normalizedPath);
+      setLoadingPath(null);
       return;
     }
     // Fetch the file content BEFORE updating activePath so that Monaco never
@@ -270,21 +324,74 @@ export default function EditorPage() {
     // the path prop changes, recording a spurious undo entry. Then when content
     // arrived it would call setValue again — two phantom undo entries that made
     // Ctrl+Z in file B jump back to file A's content.
-    const res = await API.get<{ content: string }>(`/workspaces/${id}/files?path=${encodeURIComponent(p)}`);
-    setContent(res.content);
-    setDiffOriginal(res.content);
-    setDirty(false);
-    setSavingState("idle");
-    // Only now switch the visible path — content is ready, Monaco gets the
-    // correct value on the very first render for this path.
-    setActivePath(p);
+    try {
+      const res = await API.get<{ content: string }>(`/workspaces/${id}/files?path=${encodeURIComponent(normalizedPath)}`);
+      if (requestId !== openRequestRef.current) return;
+      setContent(res.content);
+      setDiffOriginal(res.content);
+      setDirty(false);
+      setSavingState("idle");
+      // Only now switch the visible path — content is ready, Monaco gets the
+      // correct value on the very first render for this path.
+      setActivePath(normalizedPath);
+      setLoadingPath(null);
+    } catch (error: any) {
+      if (requestId !== openRequestRef.current) return;
+      setLoadingPath(null);
+      setFileError(error?.message ?? "File gagal dibuka.");
+    }
   }
 
   async function openSplit(p: string) {
-    if (isImageFile(p)) { setSplitPath(p); setSplitContent(""); return; }
-    const res = await API.get<{ content: string }>(`/workspaces/${id}/files?path=${encodeURIComponent(p)}`);
-    setSplitPath(p);
-    setSplitContent(res.content);
+    const normalizedPath = p.replace(/^\/+/, "");
+    const requestId = ++splitRequestRef.current;
+    setSplitTabs((prev) => (prev.includes(normalizedPath) ? prev : [...prev, normalizedPath]));
+    setSplitPath(normalizedPath);
+    if (isImageFile(normalizedPath) || isPdfFile(normalizedPath) || isBinaryFile(normalizedPath)) {
+      setSplitContent("");
+      return;
+    }
+    try {
+      const res = await API.get<{ content: string }>(`/workspaces/${id}/files?path=${encodeURIComponent(normalizedPath)}`);
+      if (requestId !== splitRequestRef.current) return;
+      setSplitContent(res.content);
+    } catch {
+      if (requestId !== splitRequestRef.current) return;
+      setSplitContent("");
+    }
+  }
+
+  function closeSplitTab(p: string) {
+    const next = splitTabs.filter((tab) => tab !== p);
+    setSplitTabs(next);
+    if (splitPath !== p) return;
+    const nextPath = next[next.length - 1] ?? null;
+    if (!nextPath) {
+      setSplitPath(null);
+      setSplitContent("");
+      return;
+    }
+    void openSplit(nextPath);
+  }
+
+  function openTool(tool: WorkspaceTool, options: { syncUrl?: boolean } = {}) {
+    const syncUrl = options.syncUrl !== false;
+    setNewTabOpen(false);
+    if (syncUrl) setWorkspaceHash("tool", tool);
+    if (tool === "cron") {
+      setShowCronJobs(true);
+      return;
+    }
+    if (tool === "secrets") {
+      setSecretsOpenDbTemplate(false);
+      setShowSecrets(true);
+      return;
+    }
+    if (tool === "git") {
+      setShowGit(true);
+      return;
+    }
+    setBottomTab(tool);
   }
 
   function closeTab(p: string, e: React.MouseEvent) {
@@ -295,7 +402,10 @@ export default function EditorPage() {
     if (activePath === p) {
       const nextActive = next[Math.max(0, idx - 1)] ?? next[0] ?? null;
       if (nextActive) { openFile(nextActive); }
-      else { setActivePath(null); setContent(""); setDirty(false); setSavingState("idle"); }
+      else {
+        setActivePath(null); setContent(""); setDirty(false); setSavingState("idle");
+        if (typeof window !== "undefined") window.history.pushState({}, "", window.location.pathname + window.location.search);
+      }
     }
   }
   // ─────────────────────────────────────────────────────────────────────────
@@ -313,22 +423,34 @@ export default function EditorPage() {
     } catch {}
   }, [activePath, id]);
 
-  // On mount: if we restored an activePath from localStorage, load its content
+  // On mount: restore the URL file first, then the last local file. URL state
+  // wins so shared/deep links always open the requested file.
   const didRestoreRef = useRef(false);
   useEffect(() => {
     if (didRestoreRef.current) return;
     didRestoreRef.current = true;
-    if (!activePath) return;
-    if (isImageFile(activePath)) return;
-    API.get<{ content: string }>(`/workspaces/${id}/files?path=${encodeURIComponent(activePath)}`)
-      .then((res) => { setContent(res.content); setDiffOriginal(res.content); setDirty(false); setSavingState("idle"); })
-      .catch(() => {
-        // File no longer exists — remove stale tab
-        setActivePath(null);
-        setOpenTabs((prev) => prev.filter((t) => t !== activePath));
-      });
+    const initial = hashState();
+    if (initial.tool) openTool(initial.tool, { syncUrl: false });
+    const restorePath = initial.file ?? activePath;
+    if (restorePath) void openFile(restorePath, { syncUrl: false });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Browser Back/Forward should move between opened files/tools without a
+  // full page reload.
+  useEffect(() => {
+    function onHistoryNavigation() {
+      const next = hashState();
+      if (next.file && next.file !== activePath) void openFile(next.file, { syncUrl: false });
+      if (next.tool) openTool(next.tool, { syncUrl: false });
+    }
+    window.addEventListener("popstate", onHistoryNavigation);
+    window.addEventListener("hashchange", onHistoryNavigation);
+    return () => {
+      window.removeEventListener("popstate", onHistoryNavigation);
+      window.removeEventListener("hashchange", onHistoryNavigation);
+    };
+  }, [activePath]);
 
   // Auto-save with debounce
   useEffect(() => {
@@ -686,7 +808,7 @@ export default function EditorPage() {
           className={`btn-secondary ${splitPath ? "text-accent" : ""}`}
           title={splitPath ? "Close split editor" : "Split editor — open second file side by side"}
           onClick={() => {
-            if (splitPath) { setSplitPath(null); setSplitContent(""); }
+            if (splitPath) { setSplitPath(null); setSplitContent(""); setSplitTabs([]); }
             else if (activePath) openSplit(activePath);
           }}
         >
@@ -805,11 +927,14 @@ export default function EditorPage() {
             minSize={compactLayout ? 16 : 12}
             maxSize={compactLayout ? 45 : 30}
           >
-            <FileTree
+            <WorkspaceSidePanel
               workspaceId={id!}
               confirm={confirm}
+              tab={sidePanelTab}
+              onTabChange={setSidePanelTab}
               onSelect={openFile}
               activePath={activePath}
+              onOpenTool={openTool}
             />
           </Panel>
           <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
@@ -828,65 +953,23 @@ export default function EditorPage() {
                     ))}
                   </div>
                 )}
-                {/* ── File tabs + "+" button — always rendered ───────── */}
-                <div className="flex overflow-x-auto border-b border-bg-border bg-bg-subtle" style={{ scrollbarWidth: "thin" }}>
-                  {openTabs.map((tab) => {
-                    const fileName = tab.split("/").pop() ?? tab;
-                    const isActive = activePath === tab && !newTabOpen;
-                    const isDirtyTab = activePath === tab && dirty;
-                    return (
-                      <button
-                        key={tab}
-                        onClick={() => openFile(tab)}
-                        title={tab}
-                        className={`group flex shrink-0 items-center gap-1.5 border-r border-bg-border border-t-2 px-3 py-1.5 text-xs transition-colors ${
-                          isActive
-                            ? "bg-bg text-text border-t-accent"
-                            : "border-t-transparent text-text-muted hover:bg-bg hover:text-text"
-                        }`}
-                      >
-                        {isDirtyTab && (
-                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
-                        )}
-                        {getFileIcon(fileName, 11)}
-                        <span className="max-w-[120px] truncate">{fileName}</span>
-                        <span
-                          role="button"
-                          onClick={(e) => closeTab(tab, e)}
-                          className="ml-0.5 shrink-0 rounded p-0.5 text-text-muted opacity-0 transition-opacity hover:bg-bg-border hover:text-text group-hover:opacity-100"
-                          title="Tutup tab"
-                        >
-                          <X size={10} />
-                        </span>
-                      </button>
-                    );
-                  })}
-                  {/* New Tab tab entry */}
-                  {newTabOpen && (
-                    <button
-                      className="group flex shrink-0 items-center gap-1.5 border-r border-bg-border px-3 py-1.5 text-xs bg-bg text-text border-t-2 border-t-accent"
-                    >
-                      <Plus size={10} className="text-text-muted" />
-                      <span>New Tab</span>
-                      <span
-                        role="button"
-                        onClick={(e) => { e.stopPropagation(); setNewTabOpen(false); }}
-                        className="ml-0.5 shrink-0 rounded p-0.5 text-text-muted opacity-0 transition-opacity hover:bg-bg-border hover:text-text group-hover:opacity-100"
-                      >
-                        <X size={10} />
-                      </span>
-                    </button>
-                  )}
-                  {/* "+" button — always visible */}
-                  <button
-                    onClick={() => { setActivePath(null); setNewTabOpen(true); }}
-                    className="flex shrink-0 items-center border-t-2 border-t-transparent px-2 py-1.5 text-text-muted hover:text-text hover:bg-bg-hover"
-                    title="New Tab"
-                  >
-                    <Plus size={12} />
-                  </button>
-                </div>
-                {/* ─────────────────────────────────────────────────── */}
+                <WorkspaceTabBar
+                  openTabs={openTabs}
+                  activePath={activePath}
+                  newTabOpen={newTabOpen}
+                  bottomTab={bottomTab}
+                  onOpenTool={openTool}
+                  onOpenFile={openFile}
+                  onCloseFile={closeTab}
+                  onNewTab={() => {
+                    setActivePath(null);
+                    setNewTabOpen(true);
+                    if (typeof window !== "undefined") window.history.replaceState({}, "", window.location.pathname + window.location.search);
+                  }}
+                  onCloseNewTab={() => setNewTabOpen(false)}
+                  dirty={dirty}
+                />
+                <div className="relative min-h-0 flex-1">
                 {newTabOpen ? (
                   <NewTabPage
                     workspaceId={id!}
@@ -903,6 +986,14 @@ export default function EditorPage() {
                     workspaceId={id!}
                     path={activePath}
                   />
+                ) : activePath && isPdfFile(activePath) ? (
+                  <PdfPreview
+                    key={activePath}
+                    workspaceId={id!}
+                    path={activePath}
+                  />
+                ) : activePath && isBinaryFile(activePath) ? (
+                  <BinaryFilePreview workspaceId={id!} path={activePath} />
                 ) : activePath ? (
                   <Editor
                     height="100%"
@@ -997,6 +1088,27 @@ export default function EditorPage() {
                     </div>
                   </div>
                 )}
+                {loadingPath && (
+                  <div className="pointer-events-none absolute inset-0 grid place-items-center bg-bg/45 backdrop-blur-[1px]">
+                    <div className="flex items-center gap-2 rounded-lg border border-bg-border bg-bg-panel/95 px-3 py-2 text-xs text-text-muted shadow-xl">
+                      <Loader2 size={13} className="animate-spin text-accent" />
+                      Membuka {loadingPath.split("/").pop()}…
+                    </div>
+                  </div>
+                )}
+                {fileError && (
+                  <div className="absolute inset-x-4 top-4 z-10 flex items-start gap-3 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2.5 text-xs shadow-lg">
+                    <AlertTriangle size={14} className="mt-0.5 shrink-0 text-danger" />
+                    <div className="min-w-0">
+                      <p className="font-medium text-danger">File gagal dibuka</p>
+                      <p className="mt-0.5 break-words text-text-muted">{fileError}</p>
+                    </div>
+                    <button className="ml-auto text-text-muted hover:text-text" onClick={() => setFileError(null)} aria-label="Tutup pesan error">
+                      <X size={13} />
+                    </button>
+                  </div>
+                )}
+                </div>
               </Panel>
               <PanelResizeHandle className="h-px bg-bg-border hover:bg-accent" />
               <Panel defaultSize={35} minSize={10}>
@@ -1010,20 +1122,41 @@ export default function EditorPage() {
               <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
               <Panel defaultSize={compactLayout ? 35 : 30} minSize={compactLayout ? 18 : 15}>
                 <div className="flex h-full flex-col">
-                  <div className="flex items-center gap-2 border-b border-bg-border bg-bg-subtle px-3 py-1 text-[11px] text-text-muted">
-                    {getFileIcon(splitPath.split("/").pop() ?? splitPath, 11)}
-                    <span className="flex-1 truncate font-medium text-text">{splitPath}</span>
+                  <div className="flex min-w-0 overflow-x-auto border-b border-bg-border bg-bg-subtle" style={{ scrollbarWidth: "thin" }}>
+                    {splitTabs.map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => openSplit(tab)}
+                        className={`group flex min-w-0 max-w-[180px] shrink-0 items-center gap-1.5 border-r border-bg-border border-t-2 px-3 py-1.5 text-[11px] ${
+                          splitPath === tab
+                            ? "border-t-accent bg-bg text-text"
+                            : "border-t-transparent text-text-muted hover:bg-bg-hover hover:text-text"
+                        }`}
+                        title={tab}
+                      >
+                        {getFileIcon(tab.split("/").pop() ?? tab, 11)}
+                        <span className="truncate">{tab.split("/").pop() ?? tab}</span>
+                        <span
+                          role="button"
+                          onClick={(event) => { event.stopPropagation(); closeSplitTab(tab); }}
+                          className="rounded p-0.5 text-text-muted opacity-0 hover:bg-bg-border hover:text-text group-hover:opacity-100"
+                          title="Tutup split tab"
+                        >
+                          <X size={10} />
+                        </span>
+                      </button>
+                    ))}
                     <button
-                      className="btn-ghost p-0.5"
+                      className="btn-ghost ml-auto shrink-0 p-1"
                       title="Open in main editor"
                       onClick={() => { openFile(splitPath); setSplitPath(null); setSplitContent(""); }}
                     >
                       <ExternalLink size={11} />
                     </button>
                     <button
-                      className="btn-ghost p-0.5"
+                      className="btn-ghost shrink-0 p-1"
                       title="Close split"
-                      onClick={() => { setSplitPath(null); setSplitContent(""); }}
+                      onClick={() => { setSplitPath(null); setSplitContent(""); setSplitTabs([]); }}
                     >
                       <X size={11} />
                     </button>
@@ -1036,6 +1169,10 @@ export default function EditorPage() {
                         className="max-h-full max-w-full object-contain"
                       />
                     </div>
+                  ) : isPdfFile(splitPath) ? (
+                    <PdfPreview workspaceId={id!} path={splitPath} />
+                  ) : isBinaryFile(splitPath) ? (
+                    <BinaryFilePreview workspaceId={id!} path={splitPath} />
                   ) : (
                     <Editor
                       height="100%"
@@ -2162,6 +2299,94 @@ function FileTree({
   );
 }
 
+function WorkspaceSidePanel({
+  workspaceId,
+  tab,
+  onTabChange,
+  onSelect,
+  activePath,
+  confirm,
+  onOpenTool,
+}: {
+  workspaceId: string;
+  tab: "files" | "library";
+  onTabChange: (tab: "files" | "library") => void;
+  onSelect: (path: string) => void;
+  activePath: string | null;
+  confirm: (options: any) => Promise<boolean>;
+  onOpenTool: (tool: WorkspaceTool) => void;
+}) {
+  const libraryItems: Array<{ id: WorkspaceTool; label: string; description: string; icon: React.ReactNode }> = [
+    { id: "console", label: "Tools", description: "Workflows and logs", icon: <Layers size={14} /> },
+    { id: "preview", label: "Preview", description: "Live app preview", icon: <Eye size={14} /> },
+    { id: "terminal", label: "Shell", description: "Workspace terminal", icon: <Terminal size={14} /> },
+    { id: "database", label: "Database", description: "Workspace data", icon: <Database size={14} /> },
+    { id: "cron", label: "Cron Jobs", description: "Scheduled tasks", icon: <Clock size={14} /> },
+    { id: "git", label: "Git", description: "Changes and history", icon: <GitBranch size={14} /> },
+    { id: "secrets", label: "Secrets", description: "Environment variables", icon: <Lock size={14} /> },
+  ];
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-bg-panel">
+      <div className="flex shrink-0 items-center gap-1 border-b border-bg-border bg-bg-subtle/80 px-2 py-1.5">
+        <button
+          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition ${
+            tab === "library" ? "bg-bg text-text shadow-sm" : "text-text-muted hover:bg-bg-hover hover:text-text"
+          }`}
+          onClick={() => onTabChange("library")}
+        >
+          <LayoutGrid size={12} /> Library
+        </button>
+        <button
+          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition ${
+            tab === "files" ? "bg-bg text-text shadow-sm" : "text-text-muted hover:bg-bg-hover hover:text-text"
+          }`}
+          onClick={() => onTabChange("files")}
+        >
+          <FileSearch size={12} /> Files
+        </button>
+      </div>
+      {tab === "files" ? (
+        <div className="min-h-0 flex-1">
+          <FileTree
+            workspaceId={workspaceId}
+            confirm={confirm}
+            onSelect={onSelect}
+            activePath={activePath}
+          />
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto p-2">
+          <div className="mb-2 px-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
+            Workspace tools
+          </div>
+          <div className="space-y-1">
+            {libraryItems.map((item) => (
+              <button
+                key={item.id}
+                className="group flex w-full items-center gap-3 rounded-lg border border-transparent px-2.5 py-2.5 text-left transition hover:border-bg-border hover:bg-bg-hover"
+                onClick={() => onOpenTool(item.id)}
+              >
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-accent/10 text-accent transition group-hover:bg-accent/20">
+                  {item.icon}
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-xs font-semibold text-text">{item.label}</span>
+                  <span className="block truncate text-[10px] text-text-muted">{item.description}</span>
+                </span>
+                <ChevronRight size={12} className="ml-auto shrink-0 text-text-subtle opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 rounded-lg border border-bg-border/70 bg-bg-subtle/60 p-3 text-[10px] leading-relaxed text-text-muted">
+            Tools dan file berbagi workspace yang sama. Buka file dari tab Files, atau pilih tool untuk menampilkannya di panel kerja.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Image preview with error handling ────────────────────────────────────────
 function ImagePreview({ workspaceId, path: filePath }: { workspaceId: string; path: string }) {
   const [status, setStatus] = useState<"loading" | "ok" | "error">("loading");
@@ -2170,7 +2395,7 @@ function ImagePreview({ workspaceId, path: filePath }: { workspaceId: string; pa
     <div className="flex h-full flex-col items-center justify-center gap-3 overflow-auto bg-[#1e1e1e] p-6">
       {status === "error" ? (
         <div className="flex flex-col items-center gap-2 text-center">
-          <span className="text-4xl opacity-30">🖼️</span>
+          <FileIcon size={36} className="text-text-subtle" />
           <p className="text-sm text-danger">Gambar gagal dimuat</p>
           <p className="text-xs text-text-muted">{filePath}</p>
           <a
@@ -2195,6 +2420,44 @@ function ImagePreview({ workspaceId, path: filePath }: { workspaceId: string; pa
       {status === "ok" && (
         <p className="text-xs text-text-muted">{filePath.split("/").pop()}</p>
       )}
+    </div>
+  );
+}
+
+function PdfPreview({ workspaceId, path: filePath }: { workspaceId: string; path: string }) {
+  const src = `/api/workspaces/${workspaceId}/files/raw?path=${encodeURIComponent(filePath)}`;
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-[#202124]">
+      <div className="flex shrink-0 items-center gap-2 border-b border-bg-border bg-bg-subtle px-3 py-2 text-xs">
+        <span className="font-medium text-text">{filePath.split("/").pop()}</span>
+        <a href={src} target="_blank" rel="noreferrer" className="ml-auto text-accent hover:underline">
+          Open externally
+        </a>
+      </div>
+      <iframe title={filePath} src={src} className="min-h-0 flex-1 bg-white" />
+    </div>
+  );
+}
+
+function BinaryFilePreview({ workspaceId, path: filePath }: { workspaceId: string; path: string }) {
+  const rawUrl = `/api/workspaces/${workspaceId}/files/raw?path=${encodeURIComponent(filePath)}`;
+  return (
+    <div className="grid h-full place-items-center bg-bg text-center">
+      <div className="max-w-sm px-6">
+        <Package size={36} className="mx-auto mb-3 text-text-subtle" />
+        <p className="text-sm font-medium text-text">File binary tidak dibuka sebagai teks</p>
+        <p className="mt-1 break-all text-xs text-text-muted">{filePath}</p>
+        <p className="mt-3 text-xs leading-relaxed text-text-muted">
+          File ini tetap aman di workspace. Gunakan download atau viewer khusus jika tersedia.
+        </p>
+        <a
+          href={`${rawUrl}&download=1`}
+          download={filePath.split("/").pop()}
+          className="mt-4 inline-flex rounded-md border border-bg-border px-3 py-1.5 text-xs text-text-muted transition hover:border-accent/50 hover:text-text"
+        >
+          Download file
+        </a>
+      </div>
     </div>
   );
 }
@@ -2867,6 +3130,101 @@ function NewTabPage({
           </section>
         )}
       </div>
+    </div>
+  );
+}
+
+function WorkspaceTabBar({
+  openTabs,
+  activePath,
+  newTabOpen,
+  bottomTab,
+  onOpenTool,
+  onOpenFile,
+  onCloseFile,
+  onNewTab,
+  onCloseNewTab,
+  dirty,
+}: {
+  openTabs: string[];
+  activePath: string | null;
+  newTabOpen: boolean;
+  bottomTab: "console" | "terminal" | "preview" | "database";
+  onOpenTool: (tool: WorkspaceTool) => void;
+  onOpenFile: (path: string) => void;
+  onCloseFile: (path: string, event: React.MouseEvent) => void;
+  onNewTab: () => void;
+  onCloseNewTab: () => void;
+  dirty: boolean;
+}) {
+  const toolTabs: Array<{ id: WorkspaceTool; label: string; icon: React.ReactNode; active: boolean }> = [
+    { id: "console", label: "Tools", icon: <Layers size={11} />, active: bottomTab === "console" },
+    { id: "preview", label: "Preview", icon: <Eye size={11} />, active: bottomTab === "preview" },
+    { id: "terminal", label: "Shell", icon: <Terminal size={11} />, active: bottomTab === "terminal" },
+    { id: "database", label: "Database", icon: <Database size={11} />, active: bottomTab === "database" },
+  ];
+  return (
+    <div className="flex min-w-0 shrink-0 overflow-x-auto border-b border-bg-border bg-bg-subtle/80" style={{ scrollbarWidth: "thin" }}>
+      {toolTabs.map((tab) => (
+        <button
+          key={tab.id}
+          onClick={() => onOpenTool(tab.id)}
+          className={`flex shrink-0 items-center gap-1.5 border-r border-bg-border px-3 py-2 text-[11px] font-medium transition ${
+            tab.active ? "bg-bg text-text" : "text-text-muted hover:bg-bg-hover hover:text-text"
+          }`}
+        >
+          {tab.icon}
+          {tab.label}
+        </button>
+      ))}
+      <div className="mx-1 my-1 w-px shrink-0 bg-bg-border" />
+      {openTabs.map((tab) => {
+        const fileName = tab.split("/").pop() ?? tab;
+        const isActive = activePath === tab && !newTabOpen;
+        const isDirtyTab = activePath === tab && dirty;
+        return (
+          <button
+            key={tab}
+            onClick={() => onOpenFile(tab)}
+            title={tab}
+            className={`group flex min-w-0 max-w-[190px] shrink-0 items-center gap-1.5 border-r border-bg-border border-t-2 px-3 py-2 text-[11px] transition-colors ${
+              isActive ? "border-t-accent bg-bg text-text" : "border-t-transparent text-text-muted hover:bg-bg hover:text-text"
+            }`}
+          >
+            {isDirtyTab && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />}
+            {getFileIcon(fileName, 11)}
+            <span className="max-w-[140px] truncate">{fileName}</span>
+            <span
+              role="button"
+              onClick={(event) => onCloseFile(tab, event)}
+              className="ml-0.5 shrink-0 rounded p-0.5 text-text-muted opacity-0 transition-opacity hover:bg-bg-border hover:text-text group-hover:opacity-100"
+              title="Tutup tab"
+            >
+              <X size={10} />
+            </span>
+          </button>
+        );
+      })}
+      {newTabOpen && (
+        <button className="group flex shrink-0 items-center gap-1.5 border-r border-bg-border border-t-2 border-t-accent bg-bg px-3 py-2 text-[11px] text-text">
+          <Plus size={10} className="text-text-muted" />
+          New Tab
+          <span
+            role="button"
+            onClick={onCloseNewTab}
+            className="ml-0.5 rounded p-0.5 text-text-muted opacity-0 hover:bg-bg-border hover:text-text group-hover:opacity-100"
+          >
+            <X size={10} />
+          </span>
+        </button>
+      )}
+      <button
+        onClick={onNewTab}
+        className="flex shrink-0 items-center border-t-2 border-t-transparent px-2.5 py-2 text-text-muted hover:bg-bg-hover hover:text-text"
+        title="New Tab"
+      >
+        <Plus size={12} />
+      </button>
     </div>
   );
 }
