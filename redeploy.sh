@@ -255,6 +255,35 @@ check_health() {
   fail "Aplikasi sudah direstart tetapi health check gagal: $HEALTH_URL"
 }
 
+check_caddy_compose_health() {
+  local attempt
+  local container_id=""
+  local status=""
+  local compose_args=(docker compose --env-file "$APP_DIR/.env" -f "$ACTIVE_COMPOSE_FILE")
+
+  for ((attempt = 1; attempt <= HEALTH_RETRIES; attempt++)); do
+    container_id="$("${compose_args[@]}" ps -q caddy 2>/dev/null || true)"
+    if [[ -n "$container_id" ]]; then
+      status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+        "$container_id" 2>/dev/null || true)"
+
+      if [[ "$status" == "healthy" ]] ||
+         { [[ "$status" == "running" ]] &&
+           "${compose_args[@]}" exec -T caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; }; then
+        printf '[OK] Caddy sehat dan konfigurasi valid.\n'
+        return 0
+      fi
+      printf '[WAIT] Caddy berstatus %s (%s/%s).\n' \
+        "${status:-unknown}" "$attempt" "$HEALTH_RETRIES"
+    else
+      printf '[WAIT] Container Caddy belum tersedia (%s/%s).\n' "$attempt" "$HEALTH_RETRIES"
+    fi
+    sleep "$HEALTH_DELAY_SECONDS"
+  done
+
+  fail "Caddy tidak sehat setelah restart. Periksa: ${compose_args[*]} logs --tail=100 caddy"
+}
+
 check_compose_health() {
   local attempt
   local container_id=""
@@ -269,6 +298,7 @@ check_compose_health() {
 
       case "$status" in
         healthy)
+          check_caddy_compose_health
           printf '[OK] Container app sehat melalui Docker health check.\n'
           return 0
           ;;
