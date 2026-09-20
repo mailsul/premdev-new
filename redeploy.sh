@@ -146,10 +146,6 @@ prepare_compose_assets() {
   [[ -f "$APP_DIR/.env" ]] ||
     fail "File .env tidak ditemukan. Compose production membutuhkan konfigurasi VPS."
 
-  if [[ "$compose_file" != "$APP_DIR/infra/docker-compose.prod.yml" ]]; then
-    return 0
-  fi
-
   local template="$APP_DIR/infra/Caddyfile.tmpl"
   local caddy_data_dir="${CADDY_DATA_DIR:-/opt/premdev/data/caddy}"
   local landing_dir="${LANDING_DATA_DIR:-/opt/premdev/data/landing}"
@@ -170,11 +166,13 @@ prepare_compose_assets() {
   export GITEA_SUBDOMAIN GITEA_CONTAINER_HOST GITEA_PORT
 
   mkdir -p "$caddy_data_dir/extra" "$landing_dir"
-  if [[ -d "$caddy_data_dir/Caddyfile" && ! -L "$caddy_data_dir/Caddyfile" ]]; then
-    if [[ -n "$(find "$caddy_data_dir/Caddyfile" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
-      fail "Path Caddyfile adalah direktori berisi data, bukan file: $caddy_data_dir/Caddyfile"
-    fi
-    rmdir "$caddy_data_dir/Caddyfile"
+  # Docker bind-mounts this path as a file. A previous broken deployment can
+  # leave a directory here; quarantine it instead of allowing Docker to fail
+  # with the opaque "not a directory" mount error.
+  if [[ -d "$caddy_data_dir/Caddyfile" ]]; then
+    local invalid_caddyfile="${caddy_data_dir}/Caddyfile.directory-${RUN_ID}"
+    mv "$caddy_data_dir/Caddyfile" "$invalid_caddyfile"
+    printf '[WARN] Quarantined invalid Caddyfile directory: %s\n' "$invalid_caddyfile"
   fi
   envsubst < "$template" > "$caddy_data_dir/Caddyfile"
   chmod 600 "$caddy_data_dir/Caddyfile"

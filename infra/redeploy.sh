@@ -70,6 +70,14 @@ if grep -qE '^\*\.\$?\{?preview\.' "$HOST_DATA_DIR/caddy/Caddyfile.tmpl"; then
   echo "  Wait ~5 min for GitHub's raw CDN to refresh, then run this again."
   exit 1
 fi
+# Docker bind-mounts Caddyfile as a file. Quarantine a stale directory left
+# by an older failed deployment so the next start cannot fail at OCI mount
+# creation before Caddy has a chance to validate its configuration.
+if [[ -d "$HOST_DATA_DIR/caddy/Caddyfile" ]]; then
+  INVALID_CADDYFILE="$HOST_DATA_DIR/caddy/Caddyfile.directory-$(date -u +%Y%m%d-%H%M%S)"
+  mv "$HOST_DATA_DIR/caddy/Caddyfile" "$INVALID_CADDYFILE"
+  echo "  Quarantined invalid Caddyfile directory: $INVALID_CADDYFILE"
+fi
 envsubst < "$HOST_DATA_DIR/caddy/Caddyfile.tmpl" > "$HOST_DATA_DIR/caddy/Caddyfile"
 echo "  Wrote $HOST_DATA_DIR/caddy/Caddyfile ($(wc -l < "$HOST_DATA_DIR/caddy/Caddyfile") lines)"
 
