@@ -375,6 +375,15 @@ fi
 
 restore_preserved_files
 
+# The production Compose file builds Caddy from ./caddy, while the repository
+# keeps its build context under infra/caddy. Older VPS installs may not have
+# the generated root context yet; recreate it before Compose starts.
+if [[ -d "$APP_DIR/infra/caddy" ]]; then
+  mkdir -p "$APP_DIR/caddy"
+  cp -a "$APP_DIR/infra/caddy/." "$APP_DIR/caddy/"
+  printf '[INFO] Rebuilt Caddy build context: %s/caddy\n' "$APP_DIR"
+fi
+
 run_step "install root dependencies" npm install --include=dev --no-audit --no-fund
 if [[ -f apps/api/package.json ]]; then
   run_step "install API dependencies (including TypeScript/tsx)" \
