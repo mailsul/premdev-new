@@ -7,6 +7,7 @@ import {
   Clock, Zap, ChevronDown, ChevronUp, Loader2, Brain,
   Terminal, BookOpen, PenLine, Wrench, RefreshCw,
   Users, GitMerge, ChevronRight, Shield, AlertTriangle, RotateCcw,
+  ListChecks,
 } from "lucide-react";
 import { API } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
@@ -65,6 +66,36 @@ type Msg = {
   };
   sentAt?: number;
 };
+
+type ExecutionEvent = {
+  id: string;
+  workspaceId: string;
+  action: Action;
+  result: ActionResult;
+  at: number;
+};
+
+function publishAIExecution(workspaceId: string, action: Action, result: ActionResult): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("premdev:ai:execution", {
+    detail: {
+      workspaceId,
+      kind: action.kind,
+      label: actionLabel(action),
+      ok: result.ok,
+      output: result.output || "",
+    },
+  }));
+
+  // A successful file action should land in the editor, not in the chat.
+  const path =
+    action.kind === "file" || action.kind === "patch" || action.kind === "open"
+      ? action.path
+      : null;
+  if (result.ok && path) {
+    window.dispatchEvent(new CustomEvent("premdev:open-file", { detail: { path } }));
+  }
+}
 
 /**
  * Parse a raw AI error string (which may be JSON from the server or a raw
@@ -1334,6 +1365,20 @@ export function AIChat({
   const [actionResults, setActionResults] = useState<Map<number, ActionResult[]>>(
     new Map(),
   );
+  const [executionEvents, setExecutionEvents] = useState<ExecutionEvent[]>([]);
+  const [executionOpen, setExecutionOpen] = useState(false);
+  const executionIdRef = useRef(0);
+  const recordExecution = (action: Action, result: ActionResult) => {
+    const event: ExecutionEvent = {
+      id: `ai-exec-${++executionIdRef.current}`,
+      workspaceId,
+      action,
+      result,
+      at: Date.now(),
+    };
+    setExecutionEvents((prev) => [...prev.slice(-49), event]);
+    publishAIExecution(workspaceId, action, result);
+  };
   // True while the autonomous orchestrator is running an action batch (so
   // Stop stays visible even when the model isn't streaming).
   const [autoExecuting, setAutoExecuting] = useState(false);
@@ -1824,7 +1869,7 @@ export function AIChat({
   async function sendRaw(
     userContent: string,
     images?: string[],
-    opts?: { synthetic?: boolean; continuation?: boolean; eventType?: "system" | "tool_result" },
+    opts?: { synthetic?: boolean; continuation?: boolean; hidden?: boolean; eventType?: "system" | "tool_result" },
   ) {
     if (streaming) return;
     // Honor a Stop click that happened while we were `await`-ing an
@@ -1869,10 +1914,14 @@ export function AIChat({
     }
     const now = Date.now();
     const userMsg: Msg = {
-      role: opts?.eventType ? "system" : "user",
+      // eventType is UI metadata only. Synthetic continuation/tool messages
+      // must still be user turns for Gemini-compatible gateways; sending them
+      // as a trailing system turn makes 9Router return INVALID_ARGUMENT.
+      role: "user",
       content: userContent,
       ...(images && images.length > 0 ? { images } : {}),
       ...(opts?.synthetic ? { synthetic: true } : {}),
+      ...(opts?.hidden ? { hidden: true } : {}),
       ...(opts?.eventType ? { eventType: opts.eventType } : {}),
       sentAt: now,
     };
@@ -2400,6 +2449,8 @@ export function AIChat({
     }).catch(() => {/* silent */});
     setMsgs([]);
     setActionResults(new Map());
+    setExecutionEvents([]);
+    setExecutionOpen(false);
     setAutoManagedBatches(new Set());
     processedBatchesRef.current = new Set();
     loopStateRef.current = createLoopState();
@@ -2422,6 +2473,8 @@ export function AIChat({
     setActiveTabId(id);
     setMsgs([]);
     setActionResults(new Map());
+    setExecutionEvents([]);
+    setExecutionOpen(false);
     setAutoManagedBatches(new Set());
     processedBatchesRef.current = new Set();
     loopStateRef.current = createLoopState();
@@ -2433,6 +2486,8 @@ export function AIChat({
     if (streaming || autoExecuting) stop();
     setActiveTabId(id);
     setActionResults(new Map());
+    setExecutionEvents([]);
+    setExecutionOpen(false);
     setAutoManagedBatches(new Set());
     processedBatchesRef.current = new Set();
     loopStateRef.current = createLoopState();
@@ -2820,6 +2875,7 @@ export function AIChat({
         clearTimeout(actionTimer);
         actionAbortRef.current = null;
         results[i] = r;
+        recordExecution(toRun[i], r);
         sessionActionsRef.current += 1;
         // Track action label for the session activity log.
         sessionActionLogRef.current.push(actionLabel(toRun[i]));
@@ -2939,6 +2995,16 @@ export function AIChat({
             title="Clear current tab"
           >
             Clear
+          </button>
+          <button
+            className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition ${
+              executionOpen ? "bg-accent/15 text-accent" : "text-text-muted hover:bg-bg-hover hover:text-text"
+            }`}
+            onClick={() => setExecutionOpen((v) => !v)}
+            title="Buka aktivitas tool AI"
+          >
+            <ListChecks size={11} />
+            Aktivitas{executionEvents.length ? ` (${executionEvents.length})` : ""}
           </button>
         </div>
         {/* Tab strip — horizontally scrollable. Click switches tab; double-click
@@ -3130,6 +3196,9 @@ export function AIChat({
             )}
           </div>
         )}
+        {executionOpen && (
+          <ExecutionPanel events={executionEvents} onClose={() => setExecutionOpen(false)} />
+        )}
       </div>
 
       {/* Auto-suggest memory save after enough messages */}
@@ -3264,6 +3333,7 @@ export function AIChat({
               model={model}
               onWorkspaceMutated={onWorkspaceMutated}
               onFilesMutated={onFilesMutated}
+              onActionExecuted={recordExecution}
             />
           );
         })}
@@ -3714,6 +3784,7 @@ function Bubble({
   model,
   onWorkspaceMutated,
   onFilesMutated,
+  onActionExecuted,
 }: {
   msg: Msg;
   msgIdx: number;
@@ -3728,6 +3799,7 @@ function Bubble({
   model: string;
   onWorkspaceMutated?: () => void;
   onFilesMutated?: () => void;
+  onActionExecuted?: (action: Action, result: ActionResult) => void;
 }) {
   const isAssistant = msg.role === "assistant";
   const parsed = isAssistant && autoPilot
@@ -3837,7 +3909,21 @@ function Bubble({
         <div className="whitespace-pre-wrap leading-relaxed">{cleanText}</div>
       )}
 
-      {actions.length > 0 && (
+      {actions.length > 0 && (autonomous || autoManaged ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded border border-bg-border bg-bg-subtle/60 px-2 py-1.5 text-[10px] text-text-muted">
+          <Wrench size={10} className="shrink-0 text-accent" />
+          <span className="font-medium text-text-muted">Aktivitas tool</span>
+          {actions.map((a, i) => {
+            const result = actionResults?.[i];
+            return (
+              <span key={`${msgIdx}-${i}`} className="rounded bg-bg px-1.5 py-0.5 font-mono">
+                {actionLabel(a).slice(0, 42)} {result ? (result.ok ? "✓" : "✗") : "…"}
+              </span>
+            );
+          })}
+          <span className="ml-auto text-text-muted/70">detail di Aktivitas</span>
+        </div>
+      ) : (
         <div className="mt-2 space-y-1.5">
           {actions.map((a, i) => (
             <ActionCard
@@ -3851,10 +3937,11 @@ function Bubble({
               model={model}
               onWorkspaceMutated={onWorkspaceMutated}
               onFilesMutated={onFilesMutated}
+              onActionExecuted={onActionExecuted}
             />
           ))}
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -3952,6 +4039,59 @@ function ToolResultsView({ text }: { text: string }) {
   );
 }
 
+function ExecutionPanel({
+  events,
+  onClose,
+}: {
+  events: ExecutionEvent[];
+  onClose: () => void;
+}) {
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  return (
+    <div className="rounded-md border border-accent/25 bg-bg-subtle/80 p-2">
+      <div className="mb-1 flex items-center gap-1.5">
+        <ListChecks size={11} className="text-accent" />
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+          Aktivitas AI
+        </span>
+        <span className="text-[10px] text-text-muted/60">output lengkap tidak masuk chat</span>
+        <button className="ml-auto text-[10px] text-text-muted hover:text-text" onClick={onClose}>
+          Tutup
+        </button>
+      </div>
+      {events.length === 0 ? (
+        <div className="px-1 py-2 text-[10px] text-text-muted">Belum ada tool yang dijalankan.</div>
+      ) : (
+        <div className="max-h-48 space-y-0.5 overflow-auto">
+          {events.map((event) => {
+            const open = openId === event.id;
+            return (
+              <div key={event.id} className="rounded border border-bg-border bg-bg">
+                <button
+                  className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[10px] hover:bg-bg-hover"
+                  onClick={() => setOpenId(open ? null : event.id)}
+                >
+                  {event.result.ok
+                    ? <Check size={10} className="shrink-0 text-success" />
+                    : <X size={10} className="shrink-0 text-danger" />}
+                  <span className="min-w-0 flex-1 truncate font-mono">{actionLabel(event.action)}</span>
+                  <ChevronRight size={10} className={`shrink-0 text-text-muted transition-transform ${open ? "rotate-90" : ""}`} />
+                </button>
+                {open && (
+                  <pre className="max-h-36 overflow-auto border-t border-bg-border bg-bg-subtle px-2 py-1.5 font-mono text-[10px] leading-relaxed whitespace-pre-wrap">
+                    {event.result.output || (event.result.ok ? "Selesai." : "Gagal tanpa detail.")}
+                  </pre>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ActionCard({
   action,
   workspaceId,
@@ -3962,6 +4102,7 @@ function ActionCard({
   model,
   onWorkspaceMutated,
   onFilesMutated,
+  onActionExecuted,
 }: {
   action: Action;
   workspaceId: string;
@@ -3980,6 +4121,7 @@ function ActionCard({
   model: string;
   onWorkspaceMutated?: () => void;
   onFilesMutated?: () => void;
+  onActionExecuted?: (action: Action, result: ActionResult) => void;
 }) {
   const [state, setState] = useState<"idle" | "running" | "ok" | "error">("idle");
   const [output, setOutput] = useState<string>("");
@@ -4013,6 +4155,7 @@ function ActionCard({
     manualAbortRef.current = null;
     setOutput(r.output);
     setState(r.ok ? "ok" : "error");
+    onActionExecuted?.(eff, r);
     // Manual approval — record alongside autonomous actions in the audit log.
     logAudit({ workspaceId, provider, model, action: eff, result: r });
     if (eff.kind === "file" || eff.kind === "setRun" || eff.kind === "setEnv" || eff.kind === "setProcesses") onFilesMutated?.();

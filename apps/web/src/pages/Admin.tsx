@@ -264,7 +264,7 @@ type AuditRow = {
 function MetricsDashboard() {
   const { data: users, isLoading } = useQuery<{ users: AdminUser[] }>({
     queryKey: ["admin-users"],
-    queryFn: () => apiFetch("/admin/users"),
+    queryFn: () => API.get<{ users: AdminUser[] }>("/admin/users"),
     refetchInterval: 30000,
   });
 
@@ -928,7 +928,11 @@ function BackupSection() {
   }
 
   async function handleDelete(s: Snapshot) {
-    const ok = await confirm(`Hapus snapshot ${s.path} dari R2? Tidak bisa dibatalkan.`);
+    const ok = await confirm({
+      title: "Hapus snapshot",
+      message: `Hapus snapshot ${s.path} dari R2? Tidak bisa dibatalkan.`,
+      confirmLabel: "Hapus",
+    });
     if (ok) deleteSnap.mutate(s);
   }
 
@@ -2128,7 +2132,11 @@ function DomainsSection() {
   });
 
   async function handleDelete(name: string) {
-    const ok = await confirm(`Hapus domain "${name}"? Workspace yang pakai domain ini tidak akan bisa diakses via URL kustom.`);
+    const ok = await confirm({
+      title: "Hapus domain",
+      message: `Hapus domain "${name}"? Workspace yang pakai domain ini tidak akan bisa diakses via URL kustom.`,
+      confirmLabel: "Hapus",
+    });
     if (ok) delMut.mutate(name);
   }
 

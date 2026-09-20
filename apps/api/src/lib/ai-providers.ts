@@ -844,6 +844,22 @@ export async function* streamOpenAICompat(opts: {
     }
     return { role: m.role, content: m.content };
   });
+  // Gemini behind 9Router rejects a request whose effective final turn is a
+  // model turn. Older clients marked synthetic tool/continuation messages as
+  // `system`, and some gateways ignore a trailing system message. Normalize
+  // only the 9Router boundary so other OpenAI-compatible providers retain
+  // their original role semantics.
+  if (opts.providerLabel === "9Router" && apiMessages.length > 1) {
+    const last = apiMessages[apiMessages.length - 1];
+    if (last.role === "system") {
+      last.role = "user";
+    } else if (last.role === "assistant") {
+      apiMessages.push({
+        role: "user",
+        content: "Lanjutkan dari konteks sebelumnya dan jawab permintaan terakhir.",
+      });
+    }
+  }
   const reqBody = JSON.stringify({
     model: opts.model,
     messages: apiMessages,

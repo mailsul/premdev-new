@@ -215,6 +215,31 @@ export function TerminalPane({ workspaceId }: { workspaceId: string }) {
     };
   }, [workspaceId]);
 
+  // AI one-off commands run through the workspace runtime, not the browser
+  // terminal websocket. Mirror their bounded result here so command output
+  // goes to Shell instead of polluting the AI conversation.
+  useEffect(() => {
+    function onAIExecution(e: Event) {
+      const detail = (e as CustomEvent).detail as {
+        workspaceId?: string;
+        kind?: string;
+        label?: string;
+        ok?: boolean;
+        output?: string;
+      } | undefined;
+      if (!detail || detail.workspaceId !== workspaceId) return;
+      if (!["bash", "test", "diag", "preview"].includes(detail.kind ?? "")) return;
+      const term = termRef.current;
+      if (!term) return;
+      term.writeln("");
+      term.writeln(`\x1b[2;36m[AI] ${detail.label || detail.kind} ${detail.ok ? "✓" : "✗"}\x1b[0m`);
+      for (const line of String(detail.output || "(no output)").split(/\r?\n/)) term.writeln(line);
+      term.scrollToBottom();
+    }
+    window.addEventListener("premdev:ai:execution", onAIExecution);
+    return () => window.removeEventListener("premdev:ai:execution", onAIExecution);
+  }, [workspaceId]);
+
   // Ctrl+F — buka/tutup search
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
