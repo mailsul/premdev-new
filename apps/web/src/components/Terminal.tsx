@@ -275,13 +275,16 @@ export function TerminalPane({ workspaceId }: { workspaceId: string }) {
     <div className="terminal-wrapper flex h-full w-full flex-col bg-[#0a0a0f]">
 
       {/* ── Toolbar atas (seperti Replit shell) ── */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-white/[0.06] bg-[#0d0d14] px-2 py-1">
+      <div className="flex shrink-0 items-center gap-1 border-b border-white/[0.08] bg-[#10101a] px-3 py-1.5">
         {/* Label */}
         <div className="flex items-center gap-1.5 mr-auto">
-          <span className="text-[10px] font-semibold text-[#7c5cff] uppercase tracking-widest select-none">
+          <span className="grid h-5 w-5 place-items-center rounded-md bg-[#7c5cff]/15 text-[10px] font-semibold text-[#9b80ff] select-none">
+            <span className="h-1.5 w-1.5 rounded-full bg-[#7c5cff]" />
+          </span>
+          <span className="text-[10px] font-semibold text-[#e6e6f0] uppercase tracking-widest select-none">
             Shell
           </span>
-          <span className="text-[10px] text-white/20 select-none">—</span>
+          <span className="text-[10px] text-white/20 select-none">/</span>
           <span className="text-[10px] text-white/30 font-mono select-none">/workspace</span>
         </div>
 
@@ -289,7 +292,7 @@ export function TerminalPane({ workspaceId }: { workspaceId: string }) {
         <button
           title="Cari (Ctrl+F)"
           onClick={() => { if (!searchOpen) openSearch(); else closeSearch(); }}
-          className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors ${
+            className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors ${
             searchOpen
               ? "bg-[#7c5cff]/20 text-[#7c5cff]"
               : "text-white/40 hover:text-white/70 hover:bg-white/5"
@@ -306,7 +309,7 @@ export function TerminalPane({ workspaceId }: { workspaceId: string }) {
         <button
           title="Clear terminal (Ctrl+L)"
           onClick={clearTerminal}
-          className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-white/40 hover:text-white/70 hover:bg-white/5 transition-colors"
+          className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-white/40 hover:bg-white/5 hover:text-white/70 transition-colors"
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8">
             <path d="M2 4h12M5 4V2h6v2M6 7v6M10 7v6M3 4l1 10h8l1-10"/>

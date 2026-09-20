@@ -98,6 +98,56 @@ textarea:focus-visible {
   @apply text-[11px] font-semibold uppercase tracking-[0.18em] text-accent;
 }
 
+.workspace-shell {
+  background-image:
+    linear-gradient(180deg, rgba(124, 92, 255, 0.035), transparent 16rem),
+    radial-gradient(circle at 100% 0%, rgba(34, 211, 238, 0.035), transparent 22rem);
+}
+
+.workspace-topbar {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 10px 28px rgba(0, 0, 0, 0.12);
+}
+
+.workspace-topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(124, 92, 255, 0.8), rgba(34, 211, 238, 0.35), transparent 70%);
+  pointer-events: none;
+}
+
+.workspace-brand-mark {
+  background: linear-gradient(135deg, rgba(124, 92, 255, 0.22), rgba(34, 211, 238, 0.09));
+  border: 1px solid rgba(124, 92, 255, 0.25);
+  box-shadow: 0 0 18px rgba(124, 92, 255, 0.12);
+}
+
+.workspace-toolbar {
+  scrollbar-width: none;
+}
+
+.workspace-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.workspace-status-pill {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.035);
+}
+
+.workspace-statusbar {
+  background-image: linear-gradient(90deg, rgba(124, 92, 255, 0.06), transparent 35%);
+}
+
+.workspace-shell .btn-secondary {
+  border-color: rgba(37, 37, 50, 0.9);
+  background-color: rgba(22, 22, 31, 0.72);
+}
+
+.workspace-shell .btn-secondary:hover {
+  background-color: rgba(29, 29, 40, 0.95);
+}
+
 .page-shell {
   @apply mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8;
 }

@@ -454,27 +454,30 @@ export default function EditorPage() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-bg">
+    <div className="workspace-shell flex h-screen flex-col bg-bg">
       {w && w.status === "stopped" && (
-        <div className="flex items-center justify-between gap-3 border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
-          <span>Workspace belum berjalan. Klik <strong>Run</strong> untuk memulai container.</span>
+        <div className="flex items-center justify-between gap-3 border-b border-warning/25 bg-warning/10 px-4 py-2 text-xs text-warning">
+          <span className="flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-warning" /> Workspace belum berjalan. Klik <strong>Run</strong> untuk memulai container.</span>
           <button
-            className="rounded bg-warning/20 px-3 py-1 font-semibold hover:bg-warning/30"
+            className="rounded-lg border border-warning/25 bg-warning/15 px-3 py-1 font-semibold transition hover:bg-warning/25"
             onClick={() => startStop.mutate("start")}
           >
             <Play size={12} className="mr-1 inline" />Run
           </button>
         </div>
       )}
-      <header className="flex shrink-0 items-center gap-2 overflow-x-auto whitespace-nowrap border-b border-bg-border bg-bg-panel px-3 py-2">
-        <button className="btn-ghost" onClick={() => nav("/")}>
+      <header className="workspace-topbar relative flex shrink-0 items-center gap-2 overflow-x-auto whitespace-nowrap border-b border-bg-border bg-bg-panel/95 px-3 py-2">
+        <button className="btn-ghost shrink-0" onClick={() => nav("/")} title="Back to workspaces">
           <ChevronLeft size={16} />
         </button>
-        <div className="flex items-center gap-2">
+        <div className="workspace-identity flex min-w-0 shrink-0 items-center gap-2.5">
+          <div className="workspace-brand-mark grid h-8 w-8 shrink-0 place-items-center rounded-xl text-accent">
+            <Layers size={16} />
+          </div>
           {wsRenaming ? (
             <input
               autoFocus
-              className="input h-6 rounded px-2 py-0.5 text-sm font-semibold w-36"
+              className="input h-7 w-36 rounded-lg px-2 py-0.5 text-sm font-semibold"
               value={wsRenameVal}
               onChange={(e) => setWsRenameVal(e.target.value)}
               onBlur={() => renameWorkspace(wsRenameVal)}
@@ -484,30 +487,40 @@ export default function EditorPage() {
               }}
             />
           ) : (
-            <span
-              className="cursor-pointer font-semibold hover:underline hover:decoration-dashed"
-              title="Click to rename workspace"
-              onClick={() => { setWsRenameVal(w?.name ?? ""); setWsRenaming(true); }}
-            >
-              {w?.name ?? "…"}
-            </span>
+            <div className="min-w-0">
+              <div
+                className="cursor-pointer truncate text-sm font-semibold tracking-tight hover:text-accent"
+                title="Click to rename workspace"
+                onClick={() => { setWsRenameVal(w?.name ?? ""); setWsRenaming(true); }}
+              >
+                {w?.name ?? "…"}
+              </div>
+              <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-text-muted">
+                <span>{w?.template ?? "workspace"}</span>
+                <span className="text-text-subtle">•</span>
+                <span>Cloud IDE</span>
+              </div>
+            </div>
           )}
           <span
-            className={`rounded-full px-2 py-0.5 text-[10px] uppercase ${
+            className={`workspace-status-pill flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${
               w?.status === "running"
-                ? "bg-success/20 text-success"
+                ? "bg-success/10 text-success"
                 : w?.status === "starting"
-                ? "bg-warning/20 text-warning"
+                ? "bg-warning/10 text-warning"
                 : w?.status === "error"
-                ? "bg-danger/20 text-danger"
-                : "bg-bg-hover text-text-muted"
+                ? "bg-danger/10 text-danger"
+                : "bg-bg-hover/80 text-text-muted"
             }`}
           >
+            <span className={`h-1.5 w-1.5 rounded-full ${
+              w?.status === "running" ? "bg-success" : w?.status === "starting" ? "animate-pulse bg-warning" : w?.status === "error" ? "bg-danger" : "bg-text-subtle"
+            }`} />
             {w?.status ?? "loading"}
           </span>
         </div>
-        <div className="flex-1" />
-        <span className="hidden text-xs text-text-muted sm:inline">{saveLabel}</span>
+        <div className="workspace-toolbar ml-auto flex min-w-0 items-center gap-1.5">
+        <span className={`hidden text-xs sm:inline ${dirty ? "text-warning" : "text-text-muted"}`}>{saveLabel}</span>
         <button
           className="btn-secondary"
           onClick={() => activePath && saveNow(activePath, content)}
@@ -782,6 +795,7 @@ export default function EditorPage() {
         <button className="btn-secondary" onClick={() => setShowAI((s) => !s)}>
           <Sparkles size={14} /> AI
         </button>
+        </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
@@ -1065,7 +1079,7 @@ export default function EditorPage() {
       </div>
 
       {/* ── Status Bar (VS Code-style bottom bar) ─────────────────────── */}
-      <div className="flex shrink-0 items-center gap-3 border-t border-bg-border bg-bg-panel px-3 py-0.5 text-[10px] text-text-muted select-none">
+      <div className="workspace-statusbar flex shrink-0 items-center gap-3 border-t border-bg-border bg-bg-panel px-3 py-1 text-[10px] text-text-muted select-none">
         {/* Workspace status indicator */}
         <span
           className={`flex items-center gap-1 ${
@@ -1994,11 +2008,17 @@ function FileTree({
       onDrop={(e) => { e.preventDefault(); setDragOver(false); uploadFiles(e.dataTransfer.files); }}
     >
       <div
-        className="flex items-center justify-between border-b border-bg-border px-3 py-2 text-xs font-semibold uppercase tracking-wide text-text-muted"
+        className="flex items-center justify-between border-b border-bg-border bg-bg-subtle/45 px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-text-muted"
         title="Click to open • Ctrl/Cmd-click to add to selection • Shift-click to select a range • Drag onto a folder to move"
       >
-        Files
-        <div className="flex gap-1">
+        <div className="flex items-center gap-2">
+          <span className="grid h-6 w-6 place-items-center rounded-lg bg-accent/10 text-accent"><Folder size={13} /></span>
+          <div>
+            <div className="text-[10px] font-semibold tracking-[0.16em] text-text">Explorer</div>
+            <div className="mt-0.5 text-[9px] font-normal normal-case tracking-normal text-text-subtle">Project files</div>
+          </div>
+        </div>
+        <div className="flex gap-0.5">
           <button
             className="btn-ghost p-1"
             title="New file"
@@ -2052,15 +2072,15 @@ function FileTree({
         />
       </div>
       {/* Search box */}
-      <div className="border-b border-bg-border px-2 py-1">
-        <div className="flex items-center gap-1 rounded bg-bg px-2 py-1 text-xs">
+      <div className="border-b border-bg-border px-2 py-2">
+        <div className="flex items-center gap-1.5 rounded-lg border border-bg-border/70 bg-bg px-2.5 py-1.5 text-xs transition focus-within:border-accent/60 focus-within:ring-1 focus-within:ring-accent/20">
           <Search size={11} className="shrink-0 text-text-muted" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search files…"
-            className="flex-1 bg-transparent text-xs text-text outline-none placeholder:text-text-muted"
+          className="flex-1 bg-transparent text-xs text-text outline-none placeholder:text-text-subtle"
           />
           {searchQuery && <button onClick={() => setSearchQuery("")} className="text-text-muted hover:text-text"><X size={10}/></button>}
         </div>
@@ -2403,8 +2423,8 @@ function NodeRow({
             e.stopPropagation();
             onMove(raw.split("\n").filter(Boolean), node.path);
           }}
-          className={`group flex cursor-pointer items-center gap-1 px-2 py-0.5 hover:bg-bg-hover ${
-            isActive ? "bg-bg-hover" : ""
+          className={`group mx-1 flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 hover:bg-bg-hover ${
+            isActive ? "bg-bg-hover text-text" : ""
           } ${isSelected ? "bg-accent/15" : ""} ${
             dragOver ? "ring-1 ring-accent bg-accent/10" : ""
           }`}
@@ -2486,8 +2506,8 @@ function NodeRow({
       <div
         draggable
         onDragStart={startDrag}
-        className={`group flex cursor-pointer items-center gap-1 px-2 py-0.5 hover:bg-bg-hover ${
-          isActive ? "bg-accent/20 text-accent" : ""
+          className={`group mx-1 flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 hover:bg-bg-hover ${
+            isActive ? "bg-accent/15 text-accent" : ""
         } ${isSelected ? "bg-accent/15" : ""}`}
         style={{ paddingLeft: 8 + depth * 12 + 12 }}
         onClick={(e) => handleRowClick(e, () => onSelect(node.path))}
@@ -2942,14 +2962,14 @@ function BottomTabs({
   ];
   return (
     <div className="flex h-full flex-col bg-bg-panel">
-      <div className="flex border-b border-bg-border">
+      <div className="flex border-b border-bg-border bg-bg-subtle/55 px-1">
         {tabs.map((t) => (
           <button
             key={t.id}
-            className={`flex items-center gap-1 px-4 py-2 text-xs font-medium uppercase tracking-wide transition ${
+            className={`relative flex items-center gap-1.5 rounded-t-lg px-4 py-2.5 text-xs font-medium transition ${
               tab === t.id
-                ? "bg-bg text-text border-t-2 border-accent"
-                : "text-text-muted hover:text-text"
+                ? "bg-bg text-text after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-accent"
+                : "text-text-muted hover:bg-bg-hover/70 hover:text-text"
             }`}
             onClick={() => setTab(t.id)}
           >
@@ -2959,7 +2979,7 @@ function BottomTabs({
         ))}
         {workspace?.previewUrl && (
           <a
-            className="ml-auto flex items-center gap-1 px-3 text-xs text-text-muted hover:text-text"
+            className="ml-auto my-1 flex items-center gap-1.5 rounded-lg px-3 text-xs text-text-muted transition hover:bg-bg-hover hover:text-text"
             href={workspace.previewUrl}
             target="_blank"
             rel="noreferrer"
@@ -2983,7 +3003,7 @@ function BottomTabs({
         </div>
         <div className={`absolute inset-0 flex flex-col ${tab === "preview" ? "" : "hidden"}`}>
           {workspace?.previewUrl && (
-            <div className="flex shrink-0 items-center gap-1 border-b border-bg-border bg-bg-subtle px-2 py-1">
+            <div className="flex shrink-0 items-center gap-1 border-b border-bg-border bg-bg-subtle/80 px-2 py-1.5">
               <button onClick={() => setPreviewViewportLocal("full")} className={`btn-ghost p-1 ${previewViewportLocal==="full"?"text-accent":""}`} title="Desktop"><Monitor size={13}/></button>
               <button onClick={() => setPreviewViewportLocal("tablet")} className={`btn-ghost p-1 ${previewViewportLocal==="tablet"?"text-accent":""}`} title="Tablet (768px)"><Tablet size={13}/></button>
               <button onClick={() => setPreviewViewportLocal("mobile")} className={`btn-ghost p-1 ${previewViewportLocal==="mobile"?"text-accent":""}`} title="Mobile (375px)"><Smartphone size={13}/></button>
@@ -2991,7 +3011,7 @@ function BottomTabs({
               <button className="btn-ghost p-1 text-text-muted hover:text-text" title="Refresh" onClick={() => setPreviewKey(k=>k+1)}><RefreshCw size={13}/></button>
             </div>
           )}
-          <div className="flex flex-1 items-start justify-center overflow-auto bg-bg-subtle">
+          <div className="flex flex-1 items-start justify-center overflow-auto bg-[radial-gradient(circle_at_top,rgba(124,92,255,0.08),transparent_45%)] bg-bg-subtle p-2">
             {workspace?.previewUrl ? (
               <iframe
                 key={`${workspace.previewUrl}-${previewKey}`}
