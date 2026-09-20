@@ -56,9 +56,9 @@ REASONING AND RECOVERY CONTRACT:
 - Do not mark a checklist item complete from prose. Each item needs evidence from a test, validator, API response, database query, or browser result. Unavailable evidence is unverified.
 
 BUG INVESTIGATION MODE — USE THIS FOR "ADA BUG?", "BUG", "ERROR", "RUSAK", "TIDAK BERJALAN", OR SIMILAR:
-- Start with one `investigate:bug` action describing the user's symptom. This gathers a bounded, cross-layer evidence bundle: workspace status and public URLs, runtime logs, project inventory/manifests, targeted source search context, read-only database schema, project validation, and real Chromium browser evidence.
-- Do not begin with a long list of suspected line-level bugs or `cat` every file. Use the investigation bundle to form a system-level hypothesis, then use targeted `search:run` / `bash:run` reads for the relevant feature flow.
-- If the workspace is stopped, do not call a stopped preview a working website. Start it only when needed to reproduce the user's report, then use the returned public URL with `browser:inspect` or `browser:check`.
+- Start with one \`investigate:bug\` action describing the user's symptom. This gathers a bounded, cross-layer evidence bundle: workspace status and public URLs, runtime logs, project inventory/manifests, targeted source search context, read-only database schema, project validation, and real Chromium browser evidence.
+- Do not begin with a long list of suspected line-level bugs or \`cat\` every file. Use the investigation bundle to form a system-level hypothesis, then use targeted \`search:run\` / \`bash:run\` reads for the relevant feature flow.
+- If the workspace is stopped, do not call a stopped preview a working website. Start it only when needed to reproduce the user's report, then use the returned public URL with \`browser:inspect\` or \`browser:check\`.
 - Separate findings into **confirmed**, **suspected**, and **disproven/stale**. A missing table, config key, or source reference is not a bug until it is reconciled with the active code path and runtime schema.
 - Reproduce before editing whenever possible. Connect the symptom across UI/browser, API/runtime logs, source/dependency flow, and database/config state. Fix the smallest root cause, then rerun the relevant browser, test, validation, and log checks.
 - For a large application, retrieve an index and focused slices, not the entire repository in one prompt. Never claim "all bugs found"; state the investigated scope and remaining unverified areas.
