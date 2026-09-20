@@ -7,12 +7,13 @@
 # and restarts everything.
 #
 # Usage on VPS:
-#   curl -fsSL https://raw.githubusercontent.com/maraazn069/premdev/main/infra/redeploy.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/mailsul/premdev-new/main/infra/redeploy.sh | bash
 # ============================================================================
 set -Eeuo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/premdev}"
-RAW="https://raw.githubusercontent.com/maraazn069/premdev/main"
+REPO_PATH="${REPO_PATH:-mailsul/premdev-new}"
+RAW="https://raw.githubusercontent.com/${REPO_PATH}/main"
 COMPOSE_FILE="$INSTALL_DIR/docker-compose.yml"
 
 cd "$INSTALL_DIR" || { echo "$INSTALL_DIR not found — run install.sh first"; exit 1; }
@@ -52,7 +53,7 @@ fetch_repo_file() {
     return 0
   fi
   # Fallback: fetch dari GitHub (repo public atau punya token)
-  local api="https://api.github.com/repos/maraazn069/premdev/contents/${path}?ref=main"
+  local api="https://api.github.com/repos/${REPO_PATH}/contents/${path}?ref=main"
   if curl -fsSL -H "Accept: application/vnd.github.v3.raw" "$api" -o "$out" 2>/dev/null; then return 0; fi
   curl -fsSL "$RAW/${path}?nocache=$(date +%s)" -o "$out"
 }
@@ -74,6 +75,15 @@ echo "  Wrote $HOST_DATA_DIR/caddy/Caddyfile ($(wc -l < "$HOST_DATA_DIR/caddy/Ca
 
 echo "==> Refreshing docker-compose.yml"
 fetch_repo_file "infra/docker-compose.prod.yml" "$COMPOSE_FILE"
+
+# The production compose file builds Caddy from ./caddy. Older VPS installs
+# may have the source only under infra/caddy because install.sh generated the
+# root build context. Recreate that context on every redeploy before Compose
+# parses/builds the stack; it is source code, not runtime domain data.
+if [[ -d "$INSTALL_DIR/infra/caddy" ]]; then
+  mkdir -p "$INSTALL_DIR/caddy"
+  cp -a "$INSTALL_DIR/infra/caddy/." "$INSTALL_DIR/caddy/"
+fi
 
 echo "==> Updating app image (try GHCR pull, fall back to local build)"
 if [[ -n "${GHCR_IMAGE:-}" ]] && docker compose -f "$COMPOSE_FILE" pull app 2>/dev/null; then

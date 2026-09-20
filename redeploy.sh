@@ -86,8 +86,9 @@ record_deploy_state() {
 
 restore_preserved_files() {
   local file
-  for file in .env .env.production docker-compose.yml docker-compose.yaml; do
+  for file in .env .env.production docker-compose.yml docker-compose.yaml caddy data/caddy/extra; do
     if [[ -e "$BACKUP_DIR/$file" ]]; then
+      mkdir -p "$(dirname -- "$APP_DIR/$file")"
       cp -a -- "$BACKUP_DIR/$file" "$APP_DIR/$file"
       printf '[INFO] Restored VPS-local config: %s\n' "$file"
     fi
@@ -320,8 +321,9 @@ command -v npm >/dev/null 2>&1 || fail "npm tidak ditemukan."
 command -v curl >/dev/null 2>&1 || fail "curl tidak ditemukan."
 cd "$APP_DIR"
 
-for file in .env .env.production docker-compose.yml docker-compose.yaml; do
+for file in .env .env.production docker-compose.yml docker-compose.yaml caddy data/caddy/extra; do
   if [[ -e "$file" ]]; then
+    mkdir -p "$BACKUP_DIR/$(dirname -- "$file")"
     cp -a -- "$file" "$BACKUP_DIR/$file"
     printf '[INFO] Backed up VPS-local config: %s\n' "$file"
   fi

@@ -31,7 +31,7 @@ DOMAIN="$(echo "$DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/^[. ]*//;s/[. ]*$
 
 CADDY_EXTRA_DIR="/opt/premdev/data/caddy/extra"
 SNIPPET="$CADDY_EXTRA_DIR/$DOMAIN.caddy"
-COMPOSE_FILE="${COMPOSE_FILE:-/opt/premdev/infra/docker-compose.prod.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-/opt/premdev/docker-compose.yml}"
 ENV_FILE="${ENV_FILE:-/opt/premdev/.env}"
 
 [[ -f "$COMPOSE_FILE" ]] || {
