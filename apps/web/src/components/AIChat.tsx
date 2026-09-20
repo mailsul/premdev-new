@@ -805,9 +805,10 @@ type MdNode =
   | { type: "code"; lang: string; text: string }
   | { type: "para"; text: string }
   | { type: "heading"; level: number; text: string }
-  | { type: "list"; items: string[] }
+  | { type: "list"; items: string[]; ordered: boolean }
   | { type: "quote"; text: string }
   | { type: "table"; headers: string[]; rows: string[][] }
+  | { type: "hr" }
   // Placeholder shown in chat WHILE an AI action block is still streaming
   // (the parseActions() pass strips closed action blocks for us; anything
   // left in `cleaned` whose fence header looks like an action kind is, by
@@ -881,13 +882,22 @@ function parseMarkdown(text: string): MdNode[] {
       out.push({ type: "heading", level: heading[1].length, text: heading[2] });
       i++; continue;
     }
-    if (/^\s*[-*+]\s+/.test(line)) {
+    if (/^\s*(([-*+])|(\d+[.)]))\s+/.test(line)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(line);
       const items: string[] = [];
-      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*[-*+]\s+/, ""));
+      const itemRe = ordered ? /^\s*\d+[.)]\s+/ : /^\s*[-*+]\s+/;
+      while (i < lines.length && itemRe.test(lines[i])) {
+        items.push(lines[i].replace(itemRe, ""));
         i++;
       }
-      out.push({ type: "list", items });
+      out.push({ type: "list", items, ordered });
+      continue;
+    }
+    // Markdown thematic break. Render it as a subtle divider instead of
+    // showing the source `---`/`***` text in the conversation.
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      out.push({ type: "hr" });
+      i++;
       continue;
     }
     if (/^>\s+/.test(line)) {
@@ -918,8 +928,9 @@ function parseMarkdown(text: string): MdNode[] {
       lines[i].trim() !== "" &&
       !/^```/.test(lines[i]) &&
       !/^#{1,6}\s+/.test(lines[i]) &&
-      !/^\s*[-*+]\s+/.test(lines[i]) &&
+      !/^\s*(([-*+])|(\d+[.)]))\s+/.test(lines[i]) &&
       !/^>\s+/.test(lines[i]) &&
+      !/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i]) &&
       !(/^\|.+\|/.test(lines[i]) && i + 1 < lines.length && /^\|[\s|:-]+\|/.test(lines[i + 1]))
     ) { buf.push(lines[i]); i++; }
     out.push({ type: "para", text: buf.join("\n") });
@@ -984,15 +995,20 @@ function renderInline(text: string): string {
     if (!href) return ""; // fall back to literal
     return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" class="text-accent underline">${escapeHtml(m[1])}</a>`;
   });
-  // 3) bold: **...**
-  applyRegex(/\*\*([^*\n]+)\*\*/g, (m) => `<strong>${escapeHtml(m[1])}</strong>`);
-  // 4) italic: *...* / _..._
+  // 3) bold: **...** (including punctuation and spaces inside the span)
+  applyRegex(/\*\*([^*\n]+?)\*\*/g, (m) => `<strong>${escapeHtml(m[1])}</strong>`);
+  // 4) strikethrough: ~~...~~
+  applyRegex(/~~([^~\n]+?)~~/g, (m) => `<del>${escapeHtml(m[1])}</del>`);
+  // 5) italic: *...* / _..._
   applyRegex(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, (m) =>
     `${escapeHtml(m[1])}<em>${escapeHtml(m[2])}</em>`
   );
   applyRegex(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, (m) =>
     `${escapeHtml(m[1])}<em>${escapeHtml(m[2])}</em>`
   );
+  // 6) Markdown escapes: \* and friends should display the punctuation
+  // without the backslash, while remaining safely HTML-escaped.
+  applyRegex(/\\([\\`*_[\]{}()#+.!|-])/g, (m) => escapeHtml(m[1]));
 
   return toks.map((t) => (t.kind === "text" ? escapeHtml(t.v) : t.v)).join("");
 }
@@ -1072,13 +1088,20 @@ function Markdown({ text, isStreaming = false }: { text: string; isStreaming?: b
           return <div key={i} className={sz} dangerouslySetInnerHTML={{ __html: renderInline(n.text) }} />;
         }
         if (n.type === "list") {
+          const ListTag = n.ordered ? "ol" : "ul";
           return (
-            <ul key={i} className="ml-4 list-disc space-y-0.5">
+            <ListTag
+              key={i}
+              className={`ml-4 space-y-0.5 ${n.ordered ? "list-decimal" : "list-disc"}`}
+            >
               {n.items.map((it, k) => (
                 <li key={k} dangerouslySetInnerHTML={{ __html: renderInline(it) }} />
               ))}
-            </ul>
+            </ListTag>
           );
+        }
+        if (n.type === "hr") {
+          return <hr key={i} className="my-3 border-0 border-t border-bg-border" />;
         }
         if (n.type === "quote") {
           return (
