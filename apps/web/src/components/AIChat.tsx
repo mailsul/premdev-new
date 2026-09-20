@@ -451,8 +451,10 @@ function formatToolResults(actions: Action[], results: ActionResult[], maxOutput
 
     lines.push(`${i + 1}. ${actionLabel(a)} — ${ok ? "OK" : "ERROR"}`);
     if (trimmed) {
-      // Success: tighter cap (600 chars). Error: full cap (2000 chars).
-      const cap = Math.min(maxOutputChars, ok ? 600 : 2000);
+      // Investigation bundles are intentionally verbose: the model needs the
+      // cross-layer evidence in one continuation instead of guessing from a
+      // single source line. Other successful tools remain token-tight.
+      const cap = Math.min(maxOutputChars, ok && kind === "investigate" ? maxOutputChars : ok ? 600 : 2000);
       const snippet = trimmed.length > cap
         ? trimmed.slice(0, cap) + "\n…(truncated)"
         : trimmed;
@@ -501,7 +503,7 @@ function parseActions(text: string): {
   plan?: string;
   acceptanceCriteria?: string[];
 } {
-  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "preview", "browser", "validate", "db", "open", "plan", "memory"]);
+  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "preview", "browser", "investigate", "validate", "db", "open", "plan", "memory"]);
   const actions: Action[] = [];
   const kept: string[] = [];
   let planStr: string | undefined;
@@ -515,7 +517,7 @@ function parseActions(text: string): {
   // immediately ("✅ Selesai") even though the AI still had work to do.
   // Fix: split off any leading text and add a synthetic closing fence for
   // single-line bash commands so the parser can process them correctly.
-  const INLINE_OPEN_RE = /^(.*?)(`{3,})((?:bash|file|workspace|patch|search|diag|test|web|preview|browser|validate|db|open|plan|memory):.*)$/;
+  const INLINE_OPEN_RE = /^(.*?)(`{3,})((?:bash|file|workspace|patch|search|diag|test|web|preview|browser|investigate|validate|db|open|plan|memory):.*)$/;
   const preprocessedLines: string[] = [];
   for (const rawLine of text.split("\n")) {
     const m = rawLine.match(INLINE_OPEN_RE);
@@ -728,6 +730,13 @@ function parseActions(text: string): {
           path: bodyPath || headerMatch[2] || "/",
           steps: headerMatch[1] === "check" ? lines : [],
         });
+      }
+    } else if (kind === "investigate" && (header === "bug" || header === "run" || header === "")) {
+      const focus = body.join("\n").trim();
+      if (!focus) {
+        kept.push("> Empty investigate:bug body — describe the symptom or bug to investigate.");
+      } else {
+        actions.push({ kind: "investigate", focus });
       }
     } else if (kind === "validate" && (header === "run" || header === "")) {
       actions.push({ kind: "validate" });
@@ -1078,6 +1087,7 @@ function Markdown({ text, isStreaming = false }: { text: string; isStreaming?: b
             : n.kind === "bash" ? "⚡"
             : n.kind === "search" ? "🔍"
             : n.kind === "diag" || n.kind === "test" ? "🩺"
+            : n.kind === "investigate" ? "🧭"
             : n.kind === "web" || n.kind === "webFetch" ? "🌐"
             : n.kind === "memorySave" ? "🧠"
             : "⚙";
@@ -3050,6 +3060,17 @@ export function AIChat({
           } else {
             sessionEvidenceRef.current.failed = true;
           }
+        } else if (toRun[i].kind === "investigate") {
+          const browser = r.evidence?.investigation?.browser;
+          // A bug investigation is not complete without an explicit browser
+          // outcome. If the workspace is stopped or has no public URL, keep
+          // the run unverified instead of silently reporting success.
+          sessionEvidenceRef.current.browserAttempted = true;
+          if (browser?.verified) {
+            sessionEvidenceRef.current.browserVerified = true;
+          } else {
+            sessionEvidenceRef.current.failed = true;
+          }
         }
         if (r.ok) {
           sessionFailureStreakRef.current = 0;
@@ -4341,6 +4362,7 @@ function ActionCard({
       case "webFetch": return { icon: <Globe size={12} />,   label: action.url.slice(0, 70), color: "text-text-muted" };
       case "preview": return { icon: <Globe size={12} />,   label: `Preview ${action.path || "/"}`, color: "text-accent" };
       case "browser": return { icon: <Globe size={12} />,   label: `Browser ${action.path || "/"}`, color: "text-accent" };
+      case "investigate": return { icon: <Stethoscope size={12} />, label: `Bug investigation: ${action.focus.slice(0, 70)}`, color: "text-blue-400" };
       case "validate": return { icon: <Check size={12} />,  label: "Project validation", color: "text-success" };
       case "memorySave": return { icon: <Brain size={12} />, label: `Memory (${action.content.split("\n").length} baris)`, color: "text-success" };
       case "setRun": return { icon: <Zap size={12} />,       label: "Set run command", color: "text-accent" };
@@ -4368,6 +4390,7 @@ function ActionCard({
     action.kind === "web" ? `query: ${action.query}` :
     action.kind === "webFetch" ? `url: ${action.url}` :
     action.kind === "preview" ? `path: ${action.path || "/"}` :
+     action.kind === "investigate" ? action.focus :
     action.kind === "memorySave" ? action.content :
     action.kind === "db" ? action.sql :
     "";

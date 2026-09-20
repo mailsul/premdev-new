@@ -18,6 +18,7 @@ export type Action =
   | { kind: "webFetch"; url: string; offset?: number }
   | { kind: "preview"; path?: string }
   | { kind: "browser"; path?: string; steps: string[] }
+  | { kind: "investigate"; focus: string }
   | { kind: "validate" }
   | { kind: "memorySave"; content: string }
   | { kind: "setRun"; command: string }
@@ -33,6 +34,21 @@ export type Action =
 export type VerificationEvidence = {
   status: "implemented" | "validated" | "browser-verified" | "unverified" | "failed";
   url?: string;
+  investigation?: {
+    focus: string;
+    workspace: { status?: string; previewUrl?: string; defaultUrl?: string };
+    logs: { ok: boolean; output: string };
+    inventory: { ok: boolean; output: string };
+    sourceSearch: { ok: boolean; output: string };
+    schema: { ok: boolean; output: string };
+    validation: { ok: boolean; output: string };
+    browser: {
+      attempted: boolean;
+      verified: boolean;
+      url?: string;
+      output: string;
+    };
+  };
   checks?: Array<{ name: string; status: string }>;
   consoleErrors?: string[];
   pageErrors?: string[];
@@ -252,6 +268,111 @@ export async function runAction(
           },
         };
       }
+      case "investigate": {
+        const safeAttempt = async (label: string, task: () => Promise<any>) => {
+          try {
+            const data = await task();
+            const ok = data?.ok !== false && (typeof data?.exitCode !== "number" || data.exitCode === 0);
+            return { ok, data };
+          } catch (e: any) {
+            return { ok: false, data: { error: `${label}: ${e?.message ?? String(e)}` } };
+          }
+        };
+        const inventoryCommand = [
+          "printf '%s\\n' '=== project inventory ==='",
+          "find . -path './node_modules' -prune -o -path './.git' -prune -o -path './.premdev-data' -prune -o -type f -print | sort | head -240",
+          "printf '%s\\n' '=== project manifests ==='",
+          "for f in package.json package-lock.json pnpm-lock.yaml yarn.lock requirements.txt pyproject.toml go.mod Cargo.toml composer.json .premdev; do if [ -f \"$f\" ]; then echo \"--- $f\"; sed -n '1,160p' \"$f\"; fi; done",
+          "printf '%s\\n' '=== git state ==='",
+          "git status --short 2>&1 | head -120",
+        ].join("; ");
+        const schemaCommand = [
+          "printf '%s\\n' '=== read-only schema probe ==='",
+          "DBH=\"${DB_HOST:-$DATABASE_HOST}\"; [ -z \"$DBH\" ] && DBH=\"$MYSQL_HOST\"",
+          "DBP=\"${DB_PORT:-$DATABASE_PORT}\"; [ -z \"$DBP\" ] && DBP=\"${MYSQL_PORT:-3306}\"",
+          "DBU=\"${DB_USER:-$DATABASE_USER}\"; [ -z \"$DBU\" ] && DBU=\"$MYSQL_USER\"",
+          "DBN=\"${DATABASE_NAME:-$DB_NAME}\"; [ -z \"$DBN\" ] && DBN=\"$MYSQL_DATABASE\"",
+          "DBPASS=\"${DB_PASS:-$DB_PASSWORD}\"; [ -z \"$DBPASS\" ] && DBPASS=\"$DATABASE_PASSWORD\"; [ -z \"$DBPASS\" ] && DBPASS=\"$MYSQL_PASSWORD\"",
+          "if [ -n \"$DBH\" ] && [ -n \"$DBU\" ] && [ -n \"$DBN\" ] && command -v mysql >/dev/null 2>&1; then MYSQL_PWD=\"$DBPASS\" mysql --protocol=tcp -h \"$DBH\" -P \"$DBP\" -u \"$DBU\" --batch --raw --show-warnings \"$DBN\" -e 'SHOW TABLES;'; else echo 'Schema probe unavailable: workspace DB environment or mysql client is not available.'; fi",
+        ].join("; ");
+        const ignoredTerms = new Set(["the", "and", "yang", "tidak", "ada", "bug", "error", "app", "aplikasi", "works", "working", "does", "not", "di", "ke", "dari", "untuk", "with", "when", "user", "users"]);
+        const sourceTerms = (action.focus.match(/[A-Za-z][A-Za-z0-9_.-]{2,}/g) ?? [])
+          .filter((term, index, all) => !ignoredTerms.has(term.toLowerCase()) && all.indexOf(term) === index)
+          .slice(0, 8);
+        const sourcePattern = sourceTerms.length
+          ? sourceTerms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+          : "TODO";
+        const [workspace, logs, inventory, sourceSearch, schema, validation, browser] = await Promise.all([
+          safeAttempt("workspace", () => fetchJson("GET", `/workspaces/${workspaceId}`)),
+          safeAttempt("runtime logs", () => fetchJson("GET", `/workspaces/${workspaceId}/logs`)),
+          safeAttempt("project inventory", () => fetchJson("POST", `/workspaces/${workspaceId}/exec`, { command: inventoryCommand })),
+          safeAttempt("targeted source search", () => fetchJson("POST", `/workspaces/${workspaceId}/files/search`, {
+            pattern: sourcePattern,
+            regex: true,
+            maxHits: 80,
+          })),
+          safeAttempt("database schema", () => fetchJson("POST", `/workspaces/${workspaceId}/exec`, { command: schemaCommand })),
+          safeAttempt("project validation", () => fetchJson("POST", `/workspaces/${workspaceId}/validate`)),
+          safeAttempt("public browser", () => fetchJson("POST", `/workspaces/${workspaceId}/browser-check`, {
+            path: "/",
+            steps: [],
+            target: "public",
+          })),
+        ]);
+        const workspaceData = workspace.data?.workspace ?? {};
+        const browserData = browser.data ?? {};
+        const browserEvidence = browserData.evidence ?? {};
+        const section = (attempt: { ok: boolean; data: any }, outputKey: string) => {
+          if (!attempt.ok) return String(attempt.data?.error ?? "evidence unavailable");
+          const value = attempt.data?.[outputKey] ?? attempt.data?.output ?? attempt.data;
+          const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+          return text.length > 9000 ? `${text.slice(0, 8999)}…` : text;
+        };
+        const browserText = section(browser, "output");
+        const output = [
+          `BUG INVESTIGATION BUNDLE`,
+          `Focus: ${action.focus}`,
+          `\n=== workspace/runtime ===\n${section(workspace, "workspace")}`,
+          `\n=== application logs ===\n${section(logs, "logs")}`,
+          `\n=== project inventory and manifests ===\n${section(inventory, "output")}`,
+          `\n=== targeted source search (${sourceTerms.join(", ") || "fallback"}) ===\n${section(sourceSearch, "output")}`,
+          `\n=== database schema (read-only) ===\n${section(schema, "output")}`,
+          `\n=== project validation ===\n${section(validation, "output")}`,
+          `\n=== public browser evidence ===\n${browserText}`,
+          `\nInvestigation rule: distinguish confirmed, suspected, and disproven findings. Do not infer a bug from a line number alone; connect the symptom to runtime, browser, source, and schema evidence.`,
+        ].join("\n").slice(0, 32_000);
+        const browserVerified = browser.ok && browserData.ok === true &&
+          (!Array.isArray(browserEvidence?.consoleErrors) || browserEvidence.consoleErrors.length === 0) &&
+          (!Array.isArray(browserEvidence?.pageErrors) || browserEvidence.pageErrors.length === 0);
+        const coreOk = workspace.ok && inventory.ok;
+        return {
+          ok: coreOk,
+          output,
+          evidence: {
+            status: browserVerified ? "browser-verified" : coreOk ? "unverified" : "failed",
+            ...(browserEvidence?.url ? { url: browserEvidence.url } : {}),
+            investigation: {
+              focus: action.focus,
+              workspace: {
+                status: workspaceData.status,
+                previewUrl: workspaceData.previewUrl,
+                defaultUrl: workspaceData.defaultUrl,
+              },
+              logs: { ok: logs.ok, output: section(logs, "logs") },
+              inventory: { ok: inventory.ok, output: section(inventory, "output") },
+              sourceSearch: { ok: sourceSearch.ok, output: section(sourceSearch, "output") },
+              schema: { ok: schema.ok, output: section(schema, "output") },
+              validation: { ok: validation.ok, output: section(validation, "output") },
+              browser: {
+                attempted: browser.ok,
+                verified: browserVerified,
+                ...(browserEvidence?.url ? { url: browserEvidence.url } : {}),
+                output: browserText,
+              },
+            },
+          },
+        };
+      }
       case "validate": {
         const r = await fetchJson("POST", `/workspaces/${workspaceId}/validate`);
         return {
@@ -347,6 +468,7 @@ export function actionLabel(a: Action): string {
     case "webFetch":   return `web:fetch ${a.url.slice(0, 80)}`;
     case "preview":    return `preview:check ${a.path || "/"}`;
     case "browser":    return `browser:check ${a.path || "/"}${a.steps.length ? ` (${a.steps.length} step${a.steps.length === 1 ? "" : "s"})` : ""}`;
+    case "investigate": return `investigate:bug ${a.focus.slice(0, 70)}`;
     case "validate":   return "project:validate";
     case "memorySave": return `memory:save (${a.content.split("\n").length} baris)`;
     case "setRun":     return `workspace:setRun \`${a.command.slice(0, 80)}\``;
@@ -395,6 +517,7 @@ export function actionFingerprint(a: Action): string {
     case "webFetch":   return `webFetch:${fnv1a32(a.url)}`;
     case "preview":    return `preview:${fnv1a32(a.path ?? "/")}`;
     case "browser":    return `browser:${fnv1a32((a.path ?? "/") + "\0" + a.steps.join("\n"))}`;
+    case "investigate": return `investigate:${fnv1a32(a.focus)}`;
     case "validate":   return "validate:";
     case "memorySave": return `memorySave:${fnv1a32(a.content)}`;
     case "setRun":        return `setRun:${fnv1a32(a.command)}`;
@@ -425,6 +548,7 @@ function _actionTarget(a: Action): string {
     case "webFetch":   return a.url.slice(0, 200);
     case "preview":    return a.path ?? "/";
     case "browser":    return `${a.path ?? "/"} ${a.steps.join(" | ")}`.slice(0, 200);
+    case "investigate": return a.focus.slice(0, 200);
     case "validate":  return "";
     case "memorySave": return a.content.split("\n")[0].slice(0, 200);
     case "setRun":        return a.command.slice(0, 200);
