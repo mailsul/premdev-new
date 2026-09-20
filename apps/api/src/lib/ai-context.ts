@@ -402,8 +402,8 @@ export function detectProjectHints(root: string, lines: string[]): string[] {
 
 /**
  * Build a structured project index that gives the AI actionable orientation:
- * npm scripts, top dependencies, detected React Router route files, and
- * Fastify route-prefix registrations.
+ * npm scripts, dependency/config signals, detected React Router route files,
+ * Fastify route-prefix registrations, and project conventions.
  *
  * Returns "" when nothing useful is found (non-Node workspace, empty project).
  */
@@ -432,6 +432,9 @@ export function buildProjectIndex(workspaceId: string): string {
       if (topDeps.length > 0) {
         parts.push(`key dependencies: ${topDeps.join(", ")}`);
       }
+      const lockfile = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb"]
+        .find((name) => fs.existsSync(path.join(root, name)));
+      if (lockfile) parts.push(`dependency lockfile: ${lockfile} (respect it; do not change package manager without evidence)`);
     }
   } catch { /* ignore */ }
 
@@ -447,8 +450,37 @@ export function buildProjectIndex(workspaceId: string): string {
     parts.push(`API route prefixes: ${fastifyPrefixes.join(", ")}`);
   }
 
+  const conventions = detectProjectConventions(root);
+  if (conventions.length > 0) {
+    parts.push(`project conventions: ${conventions.join("; ")}`);
+  }
+
   if (parts.length === 0) return "";
   return `\n\nProject index:\n${parts.map((p) => `- ${p}`).join("\n")}`;
+}
+
+function detectProjectConventions(root: string): string[] {
+  const found: string[] = [];
+  const exists = (name: string) => fs.existsSync(path.join(root, name));
+  const candidates = [
+    "tsconfig.json", "vite.config.ts", "vite.config.js", "next.config.js",
+    "eslint.config.js", ".eslintrc.json", "prettier.config.js",
+    "vitest.config.ts", "jest.config.js", "pytest.ini", "pyproject.toml",
+    "requirements.txt", "Makefile", "README.md",
+  ];
+  const configs = candidates.filter(exists);
+  if (configs.length) found.push(`config files: ${configs.join(", ")}`);
+
+  const testDirs = ["tests", "test", "__tests__", "spec"].filter(exists);
+  if (testDirs.length) found.push(`test directories: ${testDirs.join(", ")}`);
+
+  const appDirs = ["src", "apps", "server", "api", "routes", "components"]
+    .filter(exists);
+  if (appDirs.length) found.push(`source conventions: ${appDirs.join(", ")} directories`);
+
+  const envExamples = [".env.example", ".env.sample", ".env.template"].filter(exists);
+  if (envExamples.length) found.push(`environment template: ${envExamples.join(", ")}`);
+  return found;
 }
 
 /**

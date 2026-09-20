@@ -21,6 +21,16 @@ import {
   logAudit as logAuditImpl,
 } from "@/lib/action-executor";
 import { createLoopState, recordBatch } from "@/lib/loop-detector";
+import {
+  acceptanceAnchor,
+  classifyFailure,
+  createRecoveryState,
+  parseAcceptanceCriteria,
+  recoveryActionsFor,
+  recoveryInstruction,
+  recordRecoveryAttempt,
+  type RecoveryState,
+} from "@/lib/agent-recovery";
 
 type Msg = {
   role: "user" | "assistant" | "system";
@@ -485,11 +495,17 @@ function filterStreamAnnotations(text: string): string {
              .replace(/\n?\[Auto: [^\]\n]+\]\n?/g, "");
 }
 
-function parseActions(text: string): { actions: Action[]; cleaned: string; plan?: string } {
+function parseActions(text: string): {
+  actions: Action[];
+  cleaned: string;
+  plan?: string;
+  acceptanceCriteria?: string[];
+} {
   const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "preview", "browser", "validate", "db", "open", "plan", "memory"]);
   const actions: Action[] = [];
   const kept: string[] = [];
   let planStr: string | undefined;
+  let acceptanceCriteria: string[] | undefined;
 
   // ── Preprocessing — normalize malformed action openers ─────────────────
   // AI models (especially Claude via Snifox) sometimes emit:
@@ -721,6 +737,7 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
       const planContent = body.join("\n").trim();
       if (planContent) {
         planStr = planContent;
+        acceptanceCriteria = parseAcceptanceCriteria(planContent);
         const quotedLines = planContent.split("\n").map((l) => `> ${l}`).join("\n");
         kept.push(`\n> 📋 **Rencana:**\n${quotedLines}\n`);
       }
@@ -798,7 +815,12 @@ function parseActions(text: string): { actions: Action[]; cleaned: string; plan?
     }
     i = j;
   }
-  return { actions, cleaned: kept.join("\n"), ...(planStr ? { plan: planStr } : {}) };
+  return {
+    actions,
+    cleaned: kept.join("\n"),
+    ...(planStr ? { plan: planStr } : {}),
+    ...(acceptanceCriteria?.length ? { acceptanceCriteria } : {}),
+  };
 }
 
 /* ===========================  Markdown render  =========================== */
@@ -1424,6 +1446,8 @@ export function AIChat({
   // anchor into every "Tool results:" continue message so the AI keeps track
   // of its plan across many iterations even after history compression.
   const planRef = useRef<string | null>(null);
+  const acceptanceCriteriaRef = useRef<string[]>([]);
+  const recoveryRef = useRef<RecoveryState>(createRecoveryState());
   const sessionStartRef = useRef<number>(0);       // wall-clock ms when current session started
   const sessionActionsRef = useRef<number>(0);     // total actions run this session
   const sessionCheckpointRef = useRef<string | null>(null); // checkpoint created at start of this session
@@ -2327,6 +2351,8 @@ export function AIChat({
     sessionActionLogRef.current = [];
     sessionFailureStreakRef.current = 0;
     sessionStrategyRef.current = "normal";
+    recoveryRef.current = createRecoveryState();
+    acceptanceCriteriaRef.current = [];
     sessionEvidenceRef.current = { validated: false, browserVerified: false, browserAttempted: false, failed: false };
     loopStateRef.current = createLoopState();
     planRef.current = null;
@@ -2348,6 +2374,10 @@ export function AIChat({
         "ps aux | grep -E 'php|node|python|ruby|nginx|apache|go |deno' | grep -v grep | head -10 || echo '(tidak ada)'",
         "printf '\\n=== PORT LISTEN ===\\n'",
         "ss -tlnp 2>/dev/null | grep LISTEN | head -8 || echo '(tidak bisa cek)'",
+         "printf '\\n=== PROJECT MAP ===\\n'",
+         "find . -maxdepth 3 -type f \\( -name 'package.json' -o -name 'tsconfig*.json' -o -name 'vite.config.*' -o -name 'requirements.txt' -o -name 'pyproject.toml' -o -name 'schema.sql' -o -name '*.test.*' -o -name '*.spec.*' \\) -not -path './node_modules/*' | sort | head -100",
+         "printf '\\n=== DEPENDENCY SCRIPTS ===\\n'",
+         "node -e \"try{const p=require('./package.json'); console.log(JSON.stringify({scripts:p.scripts||{},dependencies:Object.keys(p.dependencies||{}),devDependencies:Object.keys(p.devDependencies||{})},null,2))}catch(e){console.log('(no root package.json)')}\" 2>/dev/null | head -120",
         "printf '\\n=== AI MEMORY ===\\n'",
         "cat .premdev-data/memory.md 2>/dev/null | head -30 || echo '(belum ada memory)'",
       ].join("; ");
@@ -2620,6 +2650,9 @@ export function AIChat({
     // If AI emitted a plan: block, store it so we can re-inject it as an
     // anchor in every subsequent "Tool results:" continuation message.
     if (parsed.plan) planRef.current = parsed.plan;
+    if (parsed.acceptanceCriteria?.length) {
+      acceptanceCriteriaRef.current = parsed.acceptanceCriteria;
+    }
 
     // ── Text-content loop detection ─────────────────────────────────────────
     // Detects "stuck" state: AI sending the same text (no actions or same
@@ -2664,6 +2697,35 @@ export function AIChat({
         const lastIsProviderError = isProviderErrorText(lastAssistantContent);
         if (isPremDevInternalError(lastAssistantContent)) {
           setAgentRunStatus("failed");
+          return;
+        }
+
+        const lastRecoveryAttempt = recoveryRef.current.attempts.at(-1);
+        if (lastRecoveryAttempt && !lastRecoveryAttempt.ok) {
+          if (recoveryRef.current.strategy === "blocked") {
+            stoppedRef.current = true;
+            setAgentRunStatus("failed");
+            setMsgs((prev) => [
+              ...prev,
+              {
+                role: "system" as const,
+                content: `❌ **Recovery dihentikan** — error identik muncul tiga kali.\n\nKategori: ${lastRecoveryAttempt.category}\nError: ${lastRecoveryAttempt.output}\n\nPeriksa blocker ini secara manual sebelum melanjutkan.`,
+                synthetic: true,
+                sentAt: Date.now(),
+              },
+            ]);
+            return;
+          }
+          finalVerifyDoneRef.current = false;
+          await sendRaw(
+            `Recovery wajib dilakukan sebelum ringkasan sukses.\n${recoveryInstruction(
+              recoveryRef.current,
+              { kind: lastRecoveryAttempt.action } as Action,
+              lastRecoveryAttempt.output,
+            )}\n\nEmit satu action diagnosis yang relevan terlebih dahulu.`,
+            undefined,
+            { synthetic: true, continuation: true, eventType: "tool_result" },
+          );
           return;
         }
 
@@ -2937,6 +2999,7 @@ export function AIChat({
         }
       }
       const results: ActionResult[] = [];
+      let recoveryActionAdded = false;
       const sessionDeadline = sessionStartRef.current + agentLimits.maxRuntimeSeconds * 1000;
       for (let i = 0; i < toRun.length; i++) {
         if (stoppedRef.current) break;
@@ -2965,6 +3028,7 @@ export function AIChat({
         const ac = new AbortController();
         actionAbortRef.current = ac;
         setAgentRunStatus("waiting_tool");
+        let stopAfterAction = false;
         const actionTimer = setTimeout(() => ac.abort(), remainingMs);
         // Show realtime activity label in the status bar while action runs.
         setCurrentActivity(actionLabel(toRun[i]));
@@ -2978,6 +3042,7 @@ export function AIChat({
         results[i] = r;
         recordExecution(toRun[i], r);
         sessionActionsRef.current += 1;
+        recoveryRef.current = recordRecoveryAttempt(recoveryRef.current, toRun[i], r);
         if (toRun[i].kind === "browser") {
           sessionEvidenceRef.current.browserAttempted = true;
           if (r.ok && r.evidence?.status === "browser-verified") {
@@ -2995,6 +3060,17 @@ export function AIChat({
             sessionStrategyRef.current = "minimal";
           } else if (sessionFailureStreakRef.current >= 2) {
             sessionStrategyRef.current = "diagnostic";
+          }
+          // Stop the model-authored batch at the first error. Inspect the
+          // relevant subsystem before allowing another edit; this prevents a
+          // broken first action from cascading into unrelated failures.
+          if (!recoveryActionAdded && recoveryRef.current.strategy !== "blocked") {
+            const category = recoveryRef.current.lastCategory ?? classifyFailure(toRun[i], r.output);
+            const diagnosticActions = recoveryActionsFor(category, toRun[i]);
+            toRun.splice(i + 1, toRun.length - i - 1, ...diagnosticActions);
+            recoveryActionAdded = true;
+          } else if (recoveryActionAdded || recoveryRef.current.strategy === "blocked") {
+            stopAfterAction = true;
           }
         }
         // Track action label for the session activity log.
@@ -3020,6 +3096,7 @@ export function AIChat({
         // If user clicked Stop mid-action, the abort propagates as a
         // "Cancelled by user" result — bail before running the rest.
         if (stoppedRef.current) break;
+        if (stopAfterAction) break;
       }
       setAutoExecuting(false);
       setCurrentActivity(null);
@@ -3027,14 +3104,24 @@ export function AIChat({
       iterationRef.current += 1;
       // Re-inject the active plan as an anchor so the AI doesn't lose track
       // of its plan even after history compression has stripped old messages.
-      const planAnchor = planRef.current
-        ? `[ANCHOR — Rencana aktif, lanjutkan sesuai rencana ini]\n${planRef.current}\n\n`
-        : "";
-      const strategyHint = sessionStrategyRef.current === "diagnostic"
-        ? "[STRATEGY CHANGE — dua action terakhir gagal. Berhenti mengulang patch/command yang sama; baca output error lengkap, periksa root cause, lalu pilih pendekatan berbeda.]\n\n"
-        : sessionStrategyRef.current === "minimal"
-          ? "[STRATEGY CHANGE — tiga kegagalan beruntun. Gunakan langkah minimal yang dapat diverifikasi: satu perubahan kecil, validate:run, lalu lanjut hanya jika lolos.]\n\n"
-          : "";
+      const planAnchor = [
+        planRef.current
+          ? `[ANCHOR — Rencana aktif, lanjutkan sesuai rencana ini]\n${planRef.current}`
+          : "",
+        acceptanceAnchor(acceptanceCriteriaRef.current),
+      ].filter(Boolean).join("\n\n");
+      const lastFailure = recoveryRef.current.attempts.at(-1);
+      const strategyHint = lastFailure && !lastFailure.ok
+        ? `${recoveryInstruction(
+            recoveryRef.current,
+            { kind: lastFailure.action } as Action,
+            lastFailure.output,
+          )}\n\n`
+        : sessionStrategyRef.current === "diagnostic"
+          ? "[STRATEGY CHANGE — dua action terakhir gagal. Berhenti mengulang patch/command yang sama; baca output error lengkap, periksa root cause, lalu pilih pendekatan berbeda.]\n\n"
+          : sessionStrategyRef.current === "minimal"
+            ? "[STRATEGY CHANGE — tiga kegagalan beruntun. Gunakan langkah minimal yang dapat diverifikasi: satu perubahan kecil, validate:run, lalu lanjut hanya jika lolos.]\n\n"
+            : "";
       // Pass `toRun` (not `acts`) so the AI receives results for injected
       // verification steps too (diag output, curl response).
       setAgentRunStatus("waiting_tool");
