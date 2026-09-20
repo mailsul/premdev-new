@@ -219,7 +219,9 @@ export default function EditorPage() {
   });
   const [newTabOpen, setNewTabOpen] = useState(false);
   const [bottomTab, setBottomTab] = useState<"console" | "terminal" | "preview" | "database">("console");
-  const [sidePanelTab, setSidePanelTab] = useState<"files" | "library">("files");
+  // Start on the unified workspace library so the new Tools surface is
+  // visible immediately; users can switch to Files without losing the editor.
+  const [sidePanelTab, setSidePanelTab] = useState<"files" | "library">("library");
   const [splitTabs, setSplitTabs] = useState<string[]>([]);
   // Monaco editor instance — captured in onMount so we can read the active
   // selection from anywhere (Ask AI, quick actions, etc.).
