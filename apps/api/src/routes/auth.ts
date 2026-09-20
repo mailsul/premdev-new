@@ -66,12 +66,20 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     // Per-IP rate limit (short bursts) AND brute-force lockout (sustained).
     if (!loginLimiter.take(`login:${ip}`)) {
       recordAttempt(ip, null, false, "rate-limited", ua);
-      return reply.code(429).send({ error: "Too many requests. Please slow down." });
+      return reply.code(429).send({
+        error: "PremDev internal login rate limit reached. Try again later.",
+        source: "premdev",
+        code: "PREMDEV_LOGIN_RATE_LIMIT",
+        retryable: true,
+      });
     }
     if (isLockedOut(ip)) {
       recordAttempt(ip, null, false, "locked-out", ua);
       return reply.code(429).send({
         error: "Too many failed attempts. Try again in 30 minutes.",
+        source: "premdev",
+        code: "PREMDEV_LOGIN_LOCKOUT",
+        retryable: false,
       });
     }
 

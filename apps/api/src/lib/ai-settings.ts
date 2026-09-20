@@ -148,7 +148,14 @@ export type RtSettingKey =
   | "ai.rate.apiCapacity"
   | "ai.rate.apiRefillPerSec"
   | "ai.rate.aiCapacity"
-  | "ai.rate.aiRefillPerSec";
+  | "ai.rate.aiRefillPerSec"
+  | "ai.agent.maxActions"
+  | "ai.agent.maxRuntimeSeconds"
+  | "ai.agent.maxContinuations"
+  | "ai.agent.maxProviderRetries"
+  | "ai.agent.maxToolOutputChars"
+  | "ai.agent.maxProviderRoundSeconds"
+  | "ai.agent.maxConcurrentRuns";
 
 export const RT_DEFAULTS: Record<RtSettingKey, number> = {
   "ai.budget.maxHistoryChars":        18000,
@@ -162,13 +169,56 @@ export const RT_DEFAULTS: Record<RtSettingKey, number> = {
   "ai.rate.apiRefillPerSec":          2,
   "ai.rate.aiCapacity":               30,
   "ai.rate.aiRefillPerSec":           0.2,
+  // Agent safety limits. These are deliberately finite; Admin may tune them
+  // upward for larger/sub-agent workflows, but never beyond RT_BOUNDS.
+  "ai.agent.maxActions":              30,
+  "ai.agent.maxRuntimeSeconds":       600,
+  "ai.agent.maxContinuations":        3,
+  "ai.agent.maxProviderRetries":      2,
+  "ai.agent.maxToolOutputChars":      12000,
+  "ai.agent.maxProviderRoundSeconds": 180,
+  "ai.agent.maxConcurrentRuns":       1,
+};
+
+export const RT_BOUNDS: Record<RtSettingKey, { min: number; max: number }> = {
+  "ai.budget.maxHistoryChars":        { min: 2000, max: 80000 },
+  "ai.budget.maxHistoryMessages":     { min: 4, max: 100 },
+  "ai.budget.maxSingleMessageChars":  { min: 500, max: 32000 },
+  "ai.budget.maxTokensDefault":       { min: 0, max: 32768 },
+  "ai.budget.maxTokensAutopilot":     { min: 0, max: 65536 },
+  "ai.rate.loginCapacity":            { min: 1, max: 100 },
+  "ai.rate.loginRefillPerSec":        { min: 0.01, max: 5 },
+  "ai.rate.apiCapacity":              { min: 0, max: 2000 },
+  "ai.rate.apiRefillPerSec":          { min: 0.1, max: 100 },
+  "ai.rate.aiCapacity":               { min: 0, max: 500 },
+  "ai.rate.aiRefillPerSec":           { min: 0.01, max: 10 },
+  "ai.agent.maxActions":              { min: 1, max: 200 },
+  "ai.agent.maxRuntimeSeconds":       { min: 30, max: 3600 },
+  "ai.agent.maxContinuations":        { min: 0, max: 20 },
+  "ai.agent.maxProviderRetries":      { min: 0, max: 5 },
+  "ai.agent.maxToolOutputChars":      { min: 1000, max: 50000 },
+  "ai.agent.maxProviderRoundSeconds": { min: 30, max: 600 },
+  "ai.agent.maxConcurrentRuns":       { min: 1, max: 4 },
+};
+
+export type AgentLimits = {
+  maxActions: number;
+  maxRuntimeSeconds: number;
+  maxContinuations: number;
+  maxProviderRetries: number;
+  maxToolOutputChars: number;
+  maxProviderRoundSeconds: number;
+  maxConcurrentRuns: number;
 };
 
 export function getRtSetting(key: RtSettingKey): number {
   const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
   if (row?.value) {
     const n = parseFloat(row.value);
-    if (!isNaN(n)) return n;
+    if (!isNaN(n)) {
+      const bounds = RT_BOUNDS[key];
+      return Math.min(bounds.max, Math.max(bounds.min, n));
+    }
   }
   return RT_DEFAULTS[key];
 }
@@ -184,6 +234,18 @@ export function getAllRtSettings(): Record<RtSettingKey, number> {
   return Object.fromEntries(
     (Object.keys(RT_DEFAULTS) as RtSettingKey[]).map((k) => [k, getRtSetting(k)])
   ) as Record<RtSettingKey, number>;
+}
+
+export function getAgentLimits(): AgentLimits {
+  return {
+    maxActions: getRtSetting("ai.agent.maxActions"),
+    maxRuntimeSeconds: getRtSetting("ai.agent.maxRuntimeSeconds"),
+    maxContinuations: getRtSetting("ai.agent.maxContinuations"),
+    maxProviderRetries: getRtSetting("ai.agent.maxProviderRetries"),
+    maxToolOutputChars: getRtSetting("ai.agent.maxToolOutputChars"),
+    maxProviderRoundSeconds: getRtSetting("ai.agent.maxProviderRoundSeconds"),
+    maxConcurrentRuns: getRtSetting("ai.agent.maxConcurrentRuns"),
+  };
 }
 
 export function listAIKeysMasked(): {

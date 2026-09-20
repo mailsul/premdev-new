@@ -22,7 +22,7 @@ import {
 import { createLoopState, recordBatch } from "@/lib/loop-detector";
 
 type Msg = {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   // Optional inline images (base64 data URLs). Only present on user messages
   // where the user attached / pasted screenshots. Persisted in localStorage
@@ -41,6 +41,10 @@ type Msg = {
   // When synthetic=true but continuation is absent/false, it's a status
   // message (loop warning, session summary) that SHOULD be rendered.
   continuation?: boolean;
+  // Internal lifecycle/tool event. System events are not user conversation
+  // turns and are rendered as compact status banners.
+  eventType?: "system" | "tool_result";
+  hidden?: boolean;
   // For session-end summary messages: the checkpoint ID that was created
   // at the start of this session (so user can rollback).
   sessionCheckpointId?: string;
@@ -84,6 +88,9 @@ function parseAIError(raw: string): string {
       "";
     if (msg) s = msg;
   } catch { /* not JSON — use as-is */ }
+  if (/PREMDEV_RATE_LIMIT|source["']?\s*:\s*["']?premdev|premdev internal rate limit/i.test(s)) {
+    return "PremDev internal rate limit tercapai. Ini bukan error 9Router/provider; tunggu sebentar atau kirim ulang manual.";
+  }
   // Normalize common error patterns into short friendly messages
   if (/request too large|context.*length|token.*limit|exceed.*token|tpm.*limit|tokens per minute/i.test(s)) {
     const modelMatch = s.match(/model\s+["`]?(\S+)["`]?/i);
@@ -105,6 +112,19 @@ function parseAIError(raw: string): string {
   }
   // Trim to 200 chars so a massive JSON blob doesn't overflow the bubble
   return s.length > 200 ? s.slice(0, 197) + "…" : s;
+}
+
+function isPremDevInternalError(text: string): boolean {
+  return /premdev internal|PREMDEV_|internal rate limit/i.test(text);
+}
+
+function isProviderErrorText(text: string): boolean {
+  if (isPremDevInternalError(text)) return false;
+  return text.includes("__ai_error__:") ||
+    text.startsWith("⚠️ **") ||
+    text.startsWith("🔑 **") ||
+    text.startsWith("💳 **") ||
+    /API key tidak valid|tidak mengembalikan respons|server error|provider mengembalikan/i.test(text);
 }
 
 // Match the backend's per-image cap (~5 MB raw → ~7 MB base64).
@@ -326,7 +346,7 @@ async function logAudit(opts: {
   return logAuditImpl(opts);
 }
 
-function formatToolResults(actions: Action[], results: ActionResult[]): string {
+function formatToolResults(actions: Action[], results: ActionResult[], maxOutputChars = 12000): string {
   const lines: string[] = ["Tool results:"];
   const errorActions: Array<{ label: string; output: string }> = [];
 
@@ -364,7 +384,7 @@ function formatToolResults(actions: Action[], results: ActionResult[]): string {
     lines.push(`${i + 1}. ${actionLabel(a)} — ${ok ? "OK" : "ERROR"}`);
     if (trimmed) {
       // Success: tighter cap (600 chars). Error: full cap (2000 chars).
-      const cap = ok ? 600 : 2000;
+      const cap = Math.min(maxOutputChars, ok ? 600 : 2000);
       const snippet = trimmed.length > cap
         ? trimmed.slice(0, cap) + "\n…(truncated)"
         : trimmed;
@@ -405,42 +425,6 @@ function formatToolResults(actions: Action[], results: ActionResult[]): string {
 function filterStreamAnnotations(text: string): string {
   return text.replace(/\n?\[Auto pilih [^\]\n]+\]\n?/g, "")
              .replace(/\n?\[Auto: [^\]\n]+\]\n?/g, "");
-}
-
-// Cheap detector used by the auto-continue loop in sendRaw(). Returns true
-// if `text` contains at least one action-fence header (```file:foo.html /
-// ```patch:bar.ts / etc.) that lacks a matching closing fence — which is
-// the signature of a model reply that ran out of output tokens mid-action
-// and would otherwise show up as a yellow "OUTPUT TERPOTONG" badge.
-//
-// We deliberately keep this simple: we only need a yes/no signal. The full
-// per-fence walk lives in parseActions() below; copying the entire bracket
-// stack here would just be redundant.
-function hasUnclosedActionFence(text: string): boolean {
-  const ACTION_KINDS = new Set(["bash", "file", "workspace", "patch", "search", "diag", "test", "web", "preview", "db", "open", "plan", "memory"]);
-  const lines = text.split("\n");
-  let i = 0;
-  while (i < lines.length) {
-    const open = lines[i].match(/^(`{3,})([a-zA-Z]+):/);
-    if (!open || !ACTION_KINDS.has(open[2])) { i++; continue; }
-    const ticks = open[1].length;
-    let j = i + 1;
-    let closed = false;
-    while (j < lines.length) {
-      const bare = lines[j].match(/^(`{3,})\s*$/);
-      // For non-`file:` actions any bare fence of matching length closes.
-      // For `file:` actions we use the same simplification — false negatives
-      // here only mean we MISS a continuation chance, which is safe (user
-      // can still click "lanjutkan" manually). We won't false-positive
-      // because a closed file: fence always has a matching bare run.
-      // Same leniency as parseActions: close on any bare fence ≥ 3 ticks.
-      if (bare && bare[1].length >= 3) { closed = true; break; }
-      j++;
-    }
-    if (!closed) return true;
-    i = j + 1;
-  }
-  return false;
 }
 
 function parseActions(text: string): { actions: Action[]; cleaned: string; plan?: string } {
@@ -1353,6 +1337,8 @@ export function AIChat({
   // True while the autonomous orchestrator is running an action batch (so
   // Stop stays visible even when the model isn't streaming).
   const [autoExecuting, setAutoExecuting] = useState(false);
+  type AgentRunStatus = "idle" | "running" | "waiting_tool" | "completed" | "stopped" | "limit_reached" | "failed";
+  const [agentRunStatus, setAgentRunStatus] = useState<AgentRunStatus>("idle");
   // Real-time activity label shown in the status bar while streaming or executing.
   // Cleared when idle. Examples: "💭 Berpikir...", "✏️ Mengedit index.php"
   const [currentActivity, setCurrentActivity] = useState<string | null>(null);
@@ -1379,8 +1365,10 @@ export function AIChat({
   // a job we're already streaming.
   const activeJobIdRef = useRef<string | null>(null);
   // Auto-continue: counts how many continuation rounds we've fired for the
-  // CURRENT user turn. It is telemetry/UI state, not a hard session cap.
+  // CURRENT user turn. The server-provided agent settings make this a hard
+  // client orchestration boundary; provider calls remain server-authoritative.
   const continuationCountRef = useRef<number>(0);
+  const providerRetryCountRef = useRef<number>(0);
   // Queue for messages typed while the AI is still streaming. Contents are
   // flushed (one by one, in order) after the current sendRaw call chain
   // finishes. The displayed count drives the "N pesan di-queue" pill.
@@ -1399,7 +1387,6 @@ export function AIChat({
   // Auto-recovery: set to true after we've injected one silent nudge for a
   // mid-session premature stop (AI responded with no action blocks even though
   // the task isn't done yet). Prevents infinite recovery loops.
-  const recoveryAttemptedRef = useRef<boolean>(false);
 
   // Mirror of the latest committed `msgs` state, kept in sync via the
   // useEffect below. Needed because `sendRaw()` recursively re-invokes
@@ -1551,6 +1538,28 @@ export function AIChat({
     queryFn: () => API.get<{ providers: Provider[] }>("/ai/providers"),
     staleTime: 60_000,
   });
+  const { data: agentSettings } = useQuery({
+    queryKey: ["ai", "agent-settings"],
+    queryFn: () => API.get<{ limits: {
+      maxActions: number;
+      maxRuntimeSeconds: number;
+      maxContinuations: number;
+      maxProviderRetries: number;
+      maxToolOutputChars: number;
+      maxProviderRoundSeconds: number;
+      maxConcurrentRuns: number;
+    } }>("/ai/agent-settings"),
+    staleTime: 30_000,
+  });
+  const agentLimits = agentSettings?.limits ?? {
+    maxActions: 30,
+    maxRuntimeSeconds: 600,
+    maxContinuations: 3,
+    maxProviderRetries: 2,
+    maxToolOutputChars: 12000,
+    maxProviderRoundSeconds: 180,
+    maxConcurrentRuns: 1,
+  };
 
   // The (workspace, tab) key the current `msgs` was loaded from. Stored in
   // state — and updated in the SAME setState batch as setMsgs() — so the
@@ -1720,23 +1729,8 @@ export function AIChat({
           return c;
         });
       }
-      // Auto-continue parity with sendRaw: if the recovered run ended
-      // with an unclosed action fence, fire the same continuation
-      // recursion the original sendRaw path would have. Without this,
-      // a refresh during a truncated reply would leave the user with a
-      // half-written file action and no recovery.
-      if (
-        result.status === "done" &&
-        !stoppedRef.current &&
-        hasUnclosedActionFence(acc)
-      ) {
-        continuationCountRef.current += 1;
-        await sendRaw(
-          `Lanjutkan output yang terpotong. Re-emit action block dengan chunked patches dan tutup fence-nya.`,
-          undefined,
-          { synthetic: true, continuation: true },
-        );
-      }
+      // Do not auto-continue a recovered truncated model response. The only
+      // legal continuation is the orchestrator's tool-result path below.
     })();
     return () => {
       cancelled = true;
@@ -1830,19 +1824,56 @@ export function AIChat({
   async function sendRaw(
     userContent: string,
     images?: string[],
-    opts?: { synthetic?: boolean; continuation?: boolean },
+    opts?: { synthetic?: boolean; continuation?: boolean; eventType?: "system" | "tool_result" },
   ) {
     if (streaming) return;
     // Honor a Stop click that happened while we were `await`-ing an
     // attachment save in send(). Without this, the message would still be
     // sent to the AI after the user explicitly cancelled.
     if (stoppedRef.current) return;
+    if (
+      sessionStartRef.current > 0 &&
+      Date.now() - sessionStartRef.current >= agentLimits.maxRuntimeSeconds * 1000
+    ) {
+      stoppedRef.current = true;
+      setAgentRunStatus("limit_reached");
+      setMsgs((cur) => [
+        ...cur,
+        {
+          role: "system" as const,
+          content: `⚠️ **Batas durasi tercapai** — run dihentikan setelah ${agentLimits.maxRuntimeSeconds} detik.`,
+          synthetic: true,
+          eventType: "system" as const,
+          sentAt: Date.now(),
+        },
+      ]);
+      return;
+    }
+    if (opts?.continuation) {
+      if (continuationCountRef.current >= agentLimits.maxContinuations) {
+        stoppedRef.current = true;
+        setAgentRunStatus("limit_reached");
+        setMsgs((cur) => [
+          ...cur,
+          {
+            role: "system" as const,
+            content: `⚠️ **Batas continuation tercapai** — run dihentikan setelah ${agentLimits.maxContinuations} continuation.`,
+            synthetic: true,
+            eventType: "system" as const,
+            sentAt: Date.now(),
+          },
+        ]);
+        return;
+      }
+      continuationCountRef.current += 1;
+    }
     const now = Date.now();
     const userMsg: Msg = {
-      role: "user",
+      role: opts?.eventType ? "system" : "user",
       content: userContent,
       ...(images && images.length > 0 ? { images } : {}),
       ...(opts?.synthetic ? { synthetic: true } : {}),
+      ...(opts?.eventType ? { eventType: opts.eventType } : {}),
       sentAt: now,
     };
     // Use msgsRef instead of the captured `msgs` closure so an
@@ -1866,10 +1897,24 @@ export function AIChat({
     msgsRef.current = next;
     setMsgs(next);
     setStreaming(true);
+    setAgentRunStatus("running");
     setCurrentActivity("💭 Berpikir…");
 
     const ac = new AbortController();
     abortRef.current = ac;
+    const runRemainingMs = sessionStartRef.current > 0
+      ? Math.max(1, sessionStartRef.current + agentLimits.maxRuntimeSeconds * 1000 - Date.now())
+      : agentLimits.maxRuntimeSeconds * 1000;
+    const roundTimer = setTimeout(() => {
+      const jobId = activeJobIdRef.current;
+      if (jobId) {
+        fetch(`/api/ai/chat/jobs/${jobId}/abort`, {
+          method: "POST",
+          credentials: "include",
+        }).catch(() => {});
+      }
+      ac.abort();
+    }, Math.min(agentLimits.maxProviderRoundSeconds * 1000, runRemainingMs));
     let buf = "";
     try {
       // Step 1 — kick off the run on the server. The server creates an
@@ -1968,6 +2013,7 @@ export function AIChat({
       // far stays in the bubble; we just exit the function quietly.
     } catch (e: any) {
       if (e.name !== "AbortError" && !stoppedRef.current) {
+        setAgentRunStatus("failed");
         setMsgs((cur) => {
           const c = [...cur];
           c[c.length - 1] = {
@@ -1979,6 +2025,7 @@ export function AIChat({
         });
       }
     } finally {
+      clearTimeout(roundTimer);
       setStreaming(false);
       setCurrentActivity(null);
       abortRef.current = null;
@@ -1986,30 +2033,10 @@ export function AIChat({
       try { localStorage.removeItem(JOB_KEY(workspaceId, activeTabId)); } catch {}
     }
 
-    // Auto-continue: if the model's reply ended with an unclosed action
-    // fence (badge would say "OUTPUT TERPOTONG"), silently re-fire the
-    // chat with a `[CONT_TRUNC]` marker so the server prepends a strong
-    // "continue without preamble, switch to chunked patches" instruction.
-    // There is no hard continuation count: a long action block may need many
-    // chunks. Stop remains available and aborts both the current job and loop.
-    if (
-      !stoppedRef.current &&
-      hasUnclosedActionFence(buf)
-    ) {
-      continuationCountRef.current += 1;
-      // No setTimeout heuristic needed: msgsRef is updated synchronously
-      // inside every setMsgs callback in this function (initial seed +
-      // streaming chunks + error path), so the recursive sendRaw below
-      // is guaranteed to read the just-committed assistant turn even if
-      // React hasn't run its commit effects yet.
-      if (!stoppedRef.current) {
-        await sendRaw(
-          `Lanjutkan output yang terpotong. Re-emit action block dengan chunked patches dan tutup fence-nya.`,
-          undefined,
-          { synthetic: true, continuation: true },
-        );
-      }
-    }
+    // A truncated model response is displayed as an actionable error. It is
+    // intentionally NOT auto-continued here: continuation is only legal after
+    // the orchestrator has produced a tool result, which prevents autonomous
+    // conversation loops and repeated provider requests.
   }
 
   async function sendCouncil() {
@@ -2170,6 +2197,8 @@ export function AIChat({
     explicitDatabaseDeletionRef.current = /\b(?:drop|delete|remove|hapus(?:kan)?|hilangkan)\s+(?:the\s+)?(?:database|db|basis\s+data)\b/i.test(txt) ||
       /\b(?:database|db|basis\s+data)\b.{0,40}\b(?:drop|delete|remove|hapus|hilangkan)\b/i.test(txt);
     continuationCountRef.current = 0;
+    providerRetryCountRef.current = 0;
+    setAgentRunStatus("running");
     processedBatchesRef.current = new Set();
     sessionStartRef.current = Date.now();
     sessionActionsRef.current = 0;
@@ -2179,7 +2208,6 @@ export function AIChat({
     planRef.current = null;
     preFlightRef.current = null;
     finalVerifyDoneRef.current = false;
-    recoveryAttemptedRef.current = false;
     setAutoManagedBatches(new Set());
 
     // ── Pre-flight orientation ────────────────────────────────────────────
@@ -2318,6 +2346,7 @@ export function AIChat({
   // until the model finishes naturally.
   function stop() {
     stoppedRef.current = true;
+    setAgentRunStatus("stopped");
     // Cancel any pending rate-limit auto-retry timer.
     if (rateLimitTimerRef.current !== null) {
       clearTimeout(rateLimitTimerRef.current);
@@ -2473,17 +2502,13 @@ export function AIChat({
       // error — those aren't "stuck AI" loops, they're transient failures that
       // the backend is already retrying.  Killing the session here would prevent
       // the backend's 60-second quota-reset wait from ever completing.
-      const isProviderErrorMsg =
-        lastRaw.includes("__ai_error__:") ||
-        lastRaw.startsWith("⚠️ **") ||
-        lastRaw.startsWith("🔑 **") ||
-        lastRaw.startsWith("💳 **");
+      const isProviderErrorMsg = isProviderErrorText(lastRaw);
       if (!isProviderErrorMsg && last2 && prev2 && last2 === prev2) {
         stoppedRef.current = true;
         setMsgs((prev) => [
           ...prev,
           {
-            role: "assistant" as const,
+            role: "system" as const,
             content: "⚠️ **Loop teks terdeteksi** — AI mengirim respons yang sama dua kali berturut-turut. Sesi dihentikan otomatis. Coba ubah perintah atau mulai chat baru.",
             synthetic: true,
             sentAt: Date.now(),
@@ -2496,38 +2521,16 @@ export function AIChat({
     if (acts.length === 0) {
       // Wrap in async IIFE so we can use await inside a useEffect callback.
       void (async () => {
-        // ── Premature-stop recovery ───────────────────────────────────────
-        // If the AI stops without action blocks while the task is clearly
-        // still in progress (≥1 action has already run, final-verify hasn't
-        // fired, recovery not yet attempted), give it one silent nudge.
-        // This catches the case where a model emits an inline/malformed block
-        // that the parser normalised → 0 actions detected → wrong early stop.
-        // Do not nudge if the last assistant turn was a provider/rate-limit
-        // error — the backend is already retrying; sending a new request on
-        // top would create another job that also hits the limit immediately,
-        // causing the loop-detection to fire and kill the session.
+        // A model response without actions is a terminal conversational result.
+        // Do not silently nudge it: agent continuation is only legal after the
+        // orchestrator has returned an actual tool result.
         const lastAssistantContent = msgsRef.current
           .slice()
           .reverse()
           .find((m) => m.role === "assistant" && !m.synthetic)?.content ?? "";
-        const lastIsProviderError =
-          lastAssistantContent.includes("__ai_error__:") ||
-          lastAssistantContent.startsWith("⚠️ **") ||
-          lastAssistantContent.startsWith("🔑 **") ||
-          lastAssistantContent.startsWith("💳 **");
-        if (
-          !lastIsProviderError &&
-          autonomous &&
-          sessionActionsRef.current >= 1 &&
-          !finalVerifyDoneRef.current &&
-          !recoveryAttemptedRef.current
-        ) {
-          recoveryAttemptedRef.current = true;
-          await sendRaw(
-            `Tidak ada action block terdeteksi di respons terakhir. Jika task belum selesai, lanjutkan sekarang dengan action blocks yang diperlukan. Pastikan setiap action block dimulai di awal baris sendiri (jangan gabung dengan teks di baris yang sama).`,
-            undefined,
-            { synthetic: true },
-          );
+        const lastIsProviderError = isProviderErrorText(lastAssistantContent);
+        if (isPremDevInternalError(lastAssistantContent)) {
+          setAgentRunStatus("failed");
           return;
         }
 
@@ -2567,7 +2570,7 @@ export function AIChat({
                 await sendRaw(
                   `Final verification (cek otomatis setelah AI selesai):\n\`\`\`\n${fvOut.slice(0, 2000)}\n\`\`\`\n\nAda indikasi masalah di output di atas. Periksa dan perbaiki sebelum benar-benar selesai. Jika semua sudah OK, cukup tulis konfirmasi singkat (tanpa action blocks).`,
                   undefined,
-                  { synthetic: true },
+                  { synthetic: true, continuation: true, eventType: "tool_result" },
                 );
                 return; // don't show ✅ yet — wait for AI response
               }
@@ -2581,7 +2584,7 @@ export function AIChat({
         // ✅ Selesai — the task is NOT done.  Auto-retry after 65s to give the
         // quota window time to reset.  The user can also click "Coba lagi"
         // manually at any time via the error box button.
-        if (lastIsProviderError) {
+        if (lastIsProviderError && providerRetryCountRef.current < agentLimits.maxProviderRetries) {
           // 35s cukup — RPM throttler di backend sudah mencegah 429 proaktif.
           // 65s lama dulu karena backend punya 60s quota-wait sendiri yang
           // numpuk di atas timer ini; sekarang dengan RPM set, backend jarang
@@ -2609,24 +2612,41 @@ export function AIChat({
               return withoutError;
             });
             // Reset per-turn guards so recovery/verify can fire on the new turn.
-            recoveryAttemptedRef.current = false;
             finalVerifyDoneRef.current = false;
             // Small tick so React commits the setMsgs before sendRaw reads msgsRef.
             await new Promise<void>((r) => setTimeout(r, 120));
             if (stoppedRef.current) return;
+            providerRetryCountRef.current += 1;
             await sendRaw(
               "[Rate limit sudah reset — lanjutkan task dari langkah terakhir]",
               undefined,
-              // continuation:true hides this from the chat UI — it's an internal
-              // signal to the AI, not a visible user bubble.
-              { synthetic: true, continuation: true },
+              // This is a provider retry, not an agent continuation. Do not
+              // spend continuation budget on it.
+              { synthetic: true, hidden: true, eventType: "system" },
             );
           }, RATE_LIMIT_AUTO_RETRY_MS);
           rateLimitTimerRef.current = retryTimer;
           return;
         }
 
+        if (lastIsProviderError && providerRetryCountRef.current >= agentLimits.maxProviderRetries) {
+          stoppedRef.current = true;
+          setAgentRunStatus("limit_reached");
+          setMsgs((prev) => [
+            ...prev,
+            {
+              role: "system" as const,
+              content: `⚠️ **Batas retry provider tercapai** — ${agentLimits.maxProviderRetries} retry digunakan. Coba lagi manual atau ganti provider/model.`,
+              synthetic: true,
+              eventType: "system" as const,
+              sentAt: Date.now(),
+            },
+          ]);
+          return;
+        }
+
         // All clear (or verify passed / not applicable) — show session summary.
+        setAgentRunStatus("completed");
         if (autonomous && sessionActionsRef.current > 0) {
           const elapsed = Math.round((Date.now() - sessionStartRef.current) / 1000);
           const mins = Math.floor(elapsed / 60);
@@ -2637,7 +2657,7 @@ export function AIChat({
           setMsgs((prev) => [
             ...prev,
             {
-              role: "assistant" as const,
+              role: "system" as const,
               content: `✅ **Selesai** — ${timeStr} · ${sessionActionsRef.current} aksi dijalankan`,
               synthetic: true,
               sentAt: Date.now(),
@@ -2670,7 +2690,7 @@ export function AIChat({
       setMsgs((prev) => [
         ...prev,
         {
-          role: "assistant" as const,
+          role: "system" as const,
           content: `⚠️ **Loop terdeteksi** — ${loopResult.warning}\n\nSesi dihentikan otomatis. Silakan periksa state workspace lalu lanjutkan manual jika perlu.`,
           synthetic: true,
           sentAt: Date.now(),
@@ -2739,7 +2759,7 @@ export function AIChat({
           setMsgs((prev) => [
             ...prev,
             {
-              role: "assistant" as const,
+              role: "system" as const,
               content: `🔐 Checkpoint dibuat${ckId ? ` · \`${ckId.slice(0, 8)}\`` : ""} — perubahan AI bisa di-rollback setelah selesai.`,
               synthetic: true,
               sentAt: Date.now(),
@@ -2761,11 +2781,35 @@ export function AIChat({
         }
       }
       const results: ActionResult[] = [];
+      const sessionDeadline = sessionStartRef.current + agentLimits.maxRuntimeSeconds * 1000;
       for (let i = 0; i < toRun.length; i++) {
         if (stoppedRef.current) break;
+        const remainingMs = sessionDeadline - Date.now();
+        if (
+          sessionActionsRef.current >= agentLimits.maxActions ||
+          remainingMs <= 0
+        ) {
+          stoppedRef.current = true;
+          setAgentRunStatus("limit_reached");
+          setMsgs((prev) => [
+            ...prev,
+            {
+              role: "assistant" as const,
+              content: sessionActionsRef.current >= agentLimits.maxActions
+                ? `⚠️ **Batas action tercapai** — ${agentLimits.maxActions} action dijalankan.`
+                : `⚠️ **Batas durasi tercapai** — run dihentikan setelah ${agentLimits.maxRuntimeSeconds} detik.`,
+              synthetic: true,
+              eventType: "system" as const,
+              sentAt: Date.now(),
+            },
+          ]);
+          break;
+        }
 
         const ac = new AbortController();
         actionAbortRef.current = ac;
+        setAgentRunStatus("waiting_tool");
+        const actionTimer = setTimeout(() => ac.abort(), remainingMs);
         // Show realtime activity label in the status bar while action runs.
         setCurrentActivity(actionLabel(toRun[i]));
         const r = await runAction(workspaceId, toRun[i], ac.signal, {
@@ -2773,6 +2817,7 @@ export function AIChat({
           model,
           explicitDatabaseDeletion: explicitDatabaseDeletionRef.current,
         });
+        clearTimeout(actionTimer);
         actionAbortRef.current = null;
         results[i] = r;
         sessionActionsRef.current += 1;
@@ -2811,7 +2856,12 @@ export function AIChat({
         : "";
       // Pass `toRun` (not `acts`) so the AI receives results for injected
       // verification steps too (diag output, curl response).
-      await sendRaw(planAnchor + formatToolResults(toRun, results));
+      setAgentRunStatus("waiting_tool");
+      await sendRaw(
+        planAnchor + formatToolResults(toRun, results, agentLimits.maxToolOutputChars),
+        undefined,
+        { synthetic: true, continuation: true, eventType: "tool_result" },
+      );
     })().catch(() => {
       setAutoExecuting(false);
       setCurrentActivity(null);
@@ -2871,7 +2921,7 @@ export function AIChat({
                   // Keep only last 6 non-synthetic messages + add system note
                   const keep = msgs.filter((m) => !m.synthetic).slice(-6);
                   const note: Msg = {
-                    role: "assistant" as const,
+                    role: "system" as const,
                     content: `*[Konteks dikompres — percakapan sebelumnya diarsip ke Memori. Sesi dilanjutkan dengan ${keep.length} pesan terakhir.]*`,
                     synthetic: true,
                     sentAt: Date.now(),
@@ -3135,7 +3185,7 @@ export function AIChat({
           // Hide auto-continuation user messages — the user never typed them.
           // synthetic=true + continuation=true → internal "please continue" signals.
           // synthetic=true WITHOUT continuation → status messages (summary, warnings) → SHOW.
-          if (m.synthetic && m.continuation) return null;
+          if (m.synthetic && (m.continuation || m.hidden)) return null;
           if (m.synthetic) {
             // Render status / summary synthetic messages as a slim banner
             return (
@@ -3234,6 +3284,24 @@ export function AIChat({
           <div className="mx-1 my-0.5 flex items-center gap-1.5 rounded-md border border-accent/20 bg-accent/5 px-2.5 py-1.5 text-[11px] text-text-muted">
             <Loader2 size={10} className="animate-spin shrink-0 text-accent" />
             <span className="min-w-0 truncate">{currentActivity}</span>
+          </div>
+        )}
+        {agentRunStatus !== "idle" && !streaming && !autoExecuting && (
+          <div className={`mx-1 my-0.5 rounded-md border px-2.5 py-1 text-[10px] ${
+            agentRunStatus === "completed"
+              ? "border-success/25 bg-success/5 text-success"
+              : agentRunStatus === "limit_reached" || agentRunStatus === "failed"
+                ? "border-warning/30 bg-warning/5 text-warning"
+                : "border-bg-border bg-bg-subtle text-text-muted"
+          }`}>
+            Agent Run: {
+              agentRunStatus === "completed" ? "selesai" :
+              agentRunStatus === "limit_reached" ? "dihentikan oleh batas" :
+              agentRunStatus === "failed" ? "gagal" :
+              agentRunStatus === "stopped" ? "dihentikan user" :
+              agentRunStatus === "waiting_tool" ? "menunggu hasil tool" :
+              "berjalan"
+            }
           </div>
         )}
         {rateLimitWaiting && (

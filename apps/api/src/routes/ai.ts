@@ -21,7 +21,7 @@ import {
 } from "../lib/ai-jobs.js";
 import { requireUser } from "../lib/auth-helpers.js";
 import { db, DbWorkspace } from "../lib/db.js";
-import { getAIKey, listCustomProviders } from "../lib/ai-settings.js";
+import { getAIKey, listCustomProviders, getAgentLimits } from "../lib/ai-settings.js";
 import {
   type Provider,
   type ChatMsg,
@@ -91,6 +91,14 @@ const Body = z.object({
 // ---------------------------------------------------------------------------
 
 export const aiRoutes: FastifyPluginAsync = async (app) => {
+  // Public-to-authenticated runtime contract for the agent UI. Limits are
+  // server-authoritative and never accepted from the browser.
+  app.get("/agent-settings", async (req, reply) => {
+    const u = await requireUser(req, reply);
+    if (!u) return;
+    return { limits: getAgentLimits() };
+  });
+
   // POST /chat
   // Immediately returns { jobId }; actual streaming runs in the background
   // via ai-jobs.ts so tab closes / refreshes don't kill the AI run.
@@ -165,6 +173,16 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     }
     const { MAX_TOKENS_DEFAULT, MAX_TOKENS_AUTOPILOT } = getAIBudgets();
     const maxTokens = body.autoPilot ? MAX_TOKENS_AUTOPILOT : MAX_TOKENS_DEFAULT;
+    const agentLimits = getAgentLimits();
+    const activeRuns = listActiveJobs(body.workspaceId, u.id);
+    if (activeRuns.length >= agentLimits.maxConcurrentRuns) {
+      return reply.code(409).send({
+        error: `PremDev sudah memiliki ${activeRuns.length} Agent Run aktif untuk workspace ini.`,
+        source: "premdev",
+        code: "PREMDEV_AGENT_CONCURRENCY_LIMIT",
+        retryable: false,
+      });
+    }
 
     // ── DEBUG LOGGING (opt-in: set AI_DEBUG_LOG=1 in environment) ──────────
     if (process.env.AI_DEBUG_LOG === "1") {
@@ -211,6 +229,11 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     let lastChunk = "";
     let ok = true;
     let errMsg: string | null = null;
+    let roundTimedOut = false;
+    const roundTimer = setTimeout(() => {
+      roundTimedOut = true;
+      job.controller.abort();
+    }, getAgentLimits().maxProviderRoundSeconds * 1000);
     try {
       const stream = streamProvider(body.provider, model, messages, maxTokens, job.controller.signal);
       for await (const chunk of stream) {
@@ -222,7 +245,9 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       if (job.status === "running") finishJob(job, "done");
     } catch (e: any) {
       ok = false;
-      errMsg = e?.message || String(e);
+      errMsg = roundTimedOut
+        ? "PremDev agent provider timeout. Batas waktu satu giliran provider tercapai."
+        : e?.message || String(e);
       if (errMsg && !errMsg.includes("aborted")) {
         appendChunk(job, `\n[Error: ${errMsg}]`);
       }
@@ -232,6 +257,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
         errMsg ?? undefined,
       );
     } finally {
+      clearTimeout(roundTimer);
       try {
         const dur = Date.now() - startedAt;
         const preview = (errMsg ? `[err] ${errMsg}` : lastChunk).slice(-2000);

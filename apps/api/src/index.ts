@@ -119,7 +119,12 @@ app.addHook("onRequest", async (req, reply) => {
       ? fileWriteLimiter.take(`file-write:${ip}`)
       : apiLimiter.take(`api:${ip}`);
   if (!ok) {
-    reply.code(429).send({ error: "Too many requests. Please slow down." });
+    reply.code(429).send({
+      error: "PremDev internal rate limit reached. Please wait a moment and try again.",
+      source: "premdev",
+      code: "PREMDEV_RATE_LIMIT",
+      retryable: true,
+    });
   }
 });
 

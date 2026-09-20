@@ -1896,6 +1896,16 @@ const RATE_FIELDS: SettingField[] = [
   { key: "ai.rate.loginRefillPerSec", label: "Login limiter — isi ulang/detik",hint: "0.1 = 1 percobaan per 10 detik (anti-brute-force)",                  min: 0.01, max: 5, step: 0.01 },
 ];
 
+const AGENT_FIELDS: SettingField[] = [
+  { key: "ai.agent.maxActions",              label: "Agent — max actions/run",       hint: "Batas total tool/action yang dapat dijalankan dalam satu task. Aman untuk task besar dan subagent, tetapi tetap memiliki hard ceiling.", min: 1, max: 200, step: 1 },
+  { key: "ai.agent.maxRuntimeSeconds",       label: "Agent — max durasi (detik)",    hint: "Batas waktu satu run agent, termasuk action dan continuation.", min: 30, max: 3600, step: 30 },
+  { key: "ai.agent.maxContinuations",        label: "Agent — max continuation",      hint: "Continuation otomatis hanya boleh setelah tool result. 0 = dimatikan.", min: 0, max: 20, step: 1 },
+  { key: "ai.agent.maxProviderRetries",     label: "Agent — max retry provider",    hint: "Retry otomatis untuk error upstream/provider. Rate limit internal PremDev tidak dianggap error provider.", min: 0, max: 5, step: 1 },
+  { key: "ai.agent.maxToolOutputChars",     label: "Agent — max output tool",       hint: "Output tool yang diteruskan kembali ke model per hasil. Mencegah context membesar tanpa batas.", min: 1000, max: 50000, step: 1000 },
+  { key: "ai.agent.maxProviderRoundSeconds",label: "Agent — timeout provider",      hint: "Timeout untuk satu giliran provider sebelum run dianggap gagal.", min: 30, max: 600, step: 30 },
+  { key: "ai.agent.maxConcurrentRuns",      label: "Agent — concurrent run/workspace",hint: "Batas run aktif per workspace. Naikkan hanya jika konflik file/database sudah ditangani.", min: 1, max: 4, step: 1 },
+];
+
 function AIRuntimeSettingsSection() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
@@ -1964,6 +1974,29 @@ function AIRuntimeSettingsSection() {
         </h3>
         <div className="space-y-4">
           {BUDGET_FIELDS.map((f) => (
+            <SettingRow
+              key={f.key}
+              field={f}
+              value={get(f.key)}
+              defaultValue={defaults[f.key]}
+              onChange={(v) => set(f.key, v)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* Agent safety boundaries */}
+      <section className="card p-6">
+        <h3 className="mb-1 flex items-center gap-2 font-semibold text-sm">
+          <Shield size={14} className="text-accent" /> Batas Agent
+        </h3>
+        <p className="mb-4 text-xs text-text-muted">
+          Satu user request diperlakukan sebagai satu Agent Run. Batas ini berlaku tanpa restart dan tidak dapat
+          dinaikkan melewati hard ceiling keselamatan di server. Nilai lebih besar berguna untuk task panjang atau subagent,
+          tetapi concurrent run tetap berisiko konflik pada file dan database workspace.
+        </p>
+        <div className="space-y-4">
+          {AGENT_FIELDS.map((f) => (
             <SettingRow
               key={f.key}
               field={f}
@@ -2783,14 +2816,14 @@ function SettingRow({
         <input
           type="number"
           className={`input w-28 text-right font-mono text-sm ${isUnlimited ? "opacity-40 pointer-events-none" : ""}`}
-          min={0}
+          min={field.min}
           max={field.max}
           step={field.step}
           value={isUnlimited ? 0 : value}
           disabled={isUnlimited}
           onChange={(e) => {
             const v = parseFloat(e.target.value);
-            if (!isNaN(v) && v >= 0) onChange(v);
+            if (!isNaN(v) && v >= field.min && v <= field.max) onChange(v);
           }}
         />
       </div>

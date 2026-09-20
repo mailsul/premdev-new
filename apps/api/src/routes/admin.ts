@@ -11,7 +11,7 @@ import { ensureMysqlUser } from "../lib/mysql.js";
 import { config } from "../lib/config.js";
 import {
   listAIKeysMasked, setAIKey, isEncryptionKeyWeak,
-  getAllRtSettings, getRtSetting, setRtSetting, RT_DEFAULTS,
+  getAllRtSettings, getRtSetting, setRtSetting, RT_DEFAULTS, RT_BOUNDS,
   listCustomProviders, getCustomProviderKeys, upsertCustomProvider, deleteCustomProvider,
   type RtSettingKey,
 } from "../lib/ai-settings.js";
@@ -594,8 +594,15 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     for (const [k, v] of Object.entries(body)) {
       if (!validKeys.has(k)) continue;
       const n = Number(v);
-      // 0 is allowed — it signals "unlimited" for token caps and rate limiters.
-      if (isNaN(n) || n < 0) continue;
+      const bounds = RT_BOUNDS[k as RtSettingKey];
+      if (isNaN(n) || n < bounds.min || n > bounds.max) {
+        return reply.code(400).send({
+          error: `${k} harus berada di antara ${bounds.min} dan ${bounds.max}.`,
+          key: k,
+          min: bounds.min,
+          max: bounds.max,
+        });
+      }
       setRtSetting(k as RtSettingKey, n);
       saved[k] = n;
     }
