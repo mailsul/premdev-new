@@ -908,10 +908,11 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   const BrowserBody = z.object({
     path: z.string().max(300).regex(/^\/(?!\/)[^\r\n]*$/).optional().default("/"),
     steps: z.array(z.string().min(1).max(500)).max(12).default([]),
+    target: z.enum(["public", "internal"]).optional().default("public"),
   });
 
-  function browserCheckCommand(pathname: string, steps: string[]): string {
-    const spec = Buffer.from(JSON.stringify({ path: pathname, steps }), "utf8").toString("base64");
+  function browserCheckCommand(pathname: string, steps: string[], baseUrl: string): string {
+    const spec = Buffer.from(JSON.stringify({ path: pathname, steps, baseUrl }), "utf8").toString("base64");
     const script = [
       "const { chromium } = require('playwright-core');",
       `const spec = JSON.parse(Buffer.from('${spec}', 'base64').toString('utf8'));`,
@@ -921,7 +922,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       "const page=await browser.newPage({viewport:{width:1280,height:800}});",
       "page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.type()+': '+m.text()); else if(m.type()==='warning')consoleWarnings.push(m.type()+': '+m.text())});",
       "page.on('pageerror',e=>pageErrors.push(String(e&&e.stack||e)));",
-      "const base=new URL('http://127.0.0.1:'+(process.env.PORT||'5000')); const urlObj=new URL(spec.path||'/',base); if(urlObj.origin!==base.origin)throw new Error('Browser path must stay inside the workspace preview'); const url=urlObj.toString();",
+      "const base=new URL(spec.baseUrl); const urlObj=new URL(spec.path||'/',base); if(urlObj.origin!==base.origin)throw new Error('Browser path must stay inside the workspace preview'); const url=urlObj.toString();",
       "const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:15000});",
       "await page.waitForTimeout(300);",
       "const controls=await page.locator('button,a,input,select,textarea,[role=button]').evaluateAll(es=>es.slice(0,80).map(e=>({tag:e.tagName.toLowerCase(),text:(e.innerText||e.getAttribute('aria-label')||e.getAttribute('placeholder')||'').trim().slice(0,120),id:e.id||'',name:e.getAttribute('name')||'',href:e.getAttribute('href')||''})));",
@@ -940,11 +941,18 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     const u = await requireUser(req, reply);
     if (!u) return;
     const id = (req.params as any).id;
-    const w = db.prepare("SELECT id FROM workspaces WHERE id = ? AND user_id = ?").get(id, u.id);
+    const w = db.prepare("SELECT * FROM workspaces WHERE id = ? AND user_id = ?").get(id, u.id) as DbWorkspace | undefined;
     if (!w) return reply.code(404).send({ error: "Not found" });
     const body = BrowserBody.parse(req.body ?? {});
+    const publicWorkspace = workspaceToPublic(w);
+    const publicUrl = publicWorkspace.previewUrl ?? publicWorkspace.defaultUrl;
+    const internalUrl = `http://127.0.0.1:${process.env.PORT || "5000"}`;
+    const targetUrl = body.target === "internal" ? internalUrl : publicUrl;
+    if (!targetUrl) {
+      return reply.code(409).send({ error: "Workspace belum memiliki URL preview yang bisa diverifikasi." });
+    }
     try {
-      const r = await runOneOff(id, browserCheckCommand(body.path, body.steps), 45_000);
+      const r = await runOneOff(id, browserCheckCommand(body.path, body.steps, targetUrl), 45_000);
       const output = r.output.length > 18_000 ? r.output.slice(-18_000) : r.output;
       let evidence: Record<string, unknown> | undefined;
       const jsonLines = output.split("\n").map((line) => line.trim()).filter(Boolean);

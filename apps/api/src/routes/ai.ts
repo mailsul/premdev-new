@@ -20,7 +20,7 @@ import {
   type JobStatus,
 } from "../lib/ai-jobs.js";
 import { requireUser } from "../lib/auth-helpers.js";
-import { db, DbWorkspace } from "../lib/db.js";
+import { db, DbWorkspace, workspaceToPublic } from "../lib/db.js";
 import { getAIKey, listCustomProviders, getAgentLimits } from "../lib/ai-settings.js";
 import {
   type Provider,
@@ -116,7 +116,12 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     const ownerRow = db
       .prepare("SELECT username FROM users WHERE id = ?")
       .get(w.user_id) as { username?: string } | undefined;
-    const ctx = buildWorkspaceContext(body.workspaceId, ownerRow?.username, w.name);
+    const ctx = buildWorkspaceContext(
+      body.workspaceId,
+      ownerRow?.username,
+      w.name,
+      workspaceToPublic(w),
+    );
     const memory = loadProjectMemory(body.workspaceId);
     const aiMemory = loadAIMemory(body.workspaceId);
     const trimmed = trimHistory(body.messages as ChatMsg[]);
@@ -871,7 +876,12 @@ Rules:
     const ownerRow = db
       .prepare("SELECT username FROM users WHERE id = ?")
       .get(w.user_id) as { username?: string } | undefined;
-    const ctx = buildWorkspaceContext(body.workspaceId, ownerRow?.username, w.name);
+    const ctx = buildWorkspaceContext(
+      body.workspaceId,
+      ownerRow?.username,
+      w.name,
+      workspaceToPublic(w),
+    );
     const { MAX_TOKENS_DEFAULT } = getAIBudgets();
 
     const sysContent = `${SYSTEM_PROMPT}\n\n--- Workspace snapshot ---\n${ctx}\n\n--- Council mode: give your best, direct answer to the user's question. ---`;

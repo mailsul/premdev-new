@@ -32,6 +32,7 @@ export type Action =
 
 export type VerificationEvidence = {
   status: "implemented" | "validated" | "browser-verified" | "unverified" | "failed";
+  url?: string;
   checks?: Array<{ name: string; status: string }>;
   consoleErrors?: string[];
   pageErrors?: string[];
@@ -47,6 +48,24 @@ export type ExecOptions = {
   /** True only when the user's current request explicitly asked to delete a database. */
   explicitDatabaseDeletion?: boolean;
 };
+
+function workspaceRunOutput(label: string, response: any): string {
+  const workspace = response?.workspace ?? {};
+  const lines = [`${label} (status=${workspace.status ?? "unknown"})`];
+  if (workspace.previewUrl) lines.push(`Public preview URL: ${workspace.previewUrl}`);
+  if (workspace.defaultUrl && workspace.defaultUrl !== workspace.previewUrl) {
+    lines.push(`Default workspace URL: ${workspace.defaultUrl}`);
+  }
+  if (workspace.previewPorts && typeof workspace.previewPorts === "object") {
+    for (const [name, value] of Object.entries(workspace.previewPorts as Record<string, any>)) {
+      if (value?.url) lines.push(`Preview ${name}: ${value.url}`);
+    }
+  }
+  if (!workspace.previewUrl && !workspace.defaultUrl) {
+    lines.push("Public preview URL belum tersedia; workspace mungkin belum berhasil bind ke port.");
+  }
+  return lines.join("\n");
+}
 
 export async function runAction(
   workspaceId: string,
@@ -99,9 +118,10 @@ export async function runAction(
         const names = Object.keys(action.processes);
         return { ok: true, output: `.premdev processes set (${names.length}: ${names.join(", ")}).\n${JSON.stringify(r.config?.processes ?? action.processes, null, 2)}` };
       }
-      case "restart":
-        await fetchJson("POST", `/workspaces/${workspaceId}/restart`);
-        return { ok: true, output: "Workspace restarted" };
+      case "restart": {
+        const r = await fetchJson("POST", `/workspaces/${workspaceId}/restart`);
+        return { ok: true, output: workspaceRunOutput("Workspace restarted", r) };
+      }
       case "checkpoint":
         await fetchJson("POST", `/workspaces/${workspaceId}/checkpoints`, { message: action.message });
         return { ok: true, output: `Checkpoint saved: ${action.message}` };
@@ -217,12 +237,15 @@ export async function runAction(
         const r = await fetchJson("POST", `/workspaces/${workspaceId}/browser-check`, {
           path: action.path || "/",
           steps: action.steps,
+          target: "public",
         });
+        const browserUrl = r.evidence?.url ? `Browser URL: ${r.evidence.url}\n` : "";
         return {
           ok: r.ok === true,
-          output: r.output || (r.ok ? "Browser check passed." : "Browser check failed."),
+          output: browserUrl + (r.output || (r.ok ? "Browser check passed." : "Browser check failed.")),
           evidence: {
             status: r.ok === true ? "browser-verified" : "failed",
+            ...(r.evidence?.url ? { url: r.evidence.url } : {}),
             ...(r.evidence?.consoleErrors ? { consoleErrors: r.evidence.consoleErrors } : {}),
             ...(r.evidence?.pageErrors ? { pageErrors: r.evidence.pageErrors } : {}),
             ...(r.evidence?.controls ? { controls: r.evidence.controls } : {}),
@@ -254,8 +277,13 @@ export async function runAction(
         return { ok: true, output: `Memory saved (${lines} lines → .premdev-data/memory.md)` };
       }
       case "start":
-        await fetchJson("POST", `/workspaces/${workspaceId}/start`);
-        return { ok: true, output: "Workspace started using the resolved .premdev run configuration" };
+      {
+        const r = await fetchJson("POST", `/workspaces/${workspaceId}/start`);
+        return {
+          ok: true,
+          output: workspaceRunOutput("Workspace started using the resolved .premdev run configuration", r),
+        };
+      }
       case "stop":
         await fetchJson("POST", `/workspaces/${workspaceId}/stop`);
         return { ok: true, output: "Workspace stopped" };

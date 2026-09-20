@@ -143,11 +143,17 @@ export function buildWorkspaceContext(
   workspaceId: string,
   username?: string,
   workspaceName?: string,
+  runtime?: {
+    status?: string;
+    previewUrl?: string;
+    defaultUrl?: string;
+    previewPorts?: Record<string, { port: number; url: string }> | null;
+  },
 ): string {
   const root = workspacePath(workspaceId);
   if (!fs.existsSync(root)) {
     const wsDb = buildWorkspaceDbHint(username, workspaceName, []);
-    return `Working directory: /workspace (empty)\nFiles: (workspace folder is empty)${wsDb}`;
+    return `Working directory: /workspace (empty)\nFiles: (workspace folder is empty)${wsDb}${buildRuntimeContext(runtime)}`;
   }
   const MAX_ENTRIES = 80;
   const MAX_DEPTH = 4;
@@ -196,7 +202,28 @@ export function buildWorkspaceContext(
   const dbBlock = sniffDatabaseSchema(root);
   const wsDb = buildWorkspaceDbHint(username, workspaceName, schemaFiles);
   const projectIndex = buildProjectIndex(workspaceId);
-  return `Working directory: /workspace\nFiles:\n${body}${truncated}${hintBlock}${dbBlock}${wsDb}${projectIndex}`;
+  return `Working directory: /workspace\nFiles:\n${body}${truncated}${hintBlock}${dbBlock}${wsDb}${projectIndex}${buildRuntimeContext(runtime)}`;
+}
+
+function buildRuntimeContext(runtime?: {
+  status?: string;
+  previewUrl?: string;
+  defaultUrl?: string;
+  previewPorts?: Record<string, { port: number; url: string }> | null;
+}): string {
+  if (!runtime) return "";
+  const lines = [`\n\nWorkspace runtime (live database state):`, `- Status: ${runtime.status ?? "unknown"}`];
+  if (runtime.previewUrl) lines.push(`- Public preview URL: ${runtime.previewUrl}`);
+  if (runtime.defaultUrl && runtime.defaultUrl !== runtime.previewUrl) {
+    lines.push(`- Default workspace URL: ${runtime.defaultUrl}`);
+  }
+  if (runtime.previewPorts) {
+    for (const [name, value] of Object.entries(runtime.previewPorts)) {
+      lines.push(`- Public ${name} URL (port ${value.port}): ${value.url}`);
+    }
+  }
+  lines.push("- Browser verification must use the public preview URL above; localhost is only for low-level diagnostics.");
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
