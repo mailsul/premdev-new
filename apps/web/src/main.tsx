@@ -7,14 +7,20 @@ import "./styles/global.css";
 
 const qc = new QueryClient({
   defaultOptions: {
-    queries: { refetchOnWindowFocus: false, retry: 1 },
+    queries: {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+      staleTime: 30_000,
+      gcTime: 10 * 60_000,
+      retry: (failureCount, error: any) => error?.status === 401 ? false : failureCount < 1,
+    },
   },
 });
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={qc}>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <App />
       </BrowserRouter>
     </QueryClientProvider>

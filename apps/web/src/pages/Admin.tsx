@@ -92,12 +92,14 @@ export default function AdminPage() {
 
   return (
     <Layout>
-      <div className="mx-auto max-w-6xl p-8">
-        <div className="mb-8 flex items-center justify-between">
+      <div className="page-shell max-w-7xl">
+        <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
-            <h1 className="text-2xl font-semibold">Admin</h1>
-            <p className="text-sm text-text-muted">Manage users, quotas, and system resources</p>
+            <div className="eyebrow mb-2">Control center</div>
+            <h1 className="text-3xl font-semibold tracking-tight">Admin console</h1>
+            <p className="mt-2 text-sm text-text-muted">Manage users, quotas, security, and system resources.</p>
           </div>
+          <div className="flex items-center gap-2 rounded-full border border-success/20 bg-success/10 px-3 py-1.5 text-xs text-success"><Activity size={13} /> Live system data</div>
         </div>
 
         <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -122,7 +124,7 @@ export default function AdminPage() {
 
         {/* Tabs row — keeps the existing Users + AI keys panes available
             and adds two read-only audit views without restructuring the page. */}
-        <div className="mb-4 flex items-center gap-1 border-b border-bg-border">
+        <div className="mb-5 flex items-center gap-1 overflow-x-auto border-b border-bg-border/80 pb-px">
           <TabButton active={tab === "users"} onClick={() => setTab("users")} icon={<Users size={14} />}>Users</TabButton>
           <TabButton active={tab === "audit"} onClick={() => setTab("audit")} icon={<ScrollText size={14} />}>Audit log</TabButton>
           <TabButton active={tab === "logins"} onClick={() => setTab("logins")} icon={<LogIn size={14} />}>Login attempts</TabButton>

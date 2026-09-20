@@ -9,13 +9,18 @@ export class ApiError extends Error {
   }
 }
 
+export type ApiOptions = RequestInit & {
+  timeoutMs?: number;
+  silent?: boolean;
+};
+
 function requestId() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export async function api<T = any>(
   path: string,
-  opts: RequestInit = {}
+  opts: ApiOptions = {}
 ): Promise<T> {
   // Only set application/json when there's actually a body. Fastify rejects
   // requests that declare a JSON content-type but send an empty body with 400,
@@ -23,18 +28,23 @@ export async function api<T = any>(
   const hasBody = opts.body !== undefined && opts.body !== null;
   const headers: Record<string, string> = { ...(opts.headers as any || {}) };
   const id = requestId();
+  const timeoutMs = opts.timeoutMs ?? 20_000;
+  const silent = opts.silent === true;
+  const requestOpts = { ...opts };
+  delete requestOpts.timeoutMs;
+  delete requestOpts.silent;
   if (hasBody && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
   headers["X-Request-ID"] = id;
   const controller = new AbortController();
-  const timer = globalThis.setTimeout(() => controller.abort(), 45_000);
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   const abortExternal = () => controller.abort();
   opts.signal?.addEventListener("abort", abortExternal, { once: true });
   let res: Response;
   try {
     res = await fetch(`/api${path}`, {
-      ...opts,
+      ...requestOpts,
       headers,
       credentials: "include",
       signal: controller.signal,
@@ -45,7 +55,7 @@ export async function api<T = any>(
       cause?.name === "AbortError" ? "Request timeout. Please try again." : (cause?.message ?? "Network request failed"),
     );
     error.requestId = id;
-    emitApiError(error);
+    if (!silent) emitApiError(error);
     throw error;
   } finally {
     globalThis.clearTimeout(timer);
@@ -62,14 +72,14 @@ export async function api<T = any>(
     const msg = (body && body.error) || res.statusText;
     const error = new ApiError(res.status, msg, body);
     error.requestId = id;
-    emitApiError(error);
+    if (!silent) emitApiError(error);
     throw error;
   }
   return body as T;
 }
 
 export const API = {
-  get: <T = any>(p: string) => api<T>(p),
+  get: <T = any>(p: string, opts?: ApiOptions) => api<T>(p, opts),
   post: <T = any>(p: string, data?: any) =>
     api<T>(p, { method: "POST", body: data ? JSON.stringify(data) : undefined }),
   put: <T = any>(p: string, data?: any) =>
