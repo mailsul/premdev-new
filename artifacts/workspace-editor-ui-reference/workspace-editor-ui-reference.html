@@ -7,30 +7,30 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #edf2f1;
-      --panel: #fbfcfa;
-      --panel-2: #f3f7f5;
-      --panel-3: #e7efec;
-      --line: #d7e3df;
-      --line-strong: #bfd1cb;
-      --text: #182827;
-      --muted: #6e817d;
-      --muted-2: #9aaba7;
-      --accent: #128477;
-      --accent-2: #286e87;
-      --accent-soft: rgba(18,132,119,.12);
-      --cyan: #3b8292;
-      --green: #2c9870;
-      --yellow: #a97428;
-      --red: #bf5b5d;
-      --shadow: 0 20px 60px rgba(42,72,66,.14);
-      --editor-bg: #f7faf8;
-      --code-text: #243a37;
-      --code-muted: #94a7a2;
-      --code-key: #9a568d;
-      --code-string: #598846;
-      --code-fn: #2c7690;
-      --code-comment: #849995;
+      --bg: #111a1b;
+      --panel: #172221;
+      --panel-2: #1c2a29;
+      --panel-3: #243533;
+      --line: #30423f;
+      --line-strong: #425854;
+      --text: #e0ebe8;
+      --muted: #8fa5a1;
+      --muted-2: #657b76;
+      --accent: #50b9aa;
+      --accent-2: #8cc5d0;
+      --accent-soft: rgba(80,185,170,.14);
+      --cyan: #7ab9c6;
+      --green: #66c69c;
+      --yellow: #e3ad5a;
+      --red: #e27d7a;
+      --shadow: 0 20px 60px rgba(0,0,0,.30);
+      --editor-bg: #14201f;
+      --code-text: #d5e3df;
+      --code-muted: #667d77;
+      --code-key: #d19ad0;
+      --code-string: #afce77;
+      --code-fn: #8dc7d7;
+      --code-comment: #6f8580;
       --radius: 12px;
       --topbar: 58px;
       --sidebar: 232px;
@@ -596,7 +596,7 @@
       if (domainSave) showToast("Custom subdomain saved");
     });
 
-    function closePalette() { palette.classList.remove("open"); paletteInput.value = ""; }
+    function closePalette() { palette.classList.remove("open"); paletteInput.value = ""; document.querySelectorAll("[data-command]").forEach(item => item.hidden = false); }
     document.getElementById("paletteButton").addEventListener("click", () => { palette.classList.add("open"); paletteInput.focus(); });
     paletteInput.addEventListener("input", () => {
       const query = paletteInput.value.trim().toLowerCase();
