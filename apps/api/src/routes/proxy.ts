@@ -6,6 +6,7 @@ import { config } from "../lib/config.js";
 import { ensureWorkspaceDir, docker } from "../lib/runtime.js";
 import { resolveWorkspaceEnv } from "../lib/workspace-env.js";
 import {
+  codeServerHost,
   startCodeServer,
 } from "../lib/code-server.js";
 
@@ -249,6 +250,35 @@ function resolveSocketIOTarget(base: Target): Target {
   return base;
 }
 
+function codeServerWorkspaceIdFromHost(rawHost: string): string | null {
+  const host = rawHost.toLowerCase().split(":")[0];
+  const primary = config.PRIMARY_DOMAIN.toLowerCase();
+  const suffix = `.${primary}`;
+  if (!host.endsWith(suffix) || host === primary) return null;
+  const label = host.slice(0, -suffix.length);
+  if (!label.startsWith("code-")) return null;
+  const workspaceIdToken = label.slice("code-".length);
+  if (!/^[a-z0-9_-]+$/i.test(workspaceIdToken)) return null;
+  const row = db
+    .prepare("SELECT id FROM workspaces WHERE lower(id) = lower(?)")
+    .get(workspaceIdToken) as { id?: string } | undefined;
+  return row?.id ?? null;
+}
+
+function codeServerHostDecision(workspaceId: string): ProxyDecision {
+  const row = db
+    .prepare("SELECT status FROM code_server_sessions WHERE workspace_id = ?")
+    .get(workspaceId) as { status?: string } | undefined;
+  if (!row || row.status !== "running") {
+    return { ok: false, status: 503, msg: "Code Server is not running" };
+  }
+  return {
+    ok: true,
+    target: { containerName: `pwc_${workspaceId}`, port: config.CODE_SERVER_PORT },
+    privateWorkspaceId: workspaceId,
+  };
+}
+
 /**
  * Resolve a subdomain label to a running workspace target.
  * `incomingDomain` is the base domain that received this request (e.g.
@@ -366,6 +396,8 @@ function targetForHost(rawHost: string): ProxyDecision | null {
   // Check PRIMARY_DOMAIN first.
   if (host.endsWith(primarySuffix) && host !== primary) {
     const sub = host.slice(0, host.length - primarySuffix.length);
+    const codeServerWorkspaceId = codeServerWorkspaceIdFromHost(host);
+    if (codeServerWorkspaceId) return codeServerHostDecision(codeServerWorkspaceId);
     if (sub.includes(".") || RESERVED_SUBS.has(sub)) return null;
     return resolveSubdomain(sub, primary);
   }
@@ -429,6 +461,7 @@ export function setupProxy(app: FastifyInstance): void {
   // ---- Plain HTTP requests ----
   app.addHook("onRequest", async (req, reply) => {
     const privateWorkspaceId = privateWorkspaceIdFromPath(req.url ?? "");
+    const codeServerHostWorkspaceId = codeServerWorkspaceIdFromHost(req.headers.host ?? "");
     if (privateWorkspaceId) {
       const userId = await privateProxyUserId(req, (token) => app.jwt.verify(token));
       if (!userId) {
@@ -436,8 +469,22 @@ export function setupProxy(app: FastifyInstance): void {
         return reply;
       }
       if ((req.url ?? "").startsWith("/code-server/")) {
-        await ensureCodeServerForOwner(privateWorkspaceId, userId);
+        const started = await ensureCodeServerForOwner(privateWorkspaceId, userId);
+        if (started && !codeServerHostWorkspaceId) {
+          const prefix = `/code-server/${encodeURIComponent(privateWorkspaceId)}`;
+          const upstreamPath = (req.url ?? "/").replace(prefix, "") || "/";
+          const scheme = config.NODE_ENV === "production" ? "https" : "http";
+          reply.redirect(`${scheme}://${codeServerHost(privateWorkspaceId)}${upstreamPath}`, 302);
+          return reply;
+        }
       }
+    } else if (codeServerHostWorkspaceId) {
+      const userId = await privateProxyUserId(req, (token) => app.jwt.verify(token));
+      if (!userId) {
+        reply.redirect(privateProxyLoginUrl(req), 302);
+        return reply;
+      }
+      await ensureCodeServerForOwner(codeServerHostWorkspaceId, userId);
     }
     const decision = privatePathDecision(req.url ?? "") ?? targetForHost(req.headers.host ?? "");
     if (!decision) return; // fall through to other handlers

@@ -23,8 +23,13 @@ export function codeServerBasePath(workspaceId: string): string {
   return `/code-server/${encodeURIComponent(workspaceId)}`;
 }
 
+export function codeServerHost(workspaceId: string): string {
+  return `code-${workspaceId}.${config.PRIMARY_DOMAIN}`;
+}
+
 export function codeServerPath(workspaceId: string): string {
-  return `${codeServerBasePath(workspaceId)}/`;
+  const scheme = config.NODE_ENV === "production" ? "https" : "http";
+  return `${scheme}://${codeServerHost(workspaceId)}/`;
 }
 
 export function codePreviewPath(workspaceId: string): string {
