@@ -32,11 +32,13 @@ export function SecretsPanel({
   onClose,
   onChanged,
   initialDbTemplate,
+  embedded = false,
 }: {
   workspaceId: string;
   onClose: () => void;
   onChanged?: () => void;
   initialDbTemplate?: boolean;
+  embedded?: boolean;
 }) {
   const qc = useQueryClient();
   const { confirm, dialog: confirmDialog } = useConfirm();
@@ -234,11 +236,13 @@ export function SecretsPanel({
 
   return (
     <div
-      className="fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4"
-      onClick={onClose}
+      className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-[100] grid place-items-center bg-black/60 p-4"}
+      onClick={embedded ? undefined : onClose}
     >
       <div
-        className="card flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden p-0"
+        className={embedded
+          ? "flex h-full min-h-0 w-full flex-col overflow-hidden bg-bg-base"
+          : "card flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden p-0"}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -277,7 +281,7 @@ export function SecretsPanel({
           </span>
         </div>
 
-        <div className="flex-1 overflow-auto px-5 py-4">
+        <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
           {error && (
             <div className="mb-3 rounded border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
               {error}

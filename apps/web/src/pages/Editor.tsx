@@ -126,6 +126,7 @@ function isBinaryFile(p: string) {
 }
 
 type WorkspaceTool = "console" | "terminal" | "preview" | "database" | "cron" | "secrets" | "git";
+type WorkspaceSurface = "file" | WorkspaceTool;
 
 function hashState(): { file: string | null; tool: WorkspaceTool | null } {
   if (typeof window === "undefined") return { file: null, tool: null };
@@ -221,10 +222,12 @@ export default function EditorPage() {
   });
   const [newTabOpen, setNewTabOpen] = useState(false);
   const [bottomTab, setBottomTab] = useState<"console" | "terminal" | "preview" | "database">("console");
+  const [activeSurface, setActiveSurface] = useState<WorkspaceSurface>("file");
   // Start on the unified workspace library so the new Tools surface is
   // visible immediately; users can switch to Files without losing the editor.
   const [sidePanelTab, setSidePanelTab] = useState<"files" | "library">("library");
   const [splitTabs, setSplitTabs] = useState<string[]>([]);
+  const [splitDirection, setSplitDirection] = useState<"horizontal" | "vertical">("horizontal");
   // Monaco editor instance — captured in onMount so we can read the active
   // selection from anywhere (Ask AI, quick actions, etc.).
   const editorRef = useRef<any>(null);
@@ -299,6 +302,7 @@ export default function EditorPage() {
     const normalizedPath = p.replace(/^\/+/, "");
     if (!normalizedPath) return;
     const requestId = ++openRequestRef.current;
+    setActiveSurface("file");
     if (dirty && activePath) {
       if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
       await saveNow(activePath, content);
@@ -349,7 +353,11 @@ export default function EditorPage() {
   async function openSplit(p: string) {
     const normalizedPath = p.replace(/^\/+/, "");
     const requestId = ++splitRequestRef.current;
-    setSplitTabs((prev) => (prev.includes(normalizedPath) ? prev : [...prev, normalizedPath]));
+    setSplitTabs((prev) => (
+      prev.includes(normalizedPath)
+        ? prev
+        : [...prev, normalizedPath].slice(-4)
+    ));
     setSplitPath(normalizedPath);
     if (isImageFile(normalizedPath) || isPdfFile(normalizedPath) || isBinaryFile(normalizedPath)) {
       setSplitContent("");
@@ -382,12 +390,12 @@ export default function EditorPage() {
     const syncUrl = options.syncUrl !== false;
     setNewTabOpen(false);
     if (syncUrl) setWorkspaceHash("tool", tool);
+    setActiveSurface(tool);
     if (tool === "cron") {
       setShowCronJobs(true);
       return;
     }
     if (tool === "secrets") {
-      setSecretsOpenDbTemplate(false);
       setShowSecrets(true);
       return;
     }
@@ -665,14 +673,14 @@ export default function EditorPage() {
         <button
           className="btn-secondary"
           title="Secrets — KEY=value vars injected into your container"
-          onClick={() => { setSecretsOpenDbTemplate(false); setShowSecrets(true); }}
+          onClick={() => { setSecretsOpenDbTemplate(false); openTool("secrets"); }}
         >
           <Lock size={14} />
         </button>
         <button
           className="btn-secondary"
           title="Konek database eksternal (cPanel / hosting)"
-          onClick={() => { setSecretsOpenDbTemplate(true); setShowSecrets(true); }}
+          onClick={() => { setSecretsOpenDbTemplate(true); openTool("secrets"); }}
         >
           <Database size={14} />
         </button>
@@ -748,14 +756,14 @@ export default function EditorPage() {
         <button
           className="btn-secondary"
           title="Git: status, commit, push, pull"
-          onClick={() => setShowGit(true)}
+          onClick={() => openTool("git")}
         >
           <GitBranch size={14} />
         </button>
         <button
           className="btn-secondary"
           title="Cron Jobs — scheduled tasks for this workspace"
-          onClick={() => setShowCronJobs(true)}
+          onClick={() => openTool("cron")}
         >
           <Clock size={14} />
         </button>
@@ -818,6 +826,15 @@ export default function EditorPage() {
         >
           <Columns2 size={14} />
         </button>
+        {splitTabs.length > 0 && (
+          <button
+            className={`btn-secondary ${splitDirection === "vertical" ? "text-accent" : ""}`}
+            title={splitDirection === "horizontal" ? "Split panes horizontally — click for vertical panes" : "Split panes vertically — click for horizontal panes"}
+            onClick={() => setSplitDirection((value) => value === "horizontal" ? "vertical" : "horizontal")}
+          >
+            <Columns2 size={14} className={splitDirection === "vertical" ? "rotate-90" : ""} />
+          </button>
+        )}
         {/* Minimap toggle */}
         <button
           className={`btn-secondary ${minimap ? "text-accent" : ""}`}
@@ -965,15 +982,20 @@ export default function EditorPage() {
                   bottomTab={bottomTab}
                   sidePanelTab={sidePanelTab}
                   showAI={showAI}
-                  showCronJobs={showCronJobs}
+                  showCronJobs={activeSurface === "cron"}
                   onOpenFiles={() => setSidePanelTab("files")}
                   onOpenAI={() => setShowAI((value) => !value)}
-                  onOpenCron={() => setShowCronJobs(true)}
-                  onOpenTool={openTool}
+                  onOpenCron={() => openTool("cron")}
+                  onOpenSplit={openSplit}
+                  onOpenTool={(tool) => {
+                    if (tool === "secrets") setSecretsOpenDbTemplate(false);
+                    openTool(tool);
+                  }}
                   onOpenFile={openFile}
                   onCloseFile={closeTab}
                   onNewTab={() => {
                     setActivePath(null);
+                    setActiveSurface("file");
                     setNewTabOpen(true);
                     if (typeof window !== "undefined") window.history.replaceState({}, "", window.location.pathname + window.location.search);
                   }}
@@ -981,13 +1003,47 @@ export default function EditorPage() {
                   dirty={dirty}
                 />
                 <div className="relative min-h-0 flex-1">
-                {newTabOpen ? (
+                {activeSurface !== "file" ? (
+                  activeSurface === "cron" ? (
+                    <CronJobsPanel
+                      workspaceId={id!}
+                      embedded
+                      onClose={() => { setShowCronJobs(false); setActiveSurface("file"); }}
+                    />
+                  ) : activeSurface === "git" ? (
+                    <GitPanel
+                      workspaceId={id!}
+                      embedded
+                      onClose={() => { setShowGit(false); setActiveSurface("file"); }}
+                    />
+                  ) : activeSurface === "secrets" ? (
+                    <SecretsPanel
+                      workspaceId={id!}
+                      embedded
+                      onClose={() => { setShowSecrets(false); setSecretsOpenDbTemplate(false); setActiveSurface("file"); }}
+                      initialDbTemplate={secretsOpenDbTemplate}
+                    />
+                  ) : (
+                    <BottomTabs
+                      workspaceId={id!}
+                      workspace={w}
+                      tab={bottomTab}
+                      setTab={setBottomTab}
+                      hideTabs
+                    />
+                  )
+                ) : (
+                  <>
+                 {newTabOpen ? (
                   <NewTabPage
                     workspaceId={id!}
                     openTabs={openTabs}
                     activePath={activePath}
                     onOpenFile={(p) => openFile(p)}
-                    onOpenTool={(t) => { setBottomTab(t); setNewTabOpen(false); }}
+                    onOpenTool={(t) => {
+                      if (t === "secrets") setSecretsOpenDbTemplate(false);
+                      openTool(t);
+                    }}
                     bottomTab={bottomTab}
                     recentFiles={recentFiles}
                   />
@@ -1119,90 +1175,39 @@ export default function EditorPage() {
                     </button>
                   </div>
                 )}
-                </div>
-              </Panel>
-              <PanelResizeHandle className="h-px bg-bg-border hover:bg-accent" />
-              <Panel defaultSize={35} minSize={10}>
-                <BottomTabs workspaceId={id!} workspace={w} tab={bottomTab} setTab={setBottomTab} />
+                  </>
+                )}
+                 </div>
               </Panel>
             </PanelGroup>
           </Panel>
 
-          {splitPath && (
+          {splitTabs.length > 0 && (
             <>
               <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
               <Panel defaultSize={compactLayout ? 35 : 30} minSize={compactLayout ? 18 : 15}>
-                <div className="flex h-full flex-col">
-                  <div className="flex min-w-0 overflow-x-auto border-b border-bg-border bg-bg-subtle" style={{ scrollbarWidth: "thin" }}>
-                    {splitTabs.map((tab) => (
-                      <button
-                        key={tab}
-                        onClick={() => openSplit(tab)}
-                        className={`group flex min-w-0 max-w-[180px] shrink-0 items-center gap-1.5 border-r border-bg-border border-t-2 px-3 py-1.5 text-[11px] ${
-                          splitPath === tab
-                            ? "border-t-accent bg-bg text-text"
-                            : "border-t-transparent text-text-muted hover:bg-bg-hover hover:text-text"
-                        }`}
-                        title={tab}
-                      >
-                        {getFileIcon(tab.split("/").pop() ?? tab, 11)}
-                        <span className="truncate">{tab.split("/").pop() ?? tab}</span>
-                        <span
-                          role="button"
-                          onClick={(event) => { event.stopPropagation(); closeSplitTab(tab); }}
-                          className="rounded p-0.5 text-text-muted opacity-0 hover:bg-bg-border hover:text-text group-hover:opacity-100"
-                          title="Tutup split tab"
-                        >
-                          <X size={10} />
-                        </span>
-                      </button>
-                    ))}
-                    <button
-                      className="btn-ghost ml-auto shrink-0 p-1"
-                      title="Open in main editor"
-                      onClick={() => { openFile(splitPath); setSplitPath(null); setSplitContent(""); }}
-                    >
-                      <ExternalLink size={11} />
-                    </button>
-                    <button
-                      className="btn-ghost shrink-0 p-1"
-                      title="Close split"
-                      onClick={() => { setSplitPath(null); setSplitContent(""); setSplitTabs([]); }}
-                    >
-                      <X size={11} />
-                    </button>
-                  </div>
-                  {isImageFile(splitPath) ? (
-                    <div className="flex flex-1 items-center justify-center overflow-auto bg-[#1e1e1e] p-4">
-                      <img
-                        src={`/api/workspaces/${id}/files/raw?path=${encodeURIComponent(splitPath)}`}
-                        alt={splitPath}
-                        className="max-h-full max-w-full object-contain"
-                      />
-                    </div>
-                  ) : isPdfFile(splitPath) ? (
-                    <PdfPreview workspaceId={id!} path={splitPath} />
-                  ) : isBinaryFile(splitPath) ? (
-                    <BinaryFilePreview workspaceId={id!} path={splitPath} />
-                  ) : (
-                    <Editor
-                      height="100%"
-                      theme={editorTheme}
-                      path={`split:${splitPath}`}
-                      value={splitContent}
-                      options={{
-                        fontSize,
-                        fontFamily: "JetBrains Mono, Fira Code, Menlo, monospace",
-                        minimap: { enabled: false },
-                        scrollBeyondLastLine: false,
-                        automaticLayout: true,
-                        tabSize: 2,
-                        readOnly: true,
-                        wordWrap,
-                      }}
-                    />
-                  )}
-                </div>
+                <PanelGroup direction={compactLayout || splitDirection === "vertical" ? "vertical" : "horizontal"}>
+                  {splitTabs.slice(0, 4).map((path, index) => (
+                    <React.Fragment key={path}>
+                      {index > 0 && (
+                        <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
+                      )}
+                      <Panel defaultSize={100 / Math.min(splitTabs.length, 4)} minSize={12}>
+                        <SplitFilePane
+                          workspaceId={id!}
+                          path={path}
+                          active={splitPath === path}
+                          onActivate={() => openSplit(path)}
+                          onClose={() => closeSplitTab(path)}
+                          onOpenMain={() => { openFile(path); closeSplitTab(path); }}
+                          editorTheme={editorTheme}
+                          fontSize={fontSize}
+                          wordWrap={wordWrap}
+                        />
+                      </Panel>
+                    </React.Fragment>
+                  ))}
+                </PanelGroup>
               </Panel>
             </>
           )}
@@ -1219,7 +1224,10 @@ export default function EditorPage() {
               onTabChange={setSidePanelTab}
               onSelect={openFile}
               activePath={activePath}
-              onOpenTool={openTool}
+              onOpenTool={(tool) => {
+                if (tool === "secrets") setSecretsOpenDbTemplate(false);
+                openTool(tool);
+              }}
             />
           </Panel>
         </PanelGroup>
@@ -1277,31 +1285,12 @@ export default function EditorPage() {
           confirm={confirm}
         />
       )}
-      {showSecrets && (
-        <SecretsPanel
-          workspaceId={id!}
-          onClose={() => { setShowSecrets(false); setSecretsOpenDbTemplate(false); }}
-          initialDbTemplate={secretsOpenDbTemplate}
-        />
-      )}
       {showSubdomain && w && (
         <SubdomainPanel
           workspaceId={id!}
           workspace={w}
           onClose={() => setShowSubdomain(false)}
           onSaved={() => qc.invalidateQueries({ queryKey: ["workspace", id] })}
-        />
-      )}
-      {showGit && (
-        <GitPanel
-          workspaceId={id!}
-          onClose={() => setShowGit(false)}
-        />
-      )}
-      {showCronJobs && (
-        <CronJobsPanel
-          workspaceId={id!}
-          onClose={() => setShowCronJobs(false)}
         />
       )}
       {showCommandPalette && (
@@ -1486,7 +1475,15 @@ function QuickActionsMenu({
 // inside the workspace container via /workspaces/:id/git/* so they use
 // the user's own git credentials and config.
 // ---------------------------------------------------------------------
-function GitPanel({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }) {
+function GitPanel({
+  workspaceId,
+  onClose,
+  embedded = false,
+}: {
+  workspaceId: string;
+  onClose: () => void;
+  embedded?: boolean;
+}) {
   const qc = useQueryClient();
   const { data: status, isLoading: statusLoading, error: statusErr, refetch: refetchStatus } = useQuery({
     queryKey: ["git", workspaceId, "status"],
@@ -1520,9 +1517,14 @@ function GitPanel({ workspaceId, onClose }: { workspaceId: string; onClose: () =
 
   const dirty = (status?.files?.length ?? 0) > 0;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onMouseDown={onClose}>
+    <div
+      className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-50 flex items-center justify-center bg-black/60"}
+      onMouseDown={embedded ? undefined : onClose}
+    >
       <div
-        className="max-h-[88vh] w-full max-w-2xl overflow-auto rounded-lg border border-bg-border bg-bg-base p-5 shadow-xl"
+        className={embedded
+          ? "flex h-full min-h-0 w-full flex-col overflow-auto bg-bg-base p-5"
+          : "max-h-[88vh] w-full max-w-2xl overflow-auto rounded-lg border border-bg-border bg-bg-base p-5 shadow-xl"}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
@@ -2345,7 +2347,7 @@ function WorkspaceSidePanel({
           }`}
           onClick={() => onTabChange("library")}
         >
-          <LayoutGrid size={12} /> Library
+          <LayoutGrid size={12} /> Tools
         </button>
         <button
           className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition ${
@@ -2389,7 +2391,7 @@ function WorkspaceSidePanel({
             ))}
           </div>
           <div className="mt-4 rounded-lg border border-bg-border/70 bg-bg-subtle/60 p-3 text-[10px] leading-relaxed text-text-muted">
-            Tools dan file berbagi workspace yang sama. Buka file dari tab Files, atau pilih tool untuk menampilkannya di panel kerja.
+             Semua tool dibuka sebagai tab workspace. Gunakan Files untuk tree, atau pilih tool untuk menampilkannya di area kerja utama.
           </div>
         </div>
       )}
@@ -2467,6 +2469,86 @@ function BinaryFilePreview({ workspaceId, path: filePath }: { workspaceId: strin
         >
           Download file
         </a>
+      </div>
+    </div>
+  );
+}
+
+function SplitFilePane({
+  workspaceId,
+  path: filePath,
+  active,
+  onActivate,
+  onClose,
+  onOpenMain,
+  editorTheme,
+  fontSize,
+  wordWrap,
+}: {
+  workspaceId: string;
+  path: string;
+  active: boolean;
+  onActivate: () => void;
+  onClose: () => void;
+  onOpenMain: () => void;
+  editorTheme: "vs-dark" | "vs";
+  fontSize: number;
+  wordWrap: "off" | "on";
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["workspace-file-split", workspaceId, filePath],
+    queryFn: () => API.get<{ content: string }>(
+      `/workspaces/${workspaceId}/files?path=${encodeURIComponent(filePath)}`,
+    ),
+  });
+
+  return (
+    <div className={`flex h-full min-h-0 flex-col ${active ? "ring-1 ring-inset ring-accent/40" : ""}`} onClick={onActivate}>
+      <div className="flex min-w-0 shrink-0 items-center gap-1.5 border-b border-bg-border bg-bg-subtle px-2 py-1.5">
+        {getFileIcon(filePath.split("/").pop() ?? filePath, 11)}
+        <span className="min-w-0 flex-1 truncate text-[11px] text-text" title={filePath}>{filePath}</span>
+        <button className="btn-ghost shrink-0 p-1" onClick={(event) => { event.stopPropagation(); onOpenMain(); }} title="Open in main editor">
+          <ExternalLink size={11} />
+        </button>
+        <button className="btn-ghost shrink-0 p-1" onClick={(event) => { event.stopPropagation(); onClose(); }} title="Close pane">
+          <X size={11} />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1">
+        {isImageFile(filePath) ? (
+          <div className="flex h-full items-center justify-center overflow-auto bg-[#1e1e1e] p-4">
+            <img
+              src={`/api/workspaces/${workspaceId}/files/raw?path=${encodeURIComponent(filePath)}`}
+              alt={filePath}
+              className="max-h-full max-w-full object-contain"
+            />
+          </div>
+        ) : isPdfFile(filePath) ? (
+          <PdfPreview workspaceId={workspaceId} path={filePath} />
+        ) : isBinaryFile(filePath) ? (
+          <BinaryFilePreview workspaceId={workspaceId} path={filePath} />
+        ) : isLoading ? (
+          <div className="grid h-full place-items-center text-xs text-text-muted">
+            <Loader2 size={14} className="mr-2 inline animate-spin text-accent" /> Loading…
+          </div>
+        ) : (
+          <Editor
+            height="100%"
+            theme={editorTheme}
+            path={`split:${filePath}`}
+            value={data?.content ?? ""}
+            options={{
+              fontSize,
+              fontFamily: "JetBrains Mono, Fira Code, Menlo, monospace",
+              minimap: { enabled: false },
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              tabSize: 2,
+              readOnly: true,
+              wordWrap,
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -2997,7 +3079,7 @@ function NewTabPage({
   openTabs: string[];
   activePath: string | null;
   onOpenFile: (p: string) => void;
-  onOpenTool: (t: "console" | "terminal" | "preview" | "database") => void;
+  onOpenTool: (t: WorkspaceTool) => void;
   bottomTab: "console" | "terminal" | "preview" | "database";
   recentFiles?: string[];
 }) {
@@ -3017,11 +3099,14 @@ function NewTabPage({
     ? allFiles.filter((n) => n.path.toLowerCase().includes(lower)).slice(0, 12)
     : [];
 
-  const TOOLS: { id: "console" | "terminal" | "preview" | "database"; label: string; desc: string; icon: React.ReactNode }[] = [
-    { id: "console",  label: "Workflows", desc: "Process logs and run commands",      icon: <Layers size={18} /> },
-    { id: "terminal", label: "Shell",  desc: "Shell akses langsung ke workspace",    icon: <Terminal size={18} /> },
-    { id: "preview",  label: "Run",       desc: "Live preview of your running app",   icon: <Play size={18} /> },
-    { id: "database", label: "Database",  desc: "Query your workspace database",      icon: <Database size={18} /> },
+  const TOOLS: { id: WorkspaceTool; label: string; desc: string; icon: React.ReactNode }[] = [
+    { id: "console",  label: "Tools", desc: "Workflows and logs",                    icon: <Layers size={18} /> },
+    { id: "preview",  label: "Preview", desc: "Live preview of your running app",    icon: <Eye size={18} /> },
+    { id: "terminal", label: "Shell", desc: "Shell akses langsung ke workspace",      icon: <Terminal size={18} /> },
+    { id: "database", label: "Database", desc: "Query your workspace database",       icon: <Database size={18} /> },
+    { id: "cron",     label: "Cron Jobs", desc: "Scheduled workspace tasks",          icon: <Clock size={18} /> },
+    { id: "git",      label: "Git", desc: "Changes, commits, and history",            icon: <GitBranch size={18} /> },
+    { id: "secrets",  label: "Secrets", desc: "Workspace environment variables",     icon: <Lock size={18} /> },
   ];
 
   return (
@@ -3155,6 +3240,7 @@ function WorkspaceTabBar({
   onOpenFiles,
   onOpenAI,
   onOpenCron,
+  onOpenSplit,
   onOpenTool,
   onOpenFile,
   onCloseFile,
@@ -3172,6 +3258,7 @@ function WorkspaceTabBar({
   onOpenFiles: () => void;
   onOpenAI: () => void;
   onOpenCron: () => void;
+  onOpenSplit: (path: string) => void;
   onOpenTool: (tool: WorkspaceTool) => void;
   onOpenFile: (path: string) => void;
   onCloseFile: (path: string, event: React.MouseEvent) => void;
@@ -3240,6 +3327,20 @@ function WorkspaceTabBar({
           <button
             key={tab}
             onClick={() => onOpenFile(tab)}
+            draggable
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = "copy";
+              event.dataTransfer.setData(DND_MIME, tab);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              const source = event.dataTransfer.getData(DND_MIME);
+              if (source && source !== tab) onOpenSplit(source);
+            }}
             title={tab}
             className={`group flex min-w-0 max-w-[190px] shrink-0 items-center gap-1.5 border-r border-bg-border border-t-2 px-3 py-2 text-[11px] transition-colors ${
               isActive ? "border-t-accent bg-bg text-text" : "border-t-transparent text-text-muted hover:bg-bg hover:text-text"
@@ -3356,12 +3457,13 @@ function CommandPalette({
 }
 
 function BottomTabs({
-  workspaceId, workspace, tab, setTab,
+  workspaceId, workspace, tab, setTab, hideTabs = false,
 }: {
   workspaceId: string;
   workspace?: Workspace;
   tab: "console" | "terminal" | "preview" | "database";
   setTab: (t: "console" | "terminal" | "preview" | "database") => void;
+  hideTabs?: boolean;
 }) {
   const status = workspace?.status ?? "stopped";
   const [previewViewportLocal, setPreviewViewportLocal] = useState<"full" | "tablet" | "mobile">("full");
@@ -3374,32 +3476,34 @@ function BottomTabs({
   ];
   return (
     <div className="flex h-full flex-col bg-bg-panel">
-      <div className="flex border-b border-bg-border bg-bg-subtle/55 px-1">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            className={`relative flex items-center gap-1.5 rounded-t-lg px-4 py-2.5 text-xs font-medium transition ${
-              tab === t.id
-                ? "bg-bg text-text after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-accent"
-                : "text-text-muted hover:bg-bg-hover/70 hover:text-text"
-            }`}
-            onClick={() => setTab(t.id)}
-          >
-            {t.icon}
-            {t.label}
-          </button>
-        ))}
-        {workspace?.previewUrl && (
-          <a
-            className="ml-auto my-1 flex items-center gap-1.5 rounded-lg px-3 text-xs text-text-muted transition hover:bg-bg-hover hover:text-text"
-            href={workspace.previewUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <ExternalLink size={12} /> Open
-          </a>
-        )}
-      </div>
+      {!hideTabs && (
+        <div className="flex border-b border-bg-border bg-bg-subtle/55 px-1">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              className={`relative flex items-center gap-1.5 rounded-t-lg px-4 py-2.5 text-xs font-medium transition ${
+                tab === t.id
+                  ? "bg-bg text-text after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-accent"
+                  : "text-text-muted hover:bg-bg-hover/70 hover:text-text"
+              }`}
+              onClick={() => setTab(t.id)}
+            >
+              {t.icon}
+              {t.label}
+            </button>
+          ))}
+          {workspace?.previewUrl && (
+            <a
+              className="ml-auto my-1 flex items-center gap-1.5 rounded-lg px-3 text-xs text-text-muted transition hover:bg-bg-hover hover:text-text"
+              href={workspace.previewUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <ExternalLink size={12} /> Open
+            </a>
+          )}
+        </div>
+      )}
       {/*
         Keep all panes mounted at all times so the terminal session and
         preview iframe survive tab switches. We use `hidden` instead of

@@ -106,9 +106,11 @@ const emptyForm = (): FormState => ({
 export function CronJobsPanel({
   workspaceId,
   onClose,
+  embedded = false,
 }: {
   workspaceId: string;
   onClose: () => void;
+  embedded?: boolean;
 }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<FormState | null>(null); // null = list view
@@ -225,11 +227,13 @@ export function CronJobsPanel({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onMouseDown={onClose}
+      className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-50 flex items-center justify-center bg-black/60"}
+      onMouseDown={embedded ? undefined : onClose}
     >
       <div
-        className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-lg border border-bg-border bg-bg-base shadow-xl"
+        className={embedded
+          ? "flex h-full min-h-0 w-full flex-col overflow-hidden bg-bg-base"
+          : "max-h-[90vh] w-full max-w-3xl overflow-auto rounded-lg border border-bg-border bg-bg-base shadow-xl"}
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -253,7 +257,7 @@ export function CronJobsPanel({
           </div>
         </div>
 
-        <div className="p-5">
+        <div className={embedded ? "min-h-0 flex-1 overflow-auto p-5" : "p-5"}>
           {/* ── Form view ── */}
           {form && (
             <div className="space-y-4">
