@@ -125,7 +125,11 @@ function isBinaryFile(p: string) {
   return BINARY_EXTS.has(ext);
 }
 
-type WorkspaceTool = "console" | "terminal" | "preview" | "database" | "cron" | "secrets" | "git";
+type WorkspaceTool =
+  | "console" | "terminal" | "preview" | "database" | "cron" | "secrets" | "git"
+  | "checkpoints" | "db-connection" | "subdomain" | "workspace-config"
+  | "quick-actions" | "editor-settings" | "command-palette" | "workspace-search"
+  | "share" | "activity" | "find-replace" | "shortcuts" | "diff";
 type WorkspaceSurface = "file" | WorkspaceTool;
 
 function hashState(): { file: string | null; tool: WorkspaceTool | null } {
@@ -140,7 +144,12 @@ function hashState(): { file: string | null; tool: WorkspaceTool | null } {
   const tool = params.get("tool") as WorkspaceTool | null;
   return {
     file: file ? file.replace(/^\/+/, "") : null,
-    tool: tool && ["console", "terminal", "preview", "database", "cron", "secrets", "git"].includes(tool) ? tool : null,
+    tool: tool && [
+      "console", "terminal", "preview", "database", "cron", "secrets", "git",
+      "checkpoints", "db-connection", "subdomain", "workspace-config",
+      "quick-actions", "editor-settings", "command-palette", "workspace-search",
+      "share", "activity", "find-replace", "shortcuts", "diff",
+    ].includes(tool) ? tool : null,
   };
 }
 
@@ -171,8 +180,6 @@ export default function EditorPage() {
   // The reference workspace keeps AI available beside the main editor. Users
   // can collapse it from the top tab or the AI toolbar control.
   const [showAI, setShowAI] = useState(true);
-  const [showCheckpoints, setShowCheckpoints] = useState(false);
-  const [showSecrets, setShowSecrets] = useState(false);
   const [secretsOpenDbTemplate, setSecretsOpenDbTemplate] = useState(false);
   const [openTabs, setOpenTabs] = useState<string[]>(() => {
     try {
@@ -181,14 +188,6 @@ export default function EditorPage() {
     } catch {}
     return [];
   });
-  const [showSubdomain, setShowSubdomain] = useState(false);
-  const [showGit, setShowGit] = useState(false);
-  const [showCronJobs, setShowCronJobs] = useState(false);
-  const [showQuickActions, setShowQuickActions] = useState(false);
-  const [showCommandPalette, setShowCommandPalette] = useState(false);
-  const [showWorkspaceSearch, setShowWorkspaceSearch] = useState(false);
-  const [showShare, setShowShare] = useState(false);
-  const [showActivityLog, setShowActivityLog] = useState(false);
   const [editorTheme, setEditorTheme] = useState<"vs-dark" | "vs">(() => {
     try { return (localStorage.getItem("premdev.theme") as any) ?? "vs-dark"; } catch { return "vs-dark"; }
   });
@@ -212,9 +211,6 @@ export default function EditorPage() {
     } catch {}
     return [];
   });
-  const [showReplace, setShowReplace] = useState(false);
-  const [showShortcuts, setShowShortcuts] = useState(false);
-  const [showDiff, setShowDiff] = useState(false);
   const [diffOriginal, setDiffOriginal] = useState<string>("");
   const [cursorPos, setCursorPos] = useState<{ line: number; col: number } | null>(null);
   const [vimMode, setVimMode] = useState<boolean>(() => {
@@ -391,19 +387,9 @@ export default function EditorPage() {
     setNewTabOpen(false);
     if (syncUrl) setWorkspaceHash("tool", tool);
     setActiveSurface(tool);
-    if (tool === "cron") {
-      setShowCronJobs(true);
-      return;
+    if (tool === "console" || tool === "terminal" || tool === "preview" || tool === "database") {
+      setBottomTab(tool);
     }
-    if (tool === "secrets") {
-      setShowSecrets(true);
-      return;
-    }
-    if (tool === "git") {
-      setShowGit(true);
-      return;
-    }
-    setBottomTab(tool);
   }
 
   function closeTab(p: string, e: React.MouseEvent) {
@@ -495,22 +481,22 @@ export default function EditorPage() {
       // Ctrl+K / Ctrl+P → command palette
       if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "p")) {
         e.preventDefault();
-        setShowCommandPalette(true);
+        openTool("command-palette", { syncUrl: false });
       }
       // Ctrl+Shift+F → workspace search
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "f") {
         e.preventDefault();
-        setShowWorkspaceSearch(true);
+        openTool("workspace-search", { syncUrl: false });
       }
       // Ctrl+Shift+H → Find & Replace
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "h") {
         e.preventDefault();
-        setShowReplace(true);
+        openTool("find-replace", { syncUrl: false });
       }
       // Ctrl+? → Keyboard shortcuts reference
       if ((e.ctrlKey || e.metaKey) && e.key === "?") {
         e.preventDefault();
-        setShowShortcuts(true);
+        openTool("shortcuts", { syncUrl: false });
       }
       // Ctrl+J → toggle AI panel
       if ((e.ctrlKey || e.metaKey) && e.key === "j") {
@@ -518,12 +504,7 @@ export default function EditorPage() {
         setShowAI((v) => !v);
       }
       if (e.key === "Escape") {
-        setShowCommandPalette(false);
-        setShowWorkspaceSearch(false);
-        setShowReplace(false);
-        setShowShortcuts(false);
-        setShowShare(false);
-        setShowActivityLog(false);
+        setActiveSurface("file");
       }
     }
     window.addEventListener("keydown", onKey);
@@ -560,6 +541,93 @@ export default function EditorPage() {
     : savingState === "error" ? "Save failed"
     : dirty ? "Modified"
     : "Saved";
+
+  function renderActiveSurface() {
+    const closeSurface = () => setActiveSurface("file");
+    switch (activeSurface) {
+      case "cron":
+        return <CronJobsPanel workspaceId={id!} embedded onClose={closeSurface} />;
+      case "git":
+        return <GitPanel workspaceId={id!} embedded onClose={closeSurface} />;
+      case "secrets":
+        return <SecretsPanel workspaceId={id!} embedded onClose={closeSurface} initialDbTemplate={false} />;
+      case "db-connection":
+        return <SecretsPanel workspaceId={id!} embedded onClose={closeSurface} initialDbTemplate />;
+      case "console":
+      case "terminal":
+      case "preview":
+      case "database":
+        return <BottomTabs workspaceId={id!} workspace={w} tab={bottomTab} setTab={setBottomTab} hideTabs />;
+      case "checkpoints":
+        return <CheckpointsModal workspaceId={id!} onClose={closeSurface} confirm={confirm} embedded />;
+      case "subdomain":
+        return w ? (
+          <SubdomainPanel
+            workspaceId={id!}
+            workspace={w}
+            onClose={closeSurface}
+            onSaved={() => qc.invalidateQueries({ queryKey: ["workspace", id] })}
+            embedded
+          />
+        ) : <ToolEmptyState title="Custom subdomain" message="Workspace belum siap." />;
+      case "quick-actions":
+        return (
+          <QuickActionsMenu
+            activePath={activePath}
+            embedded
+            onClose={closeSurface}
+            onPick={(prompt) => {
+              setShowAI(true);
+              window.dispatchEvent(new CustomEvent("premdev:ai:prefill", {
+                detail: { text: prompt, send: true },
+              }));
+            }}
+          />
+        );
+      case "editor-settings":
+        return (
+          <EditorSettingsSurface
+            editorTheme={editorTheme}
+            setEditorTheme={setEditorTheme}
+            fontSize={fontSize}
+            setFontSize={setFontSize}
+            wordWrap={wordWrap}
+            setWordWrap={setWordWrap}
+            minimap={minimap}
+            setMinimap={setMinimap}
+            vimMode={vimMode}
+            setVimMode={setVimMode}
+            splitDirection={splitDirection}
+            setSplitDirection={setSplitDirection}
+            splitOpen={splitTabs.length > 0}
+            onToggleSplit={() => {
+              if (splitPath) { setSplitPath(null); setSplitContent(""); setSplitTabs([]); }
+              else if (activePath) void openSplit(activePath);
+            }}
+          />
+        );
+      case "workspace-config":
+        return <WorkspaceConfigSurface workspaceId={id!} onOpenFile={openFile} onClose={closeSurface} />;
+      case "command-palette":
+        return <CommandPalette embedded workspaceId={id!} activePath={activePath} onSelect={openFile} onClose={closeSurface} />;
+      case "workspace-search":
+        return <WorkspaceSearch embedded workspaceId={id!} onSelect={openFile} onClose={closeSurface} />;
+      case "share":
+        return <ShareModal embedded workspaceId={id!} onClose={closeSurface} />;
+      case "activity":
+        return <ActivityLogModal embedded workspaceId={id!} onClose={closeSurface} />;
+      case "find-replace":
+        return <WorkspaceReplace embedded workspaceId={id!} onClose={closeSurface} onFileOpen={openFile} />;
+      case "shortcuts":
+        return <ShortcutModal embedded onClose={closeSurface} />;
+      case "diff":
+        return activePath && dirty
+          ? <DiffSurface activePath={activePath} diffOriginal={diffOriginal} content={content} editorTheme={editorTheme} onClose={closeSurface} />
+          : <ToolEmptyState title="Diff" message="Buka dan ubah file terlebih dahulu untuk melihat perbandingan." />;
+      default:
+        return <ToolEmptyState title="Tool" message="Tool ini belum memiliki surface workspace." />;
+    }
+  }
 
   if (wsError && !ws) {
     return (
@@ -663,78 +731,6 @@ export default function EditorPage() {
         >
           <Save size={14} />
         </button>
-        <button
-          className="btn-secondary"
-          title="Checkpoints"
-          onClick={() => setShowCheckpoints(true)}
-        >
-          <History size={14} />
-        </button>
-        <button
-          className="btn-secondary"
-          title="Secrets — KEY=value vars injected into your container"
-          onClick={() => { setSecretsOpenDbTemplate(false); openTool("secrets"); }}
-        >
-          <Lock size={14} />
-        </button>
-        <button
-          className="btn-secondary"
-          title="Konek database eksternal (cPanel / hosting)"
-          onClick={() => { setSecretsOpenDbTemplate(true); openTool("secrets"); }}
-        >
-          <Database size={14} />
-        </button>
-        <button
-          className="btn-secondary"
-          title={
-            w?.customSubdomain
-              ? `Custom subdomain: ${w.customSubdomain}`
-              : "Set a custom subdomain for this workspace"
-          }
-          onClick={() => setShowSubdomain(true)}
-        >
-          <Globe size={14} />
-          {w?.customSubdomain && (
-            <span className="ml-1 hidden text-[10px] text-accent sm:inline">
-              {w.customSubdomain}
-            </span>
-          )}
-        </button>
-        <button
-          className="btn-secondary"
-          title="Open .premdev (workspace config: run command, env)"
-          onClick={async () => {
-            try {
-              const r = await API.post<{ path: string }>(
-                `/workspaces/${id}/config/init`,
-                {},
-              );
-              // Save any pending edits, refresh tree (so the file shows up
-              // when hidden files are visible), then load the file content
-              // into Monaco — mirroring the file-tree onSelect flow.
-              if (dirty && activePath) {
-                if (saveTimer.current) {
-                  clearTimeout(saveTimer.current);
-                  saveTimer.current = null;
-                }
-                await saveNow(activePath, content);
-              }
-              await qc.invalidateQueries({ queryKey: ["files", id] });
-              setActivePath(r.path);
-              const res = await API.get<{ content: string }>(
-                `/workspaces/${id}/files?path=${encodeURIComponent(r.path)}`,
-              );
-              setContent(res.content);
-              setDiffOriginal(res.content);
-              setDirty(false);
-              setSavingState("idle");
-            } catch (e: any) {
-              alert(e?.message ?? "Failed to open config");
-            }
-          }}
-        >
-          <Settings size={14} />
-        </button>
         {w?.status === "running" ? (
           <>
             <button
@@ -753,188 +749,6 @@ export default function EditorPage() {
             <Play size={14} /> Run
           </button>
         )}
-        <button
-          className="btn-secondary"
-          title="Git: status, commit, push, pull"
-          onClick={() => openTool("git")}
-        >
-          <GitBranch size={14} />
-        </button>
-        <button
-          className="btn-secondary"
-          title="Cron Jobs — scheduled tasks for this workspace"
-          onClick={() => openTool("cron")}
-        >
-          <Clock size={14} />
-        </button>
-        <div className="relative">
-          <button
-            className="btn-secondary"
-            title="Quick AI actions on the active file"
-            onClick={() => { setShowQuickActions((v) => !v); }}
-          >
-            <Wand2 size={14} />
-          </button>
-          {showQuickActions && (
-            <QuickActionsMenu
-              activePath={activePath}
-              onClose={() => setShowQuickActions(false)}
-              onPick={(prompt) => {
-                setShowQuickActions(false);
-                setShowAI(true);
-                window.dispatchEvent(new CustomEvent("premdev:ai:prefill", {
-                  detail: { text: prompt, send: true },
-                }));
-              }}
-            />
-          )}
-        </div>
-        {/* Font size */}
-        <div className="flex items-center gap-0.5">
-          <button
-            className="btn-secondary px-1.5"
-            title="Font size kecil"
-            onClick={() => setFontSize((v) => { const n = Math.max(8, v - 1); try { localStorage.setItem("premdev.fontSize", String(n)); } catch {} return n; })}
-          >
-            <Type size={10} />−
-          </button>
-          <span className="text-[10px] tabular-nums text-text-muted w-5 text-center">{fontSize}</span>
-          <button
-            className="btn-secondary px-1.5"
-            title="Font size besar"
-            onClick={() => setFontSize((v) => { const n = Math.min(32, v + 1); try { localStorage.setItem("premdev.fontSize", String(n)); } catch {} return n; })}
-          >
-            <Type size={12} />+
-          </button>
-        </div>
-        {/* Word wrap */}
-        <button
-          className={`btn-secondary ${wordWrap === "on" ? "text-accent" : ""}`}
-          title={wordWrap === "on" ? "Word wrap ON — click to turn off" : "Word wrap OFF — click to turn on"}
-          onClick={() => setWordWrap((v) => { const n = v === "on" ? "off" : "on"; try { localStorage.setItem("premdev.wordWrap", n); } catch {} return n; })}
-        >
-          <WrapText size={14} />
-        </button>
-        {/* Split editor */}
-        <button
-          className={`btn-secondary ${splitPath ? "text-accent" : ""}`}
-          title={splitPath ? "Close split editor" : "Split editor — open second file side by side"}
-          onClick={() => {
-            if (splitPath) { setSplitPath(null); setSplitContent(""); setSplitTabs([]); }
-            else if (activePath) openSplit(activePath);
-          }}
-        >
-          <Columns2 size={14} />
-        </button>
-        {splitTabs.length > 0 && (
-          <button
-            className={`btn-secondary ${splitDirection === "vertical" ? "text-accent" : ""}`}
-            title={splitDirection === "horizontal" ? "Split panes horizontally — click for vertical panes" : "Split panes vertically — click for horizontal panes"}
-            onClick={() => setSplitDirection((value) => value === "horizontal" ? "vertical" : "horizontal")}
-          >
-            <Columns2 size={14} className={splitDirection === "vertical" ? "rotate-90" : ""} />
-          </button>
-        )}
-        {/* Minimap toggle */}
-        <button
-          className={`btn-secondary ${minimap ? "text-accent" : ""}`}
-          title="Toggle minimap"
-          onClick={() => setMinimap((v) => { const n = !v; try { localStorage.setItem("premdev.minimap", n ? "1" : "0"); } catch {} return n; })}
-        >
-          <SlidersHorizontal size={14} />
-        </button>
-        {/* Theme toggle */}
-        <button
-          className="btn-secondary"
-          title={editorTheme === "vs-dark" ? "Switch to light theme" : "Switch to dark theme"}
-          onClick={() => setEditorTheme((t) => { const n = t === "vs-dark" ? "vs" : "vs-dark"; try { localStorage.setItem("premdev.theme", n); } catch {} return n; })}
-        >
-          {editorTheme === "vs-dark" ? <Sun size={14} /> : <Moon size={14} />}
-        </button>
-        {/* Command palette */}
-        <button
-          className="btn-secondary"
-          title="Command palette (Ctrl+K)"
-          onClick={() => setShowCommandPalette(true)}
-        >
-          <Command size={14} />
-        </button>
-        {/* Code outline */}
-        <button
-          className="btn-secondary"
-          title="Code outline — daftar simbol dalam file ini (Ctrl+Shift+O)"
-          onClick={() => {
-            editorRef.current?.getAction("editor.action.quickOutline")?.run();
-          }}
-        >
-          <Layers size={14} />
-        </button>
-        {/* File diff view */}
-        {activePath && dirty && (
-          <button
-            className="btn-secondary"
-            title="Lihat perubahan sejak terakhir disimpan (Diff view)"
-            onClick={() => {
-              // snapshot content sebelum perubahan saat ini sebagai "original"
-              // sudah tersimpan di diffOriginal saat file dibuka
-              setShowDiff(true);
-            }}
-          >
-            <GitBranch size={14} />
-            <span className="hidden sm:inline text-[11px]">Diff</span>
-          </button>
-        )}
-        {/* Workspace search */}
-        <button
-          className="btn-secondary"
-          title="Search across files (Ctrl+Shift+F)"
-          onClick={() => setShowWorkspaceSearch(true)}
-        >
-          <FileSearch size={14} />
-        </button>
-        {/* Share */}
-        <button
-          className="btn-secondary"
-          title="Share workspace (read-only link)"
-          onClick={() => setShowShare(true)}
-        >
-          <Share2 size={14} />
-        </button>
-        {/* Activity log */}
-        <button
-          className="btn-secondary"
-          title="Activity log"
-          onClick={() => setShowActivityLog(true)}
-        >
-          <Activity size={14} />
-        </button>
-        {/* Vim visual mode */}
-        <button
-          className={`btn-secondary font-mono text-[10px] ${vimMode ? "text-accent" : ""}`}
-          title={vimMode ? "Vim visual mode ON (block cursor, relative lines) — click to disable" : "Vim visual mode: block cursor + relative line numbers"}
-          onClick={() => setVimMode((v) => { const n = !v; try { localStorage.setItem("premdev.vimMode", n ? "1" : "0"); } catch {} return n; })}
-        >
-          VIM
-        </button>
-        {/* Find & Replace */}
-        <button
-          className="btn-secondary"
-          title="Find & Replace across files (Ctrl+Shift+H)"
-          onClick={() => setShowReplace(true)}
-        >
-          <Replace size={14} />
-        </button>
-        {/* Keyboard shortcuts */}
-        <button
-          className="btn-secondary font-mono text-xs font-bold"
-          title="Keyboard shortcuts (Ctrl+?)"
-          onClick={() => setShowShortcuts(true)}
-        >
-          ?
-        </button>
-        <button className="btn-secondary" onClick={() => setShowActivityLog(true)} title="Activity log & notifications">
-          <Activity size={14} />
-        </button>
         <button className="btn-secondary" onClick={() => setShowAI((s) => !s)}>
           <Sparkles size={14} /> AI
         </button>
@@ -1003,36 +817,7 @@ export default function EditorPage() {
                   dirty={dirty}
                 />
                 <div className="relative min-h-0 flex-1">
-                {activeSurface !== "file" ? (
-                  activeSurface === "cron" ? (
-                    <CronJobsPanel
-                      workspaceId={id!}
-                      embedded
-                      onClose={() => { setShowCronJobs(false); setActiveSurface("file"); }}
-                    />
-                  ) : activeSurface === "git" ? (
-                    <GitPanel
-                      workspaceId={id!}
-                      embedded
-                      onClose={() => { setShowGit(false); setActiveSurface("file"); }}
-                    />
-                  ) : activeSurface === "secrets" ? (
-                    <SecretsPanel
-                      workspaceId={id!}
-                      embedded
-                      onClose={() => { setShowSecrets(false); setSecretsOpenDbTemplate(false); setActiveSurface("file"); }}
-                      initialDbTemplate={secretsOpenDbTemplate}
-                    />
-                  ) : (
-                    <BottomTabs
-                      workspaceId={id!}
-                      workspace={w}
-                      tab={bottomTab}
-                      setTab={setBottomTab}
-                      hideTabs
-                    />
-                  )
-                ) : (
+                {activeSurface !== "file" ? renderActiveSurface() : (
                   <>
                  {newTabOpen ? (
                   <NewTabPage
@@ -1278,110 +1063,6 @@ export default function EditorPage() {
         </span>
       </div>
 
-      {showCheckpoints && (
-        <CheckpointsModal
-          workspaceId={id!}
-          onClose={() => setShowCheckpoints(false)}
-          confirm={confirm}
-        />
-      )}
-      {showSubdomain && w && (
-        <SubdomainPanel
-          workspaceId={id!}
-          workspace={w}
-          onClose={() => setShowSubdomain(false)}
-          onSaved={() => qc.invalidateQueries({ queryKey: ["workspace", id] })}
-        />
-      )}
-      {showCommandPalette && (
-        <CommandPalette
-          workspaceId={id!}
-          activePath={activePath}
-          onSelect={(path) => {
-            setShowCommandPalette(false);
-            openFile(path);
-          }}
-          onClose={() => setShowCommandPalette(false)}
-        />
-      )}
-      {showWorkspaceSearch && (
-        <WorkspaceSearch
-          workspaceId={id!}
-          onSelect={(path) => { setShowWorkspaceSearch(false); openFile(path); }}
-          onClose={() => setShowWorkspaceSearch(false)}
-        />
-      )}
-      {showShare && (
-        <ShareModal
-          workspaceId={id!}
-          onClose={() => setShowShare(false)}
-        />
-      )}
-      {showActivityLog && (
-        <ActivityLogModal
-          workspaceId={id!}
-          onClose={() => setShowActivityLog(false)}
-        />
-      )}
-      {showReplace && (
-        <WorkspaceReplace
-          workspaceId={id!}
-          onClose={() => setShowReplace(false)}
-          onFileOpen={openFile}
-        />
-      )}
-      {showShortcuts && (
-        <ShortcutModal onClose={() => setShowShortcuts(false)} />
-      )}
-      {showDiff && activePath && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-black/70" onClick={() => setShowDiff(false)}>
-          <div
-            className="relative m-auto flex w-full max-w-6xl flex-1 flex-col overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"
-            style={{ maxHeight: "85vh" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-bg-border bg-bg-panel px-4 py-2">
-              <div className="flex items-center gap-2 text-sm font-semibold">
-                <GitBranch size={14} className="text-accent" />
-                Diff: {activePath.split("/").pop()}
-                <span className="ml-2 text-[10px] font-normal text-text-muted">
-                  Kiri = versi disimpan · Kanan = perubahan saat ini
-                </span>
-              </div>
-              <button className="btn-ghost p-1" onClick={() => setShowDiff(false)}>
-                <X size={14} />
-              </button>
-            </div>
-            <div className="flex-1" style={{ minHeight: 0 }}>
-              <DiffEditor
-                height="100%"
-                theme={editorTheme}
-                language={activePath.endsWith(".ts") || activePath.endsWith(".tsx") ? "typescript"
-                  : activePath.endsWith(".js") || activePath.endsWith(".jsx") ? "javascript"
-                  : activePath.endsWith(".py") ? "python"
-                  : activePath.endsWith(".json") ? "json"
-                  : activePath.endsWith(".css") ? "css"
-                  : activePath.endsWith(".html") ? "html"
-                  : activePath.endsWith(".go") ? "go"
-                  : activePath.endsWith(".rs") ? "rust"
-                  : activePath.endsWith(".php") ? "php"
-                  : activePath.endsWith(".md") ? "markdown"
-                  : "plaintext"}
-                original={diffOriginal}
-                modified={content}
-                options={{
-                  fontSize: 12,
-                  fontFamily: "JetBrains Mono, Fira Code, Menlo, monospace",
-                  minimap: { enabled: false },
-                  scrollBeyondLastLine: false,
-                  readOnly: true,
-                  renderSideBySide: true,
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
       {confirmDialog}
     </div>
   );
@@ -1397,16 +1078,19 @@ function QuickActionsMenu({
   activePath,
   onPick,
   onClose,
+  embedded = false,
 }: {
   activePath: string | null;
   onPick: (prompt: string) => void;
   onClose: () => void;
+  embedded?: boolean;
 }) {
   // Click-outside dismissal — registered on first render so any click that
   // isn't on the menu closes it. The button that opens the menu also calls
   // setShowQuickActions((v) => !v), so a second click on it still toggles.
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (embedded) return;
     function onDoc(ev: MouseEvent) {
       if (!ref.current) return;
       if (!ref.current.contains(ev.target as Node)) onClose();
@@ -1414,7 +1098,7 @@ function QuickActionsMenu({
     // Defer one tick so the very click that opened us doesn't immediately close us.
     const t = setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
     return () => { clearTimeout(t); document.removeEventListener("mousedown", onDoc); };
-  }, [onClose]);
+  }, [embedded, onClose]);
   const file = activePath ?? "(no file open)";
   const items: Array<{ label: string; prompt: string }> = [
     {
@@ -1449,7 +1133,9 @@ function QuickActionsMenu({
   return (
     <div
       ref={ref}
-      className="absolute right-0 top-full mt-1 w-64 rounded-md border border-bg-border bg-bg-subtle p-1 text-xs shadow-lg z-20"
+      className={embedded
+        ? "flex h-full min-h-0 w-full flex-col overflow-auto bg-bg-base p-4 text-xs"
+        : "absolute right-0 top-full z-20 mt-1 w-64 rounded-md border border-bg-border bg-bg-subtle p-1 text-xs shadow-lg"}
     >
       <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-text-muted">
         Quick actions {activePath ? `· ${activePath.split("/").pop()}` : ""}
@@ -1685,11 +1371,13 @@ function SubdomainPanel({
   workspace,
   onClose,
   onSaved,
+  embedded = false,
 }: {
   workspaceId: string;
   workspace: Workspace;
   onClose: () => void;
   onSaved: () => void;
+  embedded?: boolean;
 }) {
   const [value, setValue] = useState<string>(workspace.customSubdomain ?? "");
   const [domain, setDomain] = useState<string>(workspace.customDomain ?? "");
@@ -1779,8 +1467,10 @@ function SubdomainPanel({
   })();
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-      <div className="w-full max-w-lg rounded-lg border border-bg-border bg-bg-panel p-5 shadow-xl">
+    <div className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"}>
+      <div className={embedded
+        ? "flex h-full min-h-0 w-full flex-col overflow-auto bg-bg-base p-5"
+        : "w-full max-w-lg rounded-lg border border-bg-border bg-bg-panel p-5 shadow-xl"}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-lg font-semibold">
             <Globe size={18} /> Custom subdomain
@@ -2329,13 +2019,26 @@ function WorkspaceSidePanel({
   onOpenTool: (tool: WorkspaceTool) => void;
 }) {
   const libraryItems: Array<{ id: WorkspaceTool; label: string; description: string; icon: React.ReactNode }> = [
-    { id: "console", label: "Tools", description: "Workflows and logs", icon: <Layers size={14} /> },
+    { id: "console", label: "Tools / Workflows", description: "Process logs and workflows", icon: <Layers size={14} /> },
     { id: "preview", label: "Preview", description: "Live app preview", icon: <Eye size={14} /> },
     { id: "terminal", label: "Shell", description: "Workspace terminal", icon: <Terminal size={14} /> },
-    { id: "database", label: "Database", description: "Workspace data", icon: <Database size={14} /> },
-    { id: "cron", label: "Cron Jobs", description: "Scheduled tasks", icon: <Clock size={14} /> },
-    { id: "git", label: "Git", description: "Changes and history", icon: <GitBranch size={14} /> },
-    { id: "secrets", label: "Secrets", description: "Environment variables", icon: <Lock size={14} /> },
+    { id: "database", label: "Database", description: "Workspace database", icon: <Database size={14} /> },
+    { id: "cron", label: "Cron Jobs", description: "Scheduled workspace tasks", icon: <Clock size={14} /> },
+    { id: "git", label: "Git", description: "Changes, commits, and history", icon: <GitBranch size={14} /> },
+    { id: "secrets", label: "Secrets", description: "Workspace environment variables", icon: <Lock size={14} /> },
+    { id: "db-connection", label: "Database Connection", description: "External database credentials", icon: <Database size={14} /> },
+    { id: "checkpoints", label: "Checkpoints", description: "Save and restore workspace states", icon: <History size={14} /> },
+    { id: "subdomain", label: "Custom Subdomain", description: "Configure the workspace URL", icon: <Globe size={14} /> },
+    { id: "workspace-config", label: "Workspace Config", description: "Open .premdev settings", icon: <Settings size={14} /> },
+    { id: "quick-actions", label: "AI Quick Actions", description: "Prompts for the active file", icon: <Wand2 size={14} /> },
+    { id: "editor-settings", label: "Editor Settings", description: "Theme, layout, and editor controls", icon: <SlidersHorizontal size={14} /> },
+    { id: "command-palette", label: "Command Palette", description: "Quickly open any file", icon: <Command size={14} /> },
+    { id: "workspace-search", label: "Search Workspace", description: "Find text across all files", icon: <FileSearch size={14} /> },
+    { id: "share", label: "Share Workspace", description: "Manage read-only share links", icon: <Share2 size={14} /> },
+    { id: "activity", label: "Activity Log", description: "Workspace events and notifications", icon: <Activity size={14} /> },
+    { id: "find-replace", label: "Find & Replace", description: "Replace text across files", icon: <Replace size={14} /> },
+    { id: "shortcuts", label: "Keyboard Shortcuts", description: "View available shortcuts", icon: <Keyboard size={14} /> },
+    { id: "diff", label: "File Diff", description: "Compare saved and current changes", icon: <GitBranch size={14} /> },
   ];
 
   return (
@@ -2549,6 +2252,203 @@ function SplitFilePane({
             }}
           />
         )}
+      </div>
+    </div>
+  );
+}
+
+function ToolEmptyState({ title, message }: { title: string; message: string }) {
+  return (
+    <div className="grid h-full place-items-center bg-bg-base p-6 text-center">
+      <div>
+        <Layers size={28} className="mx-auto mb-3 text-text-subtle" />
+        <h2 className="text-sm font-semibold text-text">{title}</h2>
+        <p className="mt-1 max-w-md text-xs text-text-muted">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+function EditorSettingsSurface({
+  editorTheme,
+  setEditorTheme,
+  fontSize,
+  setFontSize,
+  wordWrap,
+  setWordWrap,
+  minimap,
+  setMinimap,
+  vimMode,
+  setVimMode,
+  splitDirection,
+  setSplitDirection,
+  splitOpen,
+  onToggleSplit,
+}: {
+  editorTheme: "vs-dark" | "vs";
+  setEditorTheme: React.Dispatch<React.SetStateAction<"vs-dark" | "vs">>;
+  fontSize: number;
+  setFontSize: React.Dispatch<React.SetStateAction<number>>;
+  wordWrap: "off" | "on";
+  setWordWrap: React.Dispatch<React.SetStateAction<"off" | "on">>;
+  minimap: boolean;
+  setMinimap: React.Dispatch<React.SetStateAction<boolean>>;
+  vimMode: boolean;
+  setVimMode: React.Dispatch<React.SetStateAction<boolean>>;
+  splitDirection: "horizontal" | "vertical";
+  setSplitDirection: React.Dispatch<React.SetStateAction<"horizontal" | "vertical">>;
+  splitOpen: boolean;
+  onToggleSplit: () => void;
+}) {
+  function persist(key: string, value: string) {
+    try { localStorage.setItem(key, value); } catch {}
+  }
+  return (
+    <div className="h-full overflow-auto bg-bg-base p-5">
+      <div className="mx-auto max-w-2xl">
+        <h2 className="text-base font-semibold text-text">Editor settings</h2>
+        <p className="mt-1 text-xs text-text-muted">Pengaturan yang sebelumnya tersebar di toolbar.</p>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <label className="rounded-lg border border-bg-border bg-bg-subtle p-3">
+            <span className="block text-xs font-medium text-text">Theme</span>
+            <select
+              className="input mt-2 w-full text-xs"
+              value={editorTheme}
+              onChange={(e) => { const value = e.target.value as "vs-dark" | "vs"; setEditorTheme(value); persist("premdev.theme", value); }}
+            >
+              <option value="vs-dark">Dark</option>
+              <option value="vs">Light</option>
+            </select>
+          </label>
+          <label className="rounded-lg border border-bg-border bg-bg-subtle p-3">
+            <span className="block text-xs font-medium text-text">Font size</span>
+            <input
+              className="input mt-2 w-full text-xs"
+              type="number"
+              min={8}
+              max={32}
+              value={fontSize}
+              onChange={(e) => { const value = Math.min(32, Math.max(8, Number(e.target.value) || 13)); setFontSize(value); persist("premdev.fontSize", String(value)); }}
+            />
+          </label>
+          <label className="flex items-center justify-between rounded-lg border border-bg-border bg-bg-subtle p-3 text-xs">
+            Word wrap
+            <input
+              type="checkbox"
+              checked={wordWrap === "on"}
+              onChange={(e) => { const value = e.target.checked ? "on" : "off"; setWordWrap(value); persist("premdev.wordWrap", value); }}
+            />
+          </label>
+          <label className="flex items-center justify-between rounded-lg border border-bg-border bg-bg-subtle p-3 text-xs">
+            Minimap
+            <input
+              type="checkbox"
+              checked={minimap}
+              onChange={(e) => { setMinimap(e.target.checked); persist("premdev.minimap", e.target.checked ? "1" : "0"); }}
+            />
+          </label>
+          <label className="flex items-center justify-between rounded-lg border border-bg-border bg-bg-subtle p-3 text-xs">
+            Vim mode
+            <input
+              type="checkbox"
+              checked={vimMode}
+              onChange={(e) => { setVimMode(e.target.checked); persist("premdev.vimMode", e.target.checked ? "1" : "0"); }}
+            />
+          </label>
+          <div className="rounded-lg border border-bg-border bg-bg-subtle p-3">
+            <span className="block text-xs font-medium text-text">Split panes</span>
+            <div className="mt-2 flex items-center gap-2">
+              <button className="btn-secondary text-xs" onClick={onToggleSplit}>{splitOpen ? "Close split" : "Open split"}</button>
+              <button
+                className="btn-secondary text-xs"
+                onClick={() => setSplitDirection((value) => value === "horizontal" ? "vertical" : "horizontal")}
+              >
+                {splitDirection === "horizontal" ? "Horizontal" : "Vertical"}
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="mt-5 rounded-lg border border-bg-border/70 bg-bg-subtle/60 p-3 text-xs text-text-muted">
+          Semua kontrol di atas berjalan langsung dari tab ini dan tidak membuka popup.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceConfigSurface({
+  workspaceId,
+  onOpenFile,
+  onClose,
+}: {
+  workspaceId: string;
+  onOpenFile: (path: string) => void;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function openConfig() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await API.post<{ path: string }>(`/workspaces/${workspaceId}/config/init`, {});
+      onOpenFile(result.path);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message ?? "Gagal membuka konfigurasi workspace.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="h-full overflow-auto bg-bg-base p-5">
+      <div className="mx-auto max-w-2xl">
+        <h2 className="text-base font-semibold text-text">Workspace configuration</h2>
+        <p className="mt-1 text-xs text-text-muted">
+          Buka file konfigurasi workspace untuk mengatur command dan environment.
+        </p>
+        <button className="btn-primary mt-5" disabled={busy} onClick={openConfig}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Settings size={14} />}
+          Open .premdev
+        </button>
+        {error && <p className="mt-3 rounded-md bg-danger/10 p-3 text-xs text-danger">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
+function DiffSurface({
+  activePath,
+  diffOriginal,
+  content,
+  editorTheme,
+  onClose,
+}: {
+  activePath: string;
+  diffOriginal: string;
+  content: string;
+  editorTheme: "vs-dark" | "vs";
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-bg-base">
+      <div className="flex shrink-0 items-center justify-between border-b border-bg-border bg-bg-panel px-4 py-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <GitBranch size={14} className="text-accent" />
+          Diff: {activePath.split("/").pop()}
+          <span className="ml-2 text-[10px] font-normal text-text-muted">Kiri = tersimpan · Kanan = perubahan</span>
+        </div>
+        <button className="btn-ghost p-1" onClick={onClose}><X size={14} /></button>
+      </div>
+      <div className="min-h-0 flex-1">
+        <DiffEditor
+          height="100%"
+          theme={editorTheme}
+          language="plaintext"
+          original={diffOriginal}
+          modified={content}
+          options={{ automaticLayout: true, minimap: { enabled: false }, readOnly: true, renderSideBySide: true }}
+        />
       </div>
     </div>
   );
@@ -3273,14 +3173,7 @@ function WorkspaceTabBar({
     active: boolean;
     onClick: () => void;
   }> = [
-    { id: "ai", label: "AI", icon: <Sparkles size={11} />, active: showAI, onClick: onOpenAI },
-    { id: "files", label: "Files", icon: <FileSearch size={11} />, active: sidePanelTab === "files", onClick: onOpenFiles },
-  ];
-  const toolTabs: Array<{ id: WorkspaceTool; label: string; icon: React.ReactNode; active: boolean }> = [
-    { id: "console", label: "Tools", icon: <Layers size={11} />, active: bottomTab === "console" },
-    { id: "preview", label: "Preview", icon: <Eye size={11} />, active: bottomTab === "preview" },
-    { id: "terminal", label: "Shell", icon: <Terminal size={11} />, active: bottomTab === "terminal" },
-    { id: "database", label: "Database", icon: <Database size={11} />, active: bottomTab === "database" },
+    // File tabs are rendered below; workspace tools live in the right Tools tab.
   ];
   return (
     <div className="flex min-w-0 shrink-0 overflow-x-auto border-b border-bg-border bg-bg-subtle/80" style={{ scrollbarWidth: "thin" }}>
@@ -3296,29 +3189,6 @@ function WorkspaceTabBar({
           {tab.label}
         </button>
       ))}
-      <button
-        onClick={onOpenCron}
-        className={`flex shrink-0 items-center gap-1.5 border-r border-bg-border px-3 py-2 text-[11px] font-medium transition ${
-          showCronJobs ? "bg-bg text-text" : "text-text-muted hover:bg-bg-hover hover:text-text"
-        }`}
-      >
-        <Clock size={11} />
-        Cron Jobs
-      </button>
-      <div className="mx-1 my-1 w-px shrink-0 bg-bg-border" />
-      {toolTabs.map((tab) => (
-        <button
-          key={tab.id}
-          onClick={() => onOpenTool(tab.id)}
-          className={`flex shrink-0 items-center gap-1.5 border-r border-bg-border px-3 py-2 text-[11px] font-medium transition ${
-            tab.active ? "bg-bg text-text" : "text-text-muted hover:bg-bg-hover hover:text-text"
-          }`}
-        >
-          {tab.icon}
-          {tab.label}
-        </button>
-      ))}
-      <div className="mx-1 my-1 w-px shrink-0 bg-bg-border" />
       {openTabs.map((tab) => {
         const fileName = tab.split("/").pop() ?? tab;
         const isActive = activePath === tab && !newTabOpen;
@@ -3386,8 +3256,8 @@ function WorkspaceTabBar({
 
 // ── CommandPalette — Ctrl+K / Ctrl+P quick-open overlay ────────────────────
 function CommandPalette({
-  workspaceId, activePath, onSelect, onClose,
-}: { workspaceId: string; activePath: string | null; onSelect: (p: string) => void; onClose: () => void }) {
+  workspaceId, activePath, onSelect, onClose, embedded = false,
+}: { workspaceId: string; activePath: string | null; onSelect: (p: string) => void; onClose: () => void; embedded?: boolean }) {
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -3412,9 +3282,11 @@ function CommandPalette({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[15vh]" onClick={onClose}>
+    <div className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[15vh]"} onClick={embedded ? undefined : onClose}>
       <div
-        className="w-full max-w-lg overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"
+        className={embedded
+          ? "flex h-full min-h-0 w-full flex-col overflow-hidden bg-bg-base"
+          : "w-full max-w-lg overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-bg-border px-3 py-2">
@@ -3430,7 +3302,7 @@ function CommandPalette({
           />
           <kbd className="rounded bg-bg-subtle px-1 py-0.5 text-[10px] text-text-muted">Esc</kbd>
         </div>
-        <ul className="max-h-80 overflow-auto py-1">
+        <ul className={embedded ? "min-h-0 flex-1 overflow-auto py-1" : "max-h-80 overflow-auto py-1"}>
           {results.length === 0 ? (
             <li className="px-3 py-2 text-xs text-text-muted">No files found</li>
           ) : results.map((n, i) => (
@@ -3747,10 +3619,12 @@ function CheckpointsModal({
   workspaceId,
   onClose,
   confirm,
+  embedded = false,
 }: {
   workspaceId: string;
   onClose: () => void;
   confirm: (o: any) => Promise<boolean>;
+  embedded?: boolean;
 }) {
   const qc = useQueryClient();
   const [msg, setMsg] = useState("");
@@ -3776,8 +3650,8 @@ function CheckpointsModal({
   });
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={onClose}>
-      <div className="card w-full max-w-2xl p-6" onClick={(e) => e.stopPropagation()}>
+    <div className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"} onClick={embedded ? undefined : onClose}>
+      <div className={embedded ? "flex h-full min-h-0 w-full flex-col overflow-auto bg-bg-base p-6" : "card w-full max-w-2xl p-6"} onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Checkpoints</h2>
           <button className="btn-ghost" onClick={onClose}>✕</button>
@@ -3797,7 +3671,7 @@ function CheckpointsModal({
             Save checkpoint
           </button>
         </div>
-        <div className="max-h-[50vh] overflow-auto">
+        <div className={embedded ? "min-h-0 flex-1 overflow-auto" : "max-h-[50vh] overflow-auto"}>
           {isLoading ? (
             <div className="text-text-muted">Loading…</div>
           ) : data?.checkpoints?.length ? (
@@ -4518,8 +4392,8 @@ function DatabasePane({ workspaceId }: { workspaceId: string }) {
 
 // ── WorkspaceSearch — Ctrl+Shift+F full-text grep across workspace ──────────
 function WorkspaceSearch({
-  workspaceId, onSelect, onClose,
-}: { workspaceId: string; onSelect: (path: string) => void; onClose: () => void }) {
+  workspaceId, onSelect, onClose, embedded = false,
+}: { workspaceId: string; onSelect: (path: string) => void; onClose: () => void; embedded?: boolean }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ path: string; line: number; text: string }[]>([]);
   const [loading, setLoading] = useState(false);
@@ -4549,10 +4423,12 @@ function WorkspaceSearch({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[10vh]" onClick={onClose}>
+    <div className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[10vh]"} onClick={embedded ? undefined : onClose}>
       <div
-        className="flex w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"
-        style={{ maxHeight: "70vh" }}
+        className={embedded
+          ? "flex h-full min-h-0 w-full flex-col overflow-hidden bg-bg-base"
+          : "flex w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"}
+        style={embedded ? undefined : { maxHeight: "70vh" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-bg-border px-3 py-2">
@@ -4607,7 +4483,7 @@ function WorkspaceSearch({
 }
 
 // ── ShareModal — generate read-only share links for workspace ───────────────
-function ShareModal({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }) {
+function ShareModal({ workspaceId, onClose, embedded = false }: { workspaceId: string; onClose: () => void; embedded?: boolean }) {
   const [tokens, setTokens] = useState<{ token: string; label: string; created_at: string }[]>([]);
   const [creating, setCreating] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -4642,9 +4518,11 @@ function ShareModal({ workspaceId, onClose }: { workspaceId: string; onClose: ()
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+    <div className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-50 flex items-center justify-center bg-black/50"} onClick={embedded ? undefined : onClose}>
       <div
-        className="w-full max-w-lg overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"
+        className={embedded
+          ? "flex h-full min-h-0 w-full flex-col overflow-hidden bg-bg-base"
+          : "w-full max-w-lg overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-bg-border px-4 py-3">
@@ -4701,7 +4579,7 @@ function ShareModal({ workspaceId, onClose }: { workspaceId: string; onClose: ()
 }
 
 // ── ActivityLogModal — workspace event timeline ──────────────────────────────
-function ActivityLogModal({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }) {
+function ActivityLogModal({ workspaceId, onClose, embedded = false }: { workspaceId: string; onClose: () => void; embedded?: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ["workspace-events", workspaceId],
     queryFn: () => API.get<{ events: { id: string; kind: string; detail?: string; created_at: string }[] }>(
@@ -4717,10 +4595,12 @@ function ActivityLogModal({ workspaceId, onClose }: { workspaceId: string; onClo
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+    <div className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-50 flex items-center justify-center bg-black/50"} onClick={embedded ? undefined : onClose}>
       <div
-        className="flex w-full max-w-lg flex-col overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"
-        style={{ maxHeight: "70vh" }}
+        className={embedded
+          ? "flex h-full min-h-0 w-full flex-col overflow-hidden bg-bg-base"
+          : "flex w-full max-w-lg flex-col overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"}
+        style={embedded ? undefined : { maxHeight: "70vh" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-bg-border px-4 py-3">
@@ -4759,8 +4639,8 @@ function ActivityLogModal({ workspaceId, onClose }: { workspaceId: string; onClo
 
 // ── WorkspaceReplace — Ctrl+Shift+H Find & Replace across workspace ──────────
 function WorkspaceReplace({
-  workspaceId, onClose, onFileOpen,
-}: { workspaceId: string; onClose: () => void; onFileOpen: (p: string) => void }) {
+  workspaceId, onClose, onFileOpen, embedded = false,
+}: { workspaceId: string; onClose: () => void; onFileOpen: (p: string) => void; embedded?: boolean }) {
   const [findQ, setFindQ] = useState("");
   const [replaceWith, setReplaceWith] = useState("");
   const [useRegex, setUseRegex] = useState(false);
@@ -4816,10 +4696,12 @@ function WorkspaceReplace({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[10vh]" onClick={onClose}>
+    <div className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[10vh]"} onClick={embedded ? undefined : onClose}>
       <div
-        className="flex w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"
-        style={{ maxHeight: "70vh" }}
+        className={embedded
+          ? "flex h-full min-h-0 w-full flex-col overflow-hidden bg-bg-base"
+          : "flex w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"}
+        style={embedded ? undefined : { maxHeight: "70vh" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-bg-border px-4 py-3">
@@ -4904,7 +4786,7 @@ function WorkspaceReplace({
 }
 
 // ── ShortcutModal — Ctrl+? keyboard shortcuts reference ──────────────────────
-function ShortcutModal({ onClose }: { onClose: () => void }) {
+function ShortcutModal({ onClose, embedded = false }: { onClose: () => void; embedded?: boolean }) {
   const groups: { title: string; items: { key: string; desc: string }[] }[] = [
     {
       title: "Editor",
@@ -4943,9 +4825,11 @@ function ShortcutModal({ onClose }: { onClose: () => void }) {
     },
   ];
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+    <div className={embedded ? "flex h-full min-h-0 flex-col bg-bg-base" : "fixed inset-0 z-50 flex items-center justify-center bg-black/50"} onClick={embedded ? undefined : onClose}>
       <div
-        className="w-full max-w-md overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"
+        className={embedded
+          ? "flex h-full min-h-0 w-full flex-col overflow-hidden bg-bg-base"
+          : "w-full max-w-md overflow-hidden rounded-lg border border-bg-border bg-bg shadow-2xl"}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-bg-border px-4 py-3">
