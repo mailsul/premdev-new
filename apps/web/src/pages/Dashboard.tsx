@@ -78,7 +78,7 @@ export default function Dashboard() {
   const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ["workspaces"],
     queryFn: async () => {
-      const result = await API.get<{ workspaces: Workspace[] }>("/workspaces", { timeoutMs: 12_000 });
+      const result = await API.get<{ workspaces: Workspace[] }>("/workspaces", { timeoutMs: 8_000 });
       writeWorkspaceCache(result);
       return result;
     },
@@ -156,7 +156,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[1, 2, 3].map((item) => <div key={item} className="surface h-48 p-5"><div className="skeleton h-10 w-10" /><div className="skeleton mt-5 h-5 w-40" /><div className="skeleton mt-2 h-4 w-24" /><div className="skeleton mt-8 h-10 w-full" /></div>)}
           </div>
-        ) : error ? (
+        ) : error && workspaces.length === 0 ? (
           <div className="surface flex flex-col items-center justify-center p-12 text-center">
             <AlertCircle size={28} className="mb-3 text-danger" />
             <div className="font-medium">Could not load workspaces</div>
@@ -164,6 +164,13 @@ export default function Dashboard() {
             <button className="btn-secondary mt-5" onClick={() => refetch()}><RefreshCw size={14} /> Try again</button>
           </div>
         ) : visibleWorkspaces.length ? (
+          <>
+          {error && (
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+              <span>Menampilkan data terakhir. Server belum merespons untuk penyegaran terbaru.</span>
+              <button className="btn-secondary shrink-0 text-xs" onClick={() => refetch()}>Coba lagi</button>
+            </div>
+          )}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {visibleWorkspaces.map((w) => {
               const tmpl = TEMPLATES.find((t) => t.id === w.template) ?? TEMPLATES[0];
@@ -261,6 +268,7 @@ export default function Dashboard() {
               );
             })}
           </div>
+          </>
         ) : (
           <div className="surface p-12 text-center">
             <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-bg-hover text-text-muted">

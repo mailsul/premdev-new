@@ -252,9 +252,9 @@ export default function EditorPage() {
 
   const { data: ws, error: wsError, refetch: wsRefetch } = useQuery({
     queryKey: ["workspace", id],
-    queryFn: () => API.get<{ workspace: Workspace }>(`/workspaces/${id}`),
+    queryFn: () => API.get<{ workspace: Workspace }>(`/workspaces/${id}`, { timeoutMs: 8_000 }),
     refetchInterval: 3000,
-    retry: 3,
+    retry: 1,
   });
 
   // When tab comes back from background (Chrome pauses hidden tabs), force

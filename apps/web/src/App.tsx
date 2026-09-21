@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useEffect, Component, type ReactNode } from "react";
 import { useAuth } from "./lib/auth";
 import { Loader2, RefreshCw } from "lucide-react";
@@ -76,9 +76,12 @@ function AdminOnly({ children }: { children: JSX.Element }) {
 
 export default function App() {
   const { check } = useAuth();
+  const location = useLocation();
   useEffect(() => {
-    check();
-  }, [check]);
+    // The login screen is public and does not need a background /auth/me
+    // request. Avoid making a cold or unavailable API delay the first paint.
+    if (location.pathname !== "/login") void check();
+  }, [check, location.pathname]);
 
   return (
     <ErrorBoundary>
