@@ -59,6 +59,13 @@ docker compose version >/dev/null 2>&1 ||
   fail "Docker Compose plugin tidak tersedia."
 
 COMPOSE=(docker compose --env-file "$APP_DIR/.env" -f "$COMPOSE_FILE")
+set -a
+# Needed to render the Caddy template after the source update. Keep this
+# aligned with redeploy.sh; values stay in the process environment only.
+. "$APP_DIR/.env"
+set +a
+export PRIMARY_DOMAIN PREVIEW_DOMAIN DEPLOY_DOMAIN LE_EMAIL CF_API_TOKEN
+HOST_DATA_DIR="${HOST_DATA_DIR:-$APP_DIR/data}"
 
 printf '[INFO] Soft deploy dimulai: %s\n' "$(date -u --iso-8601=seconds)"
 printf '[INFO] App dir: %s\n' "$APP_DIR"
@@ -78,6 +85,30 @@ NEW_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
 printf '[INFO] Commit: %s -> %s\n' "$OLD_COMMIT" "$NEW_COMMIT"
 
 run_step "validating compose configuration" "${COMPOSE[@]}" config --quiet
+
+# Code Server uses workspace-specific hosts (code-<workspaceId>.<domain>).
+# Updating only the app leaves an older Caddyfile active, which returns
+# "Unknown subdomain" before the request can reach the API. Regenerate and
+# reload Caddy during every soft deploy so proxy and app versions stay in sync.
+STEP="refreshing Caddy routing"
+if [[ -f "$APP_DIR/infra/Caddyfile.tmpl" && -n "${PRIMARY_DOMAIN:-}" && -n "${CF_API_TOKEN:-}" ]]; then
+  mkdir -p "$HOST_DATA_DIR/caddy"
+  cp "$APP_DIR/infra/Caddyfile.tmpl" "$HOST_DATA_DIR/caddy/Caddyfile.tmpl"
+  if command -v envsubst >/dev/null 2>&1; then
+    envsubst < "$HOST_DATA_DIR/caddy/Caddyfile.tmpl" > "$HOST_DATA_DIR/caddy/Caddyfile"
+    caddy_id="$("${COMPOSE[@]}" ps -q caddy 2>/dev/null || true)"
+    if [[ -n "$caddy_id" ]]; then
+      run_step "validating Caddy routing" "${COMPOSE[@]}" exec -T caddy caddy validate --config /etc/caddy/Caddyfile
+      run_step "reloading Caddy routing" "${COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force
+    else
+      printf '[WARN] Caddy container belum berjalan; file routing sudah diperbarui.\n'
+    fi
+  else
+    printf '[WARN] envsubst tidak tersedia; Caddyfile tidak diperbarui.\n'
+  fi
+else
+  printf '[WARN] Template Caddy atau kredensial domain belum tersedia; melewati refresh Caddy.\n'
+fi
 
 STEP="updating app image"
 if "${COMPOSE[@]}" pull app; then
