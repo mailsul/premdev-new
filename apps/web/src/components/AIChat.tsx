@@ -3272,8 +3272,14 @@ export function AIChat({
     <div className="flex h-full flex-col bg-bg-panel">
       <div className="flex flex-col gap-2 border-b border-bg-border px-3 py-2">
         <div className="flex items-center gap-2">
-          <Sparkles size={14} className="text-accent" />
-          <span className="text-xs font-semibold uppercase tracking-wide">AI</span>
+          <div className="grid h-6 w-6 place-items-center rounded-md bg-accent text-white">
+            <Sparkles size={13} />
+          </div>
+          <span className="text-xs font-semibold text-text">DevAgent</span>
+          <span className="flex items-center gap-1 text-[10px] text-success">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            Siap
+          </span>
           {(() => {
             // Cheap token estimate: ~4 chars per token across English/code, no
             // tokenizer dependency. Good enough to warn the user when the
@@ -3335,7 +3341,7 @@ export function AIChat({
             onClick={clearChat}
             title="Clear current tab"
           >
-            Clear
+            Clear chat
           </button>
           <button
             className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition ${
@@ -3520,19 +3526,35 @@ export function AIChat({
 
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-auto p-3 text-sm">
         {msgs.length === 0 && (
-          <div className="space-y-3 rounded-md bg-bg-subtle px-4 py-4 text-xs text-text-muted">
-            <p className="text-center font-medium text-text">Halo! Saya siap membantu.</p>
-            <p className="text-center">Katakan apa yang ingin kamu <strong>buat</strong>, <strong>perbaiki</strong>, atau <strong>pelajari</strong> — saya akan langsung kerjakan secara otomatis.</p>
+          <div className="space-y-3 rounded-xl border border-bg-border bg-bg-subtle/70 px-3 py-3 text-xs text-text-muted">
+            <div className="flex items-center gap-2">
+              <div className="grid h-7 w-7 place-items-center rounded-md bg-accent/15 text-accent">
+                <Bot size={15} />
+              </div>
+              <div>
+                <p className="font-semibold text-text">Halo! Saya DevAgent</p>
+                <p className="text-[10px] text-text-muted">Asisten coding untuk workspace ini</p>
+              </div>
+            </div>
+            <p className="leading-relaxed">Saya bisa membaca struktur file, mengedit file secara otomatis, dan menjalankan terminal dengan aman.</p>
+            <div className="rounded-lg border border-bg-border bg-bg px-3 py-2.5">
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-text">Apa yang terjadi di balik layar saat saya bekerja?</p>
+              <ul className="space-y-1 text-[10px] leading-relaxed">
+                <li><span className="font-semibold text-accent">Reasoning &amp; Thinking:</span> merencanakan solusi.</li>
+                <li><span className="font-semibold text-accent">Tool Execution:</span> membaca file, menulis perubahan, dan menjalankan test.</li>
+                <li><span className="font-semibold text-accent">Diff &amp; Patching:</span> memperlihatkan perubahan secara transparan.</li>
+              </ul>
+            </div>
             <div className="grid grid-cols-2 gap-2 pt-1">
               {[
-                { label: "🌐 Buat website", prompt: "Buatkan website landing page sederhana dengan HTML, CSS, dan JavaScript." },
-                { label: "🗄️ Setup database", prompt: "Cek database workspace ini dan import schema jika belum ada tabelnya." },
-                { label: "🔍 Review kode", prompt: "Review semua file di workspace ini, temukan bug dan masalah keamanan." },
-                { label: "🚀 Jalankan project", prompt: "Deteksi jenis project ini dan jalankan dengan perintah yang tepat." },
+                { label: "Buat website", prompt: "Buatkan website landing page sederhana dengan HTML, CSS, dan JavaScript." },
+                { label: "Setup database", prompt: "Cek database workspace ini dan import schema jika belum ada tabelnya." },
+                { label: "Review kode", prompt: "Review semua file di workspace ini, temukan bug dan masalah keamanan." },
+                { label: "Jalankan project", prompt: "Deteksi jenis project ini dan jalankan dengan perintah yang tepat." },
               ].map((s) => (
                 <button
                   key={s.label}
-                  className="rounded-md border border-bg-border bg-bg-base px-2 py-2 text-left text-[11px] text-text-muted hover:border-accent hover:text-text"
+                  className="rounded-lg border border-bg-border bg-bg px-2 py-2 text-left text-[10px] text-text-muted transition hover:border-accent hover:bg-accent/5 hover:text-text"
                   onClick={() => {
                     window.dispatchEvent(new CustomEvent("premdev:ai:prefill", {
                       detail: { text: s.prompt, send: true },
@@ -3774,6 +3796,24 @@ export function AIChat({
       </div>
 
       <div className="border-t border-bg-border p-2">
+        <div className="mb-2 flex gap-1.5 overflow-x-auto pb-0.5">
+          {[
+            { label: "Mode terang", prompt: "Aktifkan mode terang pada workspace editor." },
+            { label: "Buat lib/auth.ts", prompt: "Buat file lib/auth.ts dengan struktur autentikasi dasar yang aman." },
+            { label: "Fix responsive layout", prompt: "Periksa layout workspace dan perbaiki masalah responsive yang terlihat." },
+          ].map((chip) => (
+            <button
+              key={chip.label}
+              className="shrink-0 rounded-full border border-bg-border bg-bg-subtle px-2.5 py-1 text-[10px] text-text-muted transition hover:border-accent/50 hover:bg-accent/5 hover:text-text"
+              onClick={() => {
+                setInput(chip.prompt);
+                setTimeout(() => { try { sendBtnRef.current?.click(); } catch {} }, 50);
+              }}
+            >
+              + {chip.label}
+            </button>
+          ))}
+        </div>
         {pendingImages.length > 0 && (
           <>
             <div className="mb-2 flex flex-wrap gap-2">
@@ -4164,12 +4204,12 @@ function Bubble({
 
   return (
     <div
-      className={`rounded-md px-3 py-2 ${
+      className={`max-w-[94%] rounded-xl border px-3 py-2 ${
         isAIError
-          ? "border border-danger/30 bg-danger/5 text-text"
+          ? "border-danger/30 bg-danger/5 text-text"
           : isAssistant
-          ? "bg-bg-subtle text-text"
-          : "bg-accent/10 text-text"
+          ? "border-bg-border bg-bg-subtle text-text"
+          : "ml-auto border-accent/30 bg-accent/10 text-text"
       }`}
     >
       <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">

@@ -143,6 +143,7 @@ type WorkspaceTool =
   | "quick-actions" | "editor-settings" | "command-palette" | "workspace-search"
   | "share" | "activity" | "find-replace" | "shortcuts" | "diff";
 type WorkspaceSurface = "file" | WorkspaceTool;
+type RightDockMode = "preview" | "ai";
 
 type LayoutPreferences = {
   menuBar: boolean;
@@ -155,6 +156,7 @@ type LayoutPreferences = {
   primarySideBarPosition: "left" | "right";
   panelAlignment: "left" | "right" | "center" | "justify";
   quickInputPosition: "top" | "center" | "bottom";
+  visibleTabs: WorkspaceTool[];
 };
 
 const DEFAULT_LAYOUT_PREFERENCES: LayoutPreferences = {
@@ -162,13 +164,31 @@ const DEFAULT_LAYOUT_PREFERENCES: LayoutPreferences = {
   activityBar: true,
   secondaryActivityBar: false,
   primarySideBar: true,
-  secondarySideBar: false,
+  secondarySideBar: true,
   panel: true,
   statusBar: true,
   primarySideBarPosition: "left",
   panelAlignment: "center",
   quickInputPosition: "top",
+  visibleTabs: ["tools", "preview", "console", "terminal", "database", "cron", "git"],
 };
+
+const WORKSPACE_TAB_CATALOG: Array<{ id: WorkspaceTool; label: string; icon: React.ReactNode; group: string }> = [
+  { id: "tools", label: "Tools", icon: <Wand2 size={11} />, group: "Develop" },
+  { id: "preview", label: "Preview", icon: <Eye size={11} />, group: "Develop" },
+  { id: "console", label: "Console", icon: <Layers size={11} />, group: "Develop" },
+  { id: "terminal", label: "Shell", icon: <Terminal size={11} />, group: "Develop" },
+  { id: "database", label: "Database", icon: <Database size={11} />, group: "Develop" },
+  { id: "agent", label: "AI Agent", icon: <Bot size={11} />, group: "Configure" },
+  { id: "secrets", label: "Secrets", icon: <Lock size={11} />, group: "Configure" },
+  { id: "cron", label: "Cron Jobs", icon: <Clock size={11} />, group: "Configure" },
+  { id: "workspace-config", label: "Workspace Config", icon: <Settings size={11} />, group: "Configure" },
+  { id: "git", label: "Git", icon: <GitBranch size={11} />, group: "Ship" },
+  { id: "checkpoints", label: "Checkpoints", icon: <History size={11} />, group: "Ship" },
+  { id: "subdomain", label: "Custom Subdomain", icon: <Globe size={11} />, group: "Ship" },
+  { id: "quick-actions", label: "AI Quick Actions", icon: <Wand2 size={11} />, group: "AI & Editor" },
+  { id: "editor-settings", label: "Editor Settings", icon: <SlidersHorizontal size={11} />, group: "AI & Editor" },
+];
 
 function hashState(): { file: string | null; tool: WorkspaceTool | null } {
   if (typeof window === "undefined") return { file: null, tool: null };
@@ -209,7 +229,7 @@ export default function EditorPage() {
   const [layoutPreferences, setLayoutPreferences] = useState<LayoutPreferences>(() => {
     if (typeof window === "undefined" || !id) return DEFAULT_LAYOUT_PREFERENCES;
     try {
-      const saved = localStorage.getItem(`premdev.layout.v2.${id}`);
+      const saved = localStorage.getItem(`premdev.layout.v3.${id}`);
       if (!saved) return DEFAULT_LAYOUT_PREFERENCES;
       return { ...DEFAULT_LAYOUT_PREFERENCES, ...JSON.parse(saved) } as LayoutPreferences;
     } catch {
@@ -228,7 +248,14 @@ export default function EditorPage() {
   const [savingState, setSavingState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   // The reference workspace keeps AI available beside the main editor. Users
   // can collapse it from the top tab or the AI toolbar control.
-  const [showAI, setShowAI] = useState(true);
+  const [rightDockMode, setRightDockMode] = useState<RightDockMode>(() => {
+    if (typeof window === "undefined" || !id) return "preview";
+    try {
+      return localStorage.getItem(`premdev.right-dock.${id}`) === "ai" ? "ai" : "preview";
+    } catch {
+      return "preview";
+    }
+  });
   const [secretsOpenDbTemplate, setSecretsOpenDbTemplate] = useState(false);
   const [openTabs, setOpenTabs] = useState<string[]>(() => {
     try {
@@ -290,9 +317,14 @@ export default function EditorPage() {
   useEffect(() => {
     if (!id) return;
     try {
-      localStorage.setItem(`premdev.layout.v2.${id}`, JSON.stringify(layoutPreferences));
+       localStorage.setItem(`premdev.layout.v3.${id}`, JSON.stringify(layoutPreferences));
     } catch {}
   }, [id, layoutPreferences]);
+
+  useEffect(() => {
+    if (!id) return;
+    try { localStorage.setItem(`premdev.right-dock.${id}`, rightDockMode); } catch {}
+  }, [id, rightDockMode]);
 
   // Monaco's theme is separate from the Tailwind palette. Keep both in sync
   // so Editor Settings visibly changes the whole IDE, not only the code canvas.
@@ -579,7 +611,8 @@ export default function EditorPage() {
       // Ctrl+J → toggle AI panel
       if ((e.ctrlKey || e.metaKey) && e.key === "j") {
         e.preventDefault();
-        setShowAI((v) => !v);
+        setLayoutPreferences((current) => ({ ...current, secondarySideBar: true }));
+        setRightDockMode("ai");
       }
       // Ctrl+Shift+L → workspace layout customization
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "l") {
@@ -625,7 +658,7 @@ export default function EditorPage() {
     : savingState === "error" ? "Save failed"
     : dirty ? "Modified"
     : "Saved";
-  const showSecondarySidebar = showAI && layoutPreferences.secondarySideBar;
+  const showSecondarySidebar = layoutPreferences.secondarySideBar;
   const workspaceSidePanel = (
     <WorkspaceSidePanel
       workspaceId={id!}
@@ -680,7 +713,8 @@ export default function EditorPage() {
             embedded
             onClose={closeSurface}
             onPick={(prompt) => {
-              setShowAI(true);
+              setLayoutPreferences((current) => ({ ...current, secondarySideBar: true }));
+              setRightDockMode("ai");
               window.dispatchEvent(new CustomEvent("premdev:ai:prefill", {
                 detail: { text: prompt, send: true },
               }));
@@ -860,6 +894,19 @@ export default function EditorPage() {
           <Command size={14} /> <span className="hidden lg:inline">Command</span>
         </button>
         <button
+          className="btn-secondary"
+          onClick={() => {
+            const next = editorTheme === "vs-dark" ? "vs" : "vs-dark";
+            setEditorTheme(next);
+            try { localStorage.setItem("premdev.theme", next); } catch {}
+          }}
+          title={editorTheme === "vs-dark" ? "Aktifkan mode terang" : "Aktifkan mode gelap"}
+          aria-label={editorTheme === "vs-dark" ? "Aktifkan mode terang" : "Aktifkan mode gelap"}
+        >
+          {editorTheme === "vs-dark" ? <Sun size={14} /> : <Moon size={14} />}
+          <span className="hidden lg:inline">{editorTheme === "vs-dark" ? "Light" : "Dark"}</span>
+        </button>
+        <button
           className="btn-secondary hidden md:flex"
           onClick={() => setLayoutMenuOpen(true)}
           title="Customize workspace layout"
@@ -869,12 +916,14 @@ export default function EditorPage() {
         <button
           className={`btn-secondary ${showSecondarySidebar ? "text-accent" : ""}`}
           onClick={() => {
-            setShowAI((s) => !s);
-            setLayoutPreferences((current) => ({ ...current, secondarySideBar: !current.secondarySideBar }));
+            if (!showSecondarySidebar) {
+              setLayoutPreferences((current) => ({ ...current, secondarySideBar: true }));
+            }
+            setRightDockMode("ai");
           }}
           title="Toggle AI panel"
         >
-          <Sparkles size={14} /> AI
+          <Bot size={14} /> <span className="hidden lg:inline">AI Agent</span><span className="lg:hidden">AI</span>
         </button>
         </div>
       </header>
@@ -902,25 +951,7 @@ export default function EditorPage() {
             </>
           )}
 
-          {showSecondarySidebar && (
-            <>
-              <Panel defaultSize={compactLayout ? 30 : 22} minSize={compactLayout ? 18 : 18}>
-                <AIChat
-                  workspaceId={id!}
-                  activeFile={
-                    activePath && !isImageFile(activePath) && content
-                      ? { path: activePath, content }
-                      : undefined
-                  }
-                  onWorkspaceMutated={() => qc.invalidateQueries({ queryKey: ["workspace", id] })}
-                  onFilesMutated={() => qc.invalidateQueries({ queryKey: ["files", id] })}
-                />
-              </Panel>
-              <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
-            </>
-          )}
-
-          <Panel defaultSize={compactLayout ? 70 : (showSecondarySidebar ? 56 : 72)}>
+          <Panel defaultSize={compactLayout ? 70 : 72}>
             <PanelGroup direction="vertical">
               <Panel defaultSize={65} minSize={20}>
                 <div className="flex h-full min-h-0 flex-col">
@@ -942,11 +973,7 @@ export default function EditorPage() {
                   newTabOpen={newTabOpen}
                   bottomTab={bottomTab}
                   sidePanelTab={sidePanelTab}
-                   showAI={showSecondarySidebar}
-                  showCronJobs={activeSurface === "cron"}
-                  onOpenFiles={() => setSidePanelTab("files")}
-                  onOpenAI={() => setShowAI((value) => !value)}
-                  onOpenCron={() => openTool("cron")}
+                   visibleTabs={layoutPreferences.visibleTabs}
                   onOpenSplit={openSplit}
                   onOpenTool={(tool) => {
                     if (tool === "secrets") setSecretsOpenDbTemplate(false);
@@ -1014,7 +1041,8 @@ export default function EditorPage() {
                         const prefilled =
                           `${preface}\n\nFile: \`${path}\` (lines ${sel.startLineNumber}-${sel.endLineNumber})\n\n` +
                           "```\n" + (text || "(empty selection — entire file context implied)") + "\n```";
-                        setShowAI(true);
+                        setLayoutPreferences((current) => ({ ...current, secondarySideBar: true }));
+                        setRightDockMode("ai");
                         window.dispatchEvent(new CustomEvent("premdev:ai:prefill", {
                           detail: { text: prefilled },
                         }));
@@ -1157,11 +1185,21 @@ export default function EditorPage() {
               </Panel>
             </>
           )}
-          {!compactLayout && (
+          {!compactLayout && showSecondarySidebar && (
             <>
               <PanelResizeHandle className="w-px bg-bg-border hover:bg-accent" />
               <Panel defaultSize={26} minSize={20} maxSize={40}>
-                <WorkspacePreviewPanel
+                <WorkspaceRightDock
+                  mode={rightDockMode}
+                  onModeChange={setRightDockMode}
+                  workspaceId={id!}
+                  activeFile={
+                    activePath && !isImageFile(activePath) && content
+                      ? { path: activePath, content }
+                      : undefined
+                  }
+                  onWorkspaceMutated={() => qc.invalidateQueries({ queryKey: ["workspace", id] })}
+                  onFilesMutated={() => qc.invalidateQueries({ queryKey: ["files", id] })}
                   workspace={w}
                   onOpenTool={(tool) => {
                     if (tool === "secrets") setSecretsOpenDbTemplate(false);
@@ -2183,28 +2221,28 @@ function WorkspaceSidePanel({
   confirm: (options: any) => Promise<boolean>;
   onOpenTool: (tool: WorkspaceTool) => void;
 }) {
-  const libraryItems: Array<{ id: WorkspaceTool; label: string; description: string; icon: React.ReactNode }> = [
-    { id: "tools", label: "Tools", description: "Everything to configure, connect, and ship", icon: <Wand2 size={14} /> },
-    { id: "agent", label: "Agent Workspace", description: "Choose PremDev or Hermes per workspace", icon: <Bot size={14} /> },
-    { id: "console", label: "Console", description: "Process logs and workflows", icon: <Layers size={14} /> },
-    { id: "preview", label: "Preview", description: "Live app preview", icon: <Eye size={14} /> },
-    { id: "terminal", label: "Shell", description: "Workspace terminal", icon: <Terminal size={14} /> },
-    { id: "database", label: "Database", description: "Workspace database", icon: <Database size={14} /> },
-    { id: "cron", label: "Cron Jobs", description: "Scheduled workspace tasks", icon: <Clock size={14} /> },
-    { id: "git", label: "Git", description: "Changes, commits, and history", icon: <GitBranch size={14} /> },
-    { id: "secrets", label: "Secrets", description: "Workspace environment variables", icon: <Lock size={14} /> },
-    { id: "checkpoints", label: "Checkpoints", description: "Save and restore workspace states", icon: <History size={14} /> },
-    { id: "subdomain", label: "Custom Subdomain", description: "Configure the workspace URL", icon: <Globe size={14} /> },
-    { id: "workspace-config", label: "Workspace Config", description: "Open .premdev settings", icon: <Settings size={14} /> },
-    { id: "quick-actions", label: "AI Quick Actions", description: "Prompts for the active file", icon: <Wand2 size={14} /> },
-    { id: "editor-settings", label: "Editor Settings", description: "Theme, layout, and editor controls", icon: <SlidersHorizontal size={14} /> },
-    { id: "command-palette", label: "Command Palette", description: "Quickly open any file", icon: <Command size={14} /> },
-    { id: "workspace-search", label: "Search Workspace", description: "Find text across all files", icon: <FileSearch size={14} /> },
-    { id: "share", label: "Share Workspace", description: "Manage read-only share links", icon: <Share2 size={14} /> },
-    { id: "activity", label: "Activity Log", description: "Workspace events and notifications", icon: <Activity size={14} /> },
-    { id: "find-replace", label: "Find & Replace", description: "Replace text across files", icon: <Replace size={14} /> },
-    { id: "shortcuts", label: "Keyboard Shortcuts", description: "View available shortcuts", icon: <Keyboard size={14} /> },
-    { id: "diff", label: "File Diff", description: "Compare saved and current changes", icon: <GitBranch size={14} /> },
+  const libraryItems: Array<{ id: WorkspaceTool; label: string; description: string; icon: React.ReactNode; group: string }> = [
+    { id: "tools", label: "Tools", description: "Everything to configure, connect, and ship", icon: <Wand2 size={14} />, group: "Develop" },
+    { id: "console", label: "Console", description: "Process logs and workflows", icon: <Layers size={14} />, group: "Develop" },
+    { id: "preview", label: "Preview", description: "Live app preview", icon: <Eye size={14} />, group: "Develop" },
+    { id: "terminal", label: "Shell", description: "Workspace terminal", icon: <Terminal size={14} />, group: "Develop" },
+    { id: "database", label: "Database", description: "Workspace database", icon: <Database size={14} />, group: "Develop" },
+    { id: "agent", label: "Agent Workspace", description: "Choose PremDev or Hermes per workspace", icon: <Bot size={14} />, group: "Configure" },
+    { id: "secrets", label: "Secrets", description: "Workspace environment variables", icon: <Lock size={14} />, group: "Configure" },
+    { id: "cron", label: "Cron Jobs", description: "Scheduled workspace tasks", icon: <Clock size={14} />, group: "Configure" },
+    { id: "workspace-config", label: "Workspace Config", description: "Open .premdev settings", icon: <Settings size={14} />, group: "Configure" },
+    { id: "git", label: "Git", description: "Changes, commits, and history", icon: <GitBranch size={14} />, group: "Ship" },
+    { id: "checkpoints", label: "Checkpoints", description: "Save and restore workspace states", icon: <History size={14} />, group: "Ship" },
+    { id: "subdomain", label: "Custom Subdomain", description: "Configure the workspace URL", icon: <Globe size={14} />, group: "Ship" },
+    { id: "quick-actions", label: "AI Quick Actions", description: "Prompts for the active file", icon: <Wand2 size={14} />, group: "AI & Editor" },
+    { id: "editor-settings", label: "Editor Settings", description: "Theme, layout, and editor controls", icon: <SlidersHorizontal size={14} />, group: "AI & Editor" },
+    { id: "command-palette", label: "Command Palette", description: "Quickly open any file", icon: <Command size={14} />, group: "AI & Editor" },
+    { id: "workspace-search", label: "Search Workspace", description: "Find text across all files", icon: <FileSearch size={14} />, group: "AI & Editor" },
+    { id: "share", label: "Share Workspace", description: "Manage read-only share links", icon: <Share2 size={14} />, group: "AI & Editor" },
+    { id: "activity", label: "Activity Log", description: "Workspace events and notifications", icon: <Activity size={14} />, group: "AI & Editor" },
+    { id: "find-replace", label: "Find & Replace", description: "Replace text across files", icon: <Replace size={14} />, group: "AI & Editor" },
+    { id: "shortcuts", label: "Keyboard Shortcuts", description: "View available shortcuts", icon: <Keyboard size={14} />, group: "AI & Editor" },
+    { id: "diff", label: "File Diff", description: "Compare saved and current changes", icon: <GitBranch size={14} />, group: "AI & Editor" },
   ];
 
   return (
@@ -2241,24 +2279,31 @@ function WorkspaceSidePanel({
           <div className="mb-2 px-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
             Workspace tools
           </div>
-          <div className="space-y-1">
-            {libraryItems.map((item) => (
-              <button
-                key={item.id}
-                className="group flex w-full items-center gap-3 rounded-lg border border-transparent px-2.5 py-2.5 text-left transition hover:border-bg-border hover:bg-bg-hover"
-                onClick={() => onOpenTool(item.id)}
-              >
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-accent/10 text-accent transition group-hover:bg-accent/20">
-                  {item.icon}
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate text-xs font-semibold text-text">{item.label}</span>
-                  <span className="block truncate text-[10px] text-text-muted">{item.description}</span>
-                </span>
-                <ChevronRight size={12} className="ml-auto shrink-0 text-text-subtle opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
-              </button>
-            ))}
-          </div>
+           <div className="space-y-4">
+             {["Develop", "Configure", "Ship", "AI & Editor"].map((group) => (
+               <section key={group}>
+                 <h3 className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-accent">{group}</h3>
+                 <div className="space-y-1">
+                   {libraryItems.filter((item) => item.group === group).map((item) => (
+                     <button
+                       key={item.id}
+                       className="group flex w-full items-center gap-3 rounded-lg border border-transparent px-2.5 py-2.5 text-left transition hover:border-bg-border hover:bg-bg-hover"
+                       onClick={() => onOpenTool(item.id)}
+                     >
+                       <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-accent/10 text-accent transition group-hover:bg-accent/20">
+                         {item.icon}
+                       </span>
+                       <span className="min-w-0">
+                         <span className="block truncate text-xs font-semibold text-text">{item.label}</span>
+                         <span className="block truncate text-[10px] text-text-muted">{item.description}</span>
+                       </span>
+                       <ChevronRight size={12} className="ml-auto shrink-0 text-text-subtle opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+                     </button>
+                   ))}
+                 </div>
+               </section>
+             ))}
+           </div>
           <div className="mt-4 rounded-lg border border-bg-border/70 bg-bg-subtle/60 p-3 text-[10px] leading-relaxed text-text-muted">
              Semua tool dibuka sebagai tab workspace. Gunakan Files untuk tree, atau pilih tool untuk menampilkannya di area kerja utama.
           </div>
@@ -2435,8 +2480,8 @@ function CustomizeLayoutModal({
               </div>
             </section>
 
-            <section>
-              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Workspace Tools</h3>
+             <section>
+               <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Workspace Tools</h3>
               <div className="grid gap-2 sm:grid-cols-3">
                 {toolGroups.map((group) => (
                   <div key={group.title} className="rounded-xl border border-bg-border bg-bg-subtle/50 p-3">
@@ -2456,6 +2501,45 @@ function CustomizeLayoutModal({
                 ))}
               </div>
             </section>
+
+             <section>
+               <div className="mb-2 flex items-center justify-between gap-2">
+                 <h3 className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Workspace Tabs</h3>
+                 <span className="text-[10px] text-text-subtle">{preferences.visibleTabs.length} aktif</span>
+               </div>
+               <p className="mb-2 text-[10px] leading-relaxed text-text-muted">
+                 Pilih tab yang ingin tampil di bar editor. Urutan mengikuti grup Develop, Configure, Ship, lalu AI &amp; Editor.
+               </p>
+               <div className="space-y-2">
+                 {["Develop", "Configure", "Ship", "AI & Editor"].map((group) => (
+                   <div key={group} className="rounded-xl border border-bg-border bg-bg-subtle/50 p-2.5">
+                     <h4 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-accent">{group}</h4>
+                     <div className="grid grid-cols-2 gap-1">
+                       {WORKSPACE_TAB_CATALOG.filter((item) => item.group === group).map((item) => {
+                         const checked = preferences.visibleTabs.includes(item.id);
+                         return (
+                           <label key={item.id} className="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-[10px] text-text-muted hover:bg-bg-hover hover:text-text">
+                             <input
+                               type="checkbox"
+                               checked={checked}
+                               onChange={() => {
+                                 const next = checked
+                                   ? preferences.visibleTabs.filter((tab) => tab !== item.id)
+                                   : [...preferences.visibleTabs, item.id];
+                                 update({ visibleTabs: next });
+                               }}
+                               className="accent-accent"
+                             />
+                             <span className="text-accent">{item.icon}</span>
+                             <span className="truncate">{item.label}</span>
+                           </label>
+                         );
+                       })}
+                     </div>
+                   </div>
+                 ))}
+               </div>
+             </section>
           </div>
         </div>
 
@@ -2466,6 +2550,64 @@ function CustomizeLayoutModal({
         </footer>
       </section>
     </div>
+  );
+}
+
+function WorkspaceRightDock({
+  mode,
+  onModeChange,
+  workspaceId,
+  activeFile,
+  onWorkspaceMutated,
+  onFilesMutated,
+  workspace,
+  onOpenTool,
+}: {
+  mode: RightDockMode;
+  onModeChange: (mode: RightDockMode) => void;
+  workspaceId: string;
+  activeFile?: { path: string; content: string };
+  onWorkspaceMutated?: () => void;
+  onFilesMutated?: () => void;
+  workspace?: Workspace;
+  onOpenTool: (tool: WorkspaceTool) => void;
+}) {
+  return (
+    <aside className="flex h-full min-h-0 flex-col bg-bg-panel">
+      <div className="flex shrink-0 items-center gap-1 border-b border-bg-border bg-bg-subtle/80 px-2 py-1.5">
+        <button
+          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition ${
+            mode === "preview" ? "bg-bg text-text shadow-sm" : "text-text-muted hover:bg-bg-hover hover:text-text"
+          }`}
+          onClick={() => onModeChange("preview")}
+        >
+          <Eye size={12} /> Live Preview
+        </button>
+        <button
+          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition ${
+            mode === "ai" ? "bg-accent/15 text-accent shadow-sm" : "text-text-muted hover:bg-bg-hover hover:text-text"
+          }`}
+          onClick={() => onModeChange("ai")}
+        >
+          <Bot size={12} /> AI Agent
+        </button>
+        <span className="ml-auto hidden text-[10px] text-text-subtle xl:inline">
+          {mode === "ai" ? "Ctrl+J" : "Preview"}
+        </span>
+      </div>
+      <div className="min-h-0 flex-1">
+        {mode === "ai" ? (
+          <AIChat
+            workspaceId={workspaceId}
+            activeFile={activeFile}
+            onWorkspaceMutated={onWorkspaceMutated}
+            onFilesMutated={onFilesMutated}
+          />
+        ) : (
+          <WorkspacePreviewPanel workspace={workspace} onOpenTool={onOpenTool} />
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -3699,11 +3841,7 @@ function WorkspaceTabBar({
   newTabOpen,
   bottomTab,
   sidePanelTab,
-  showAI,
-  showCronJobs,
-  onOpenFiles,
-  onOpenAI,
-  onOpenCron,
+  visibleTabs,
   onOpenSplit,
   onOpenTool,
   onOpenFile,
@@ -3718,11 +3856,7 @@ function WorkspaceTabBar({
   newTabOpen: boolean;
   bottomTab: "console" | "terminal" | "preview" | "database";
   sidePanelTab: "files" | "library";
-  showAI: boolean;
-  showCronJobs: boolean;
-  onOpenFiles: () => void;
-  onOpenAI: () => void;
-  onOpenCron: () => void;
+  visibleTabs: WorkspaceTool[];
   onOpenSplit: (path: string) => void;
   onOpenTool: (tool: WorkspaceTool) => void;
   onOpenFile: (path: string) => void;
@@ -3731,19 +3865,13 @@ function WorkspaceTabBar({
   onCloseNewTab: () => void;
   dirty: boolean;
 }) {
-  const workspaceTabs: Array<{
-    id: string;
-    label: string;
-    icon: React.ReactNode;
-    active: boolean;
-    onClick: () => void;
-  }> = [
-    { id: "tools", label: "Tools", icon: <Wand2 size={11} />, active: activeSurface === "tools", onClick: () => onOpenTool("tools") },
-    { id: "preview", label: "Preview", icon: <Eye size={11} />, active: activeSurface === "preview", onClick: () => onOpenTool("preview") },
-    { id: "console", label: "Console", icon: <Layers size={11} />, active: activeSurface === "console", onClick: () => onOpenTool("console") },
-    { id: "terminal", label: "Shell", icon: <Terminal size={11} />, active: activeSurface === "terminal", onClick: () => onOpenTool("terminal") },
-    { id: "database", label: "Database", icon: <Database size={11} />, active: activeSurface === "database", onClick: () => onOpenTool("database") },
-  ];
+  const workspaceTabs = WORKSPACE_TAB_CATALOG
+    .filter((tab) => visibleTabs.includes(tab.id))
+    .map((tab) => ({
+      ...tab,
+      active: activeSurface === tab.id,
+      onClick: () => onOpenTool(tab.id),
+    }));
   return (
     <div className="flex min-w-0 shrink-0 overflow-x-auto border-b border-bg-border bg-bg-subtle/80" style={{ scrollbarWidth: "thin" }}>
       {workspaceTabs.map((tab) => (
