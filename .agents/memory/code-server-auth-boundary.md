@@ -3,7 +3,7 @@ name: Code Server authentication boundary
 description: Authentication behavior for private Code Server and preview URLs.
 ---
 
-Private Code Server and Code Preview paths must authenticate with the PremDev session before checking the workspace session or container state. Unauthenticated browser requests redirect to the configured PremDev app login and may return to the original private path; authenticated non-owners receive 403. An authenticated owner opening a Code Server URL may lazy-start its workspace-scoped Code Server container even when the primary workspace runtime is stopped, and startup must wait for the HTTP port rather than trusting Docker's Running state.
+Private Code Server and Code Preview paths must authenticate with the PremDev session before checking the workspace session or container state. Unauthenticated browser requests redirect to the configured PremDev app login and may return to the original private path; authenticated non-owners receive 403. An authenticated owner opening a Code Server URL may lazy-start its workspace-scoped Code Server container even when the primary workspace runtime is stopped, and startup must wait for the HTTP port rather than trusting Docker's Running state. The preferred entrypoint is the reserved code subdomain, which serves a workspace picker and navigates only after the API has prepared Code Server.
 
 **Why:** Checking workspace state first exposed a misleading “Workspace Not Running” page to logged-out users instead of the normal PremDev login flow.
 

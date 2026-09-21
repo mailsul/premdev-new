@@ -58,7 +58,7 @@ async function containerIsTrulyDead(containerName: string): Promise<boolean> {
 
 // First-party subdomains that must NEVER be treated as workspace previews.
 const RESERVED_SUBS = new Set([
-  "app", "admin", "db", "api", "ws", "preview", "deploy", "www",
+  "app", "code", "admin", "db", "api", "ws", "preview", "deploy", "www",
   "mail", "smtp", "imap", "ftp", "cpanel",
 ]);
 

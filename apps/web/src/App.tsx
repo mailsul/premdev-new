@@ -4,6 +4,7 @@ import { useAuth } from "./lib/auth";
 import { Loader2, RefreshCw } from "lucide-react";
 import LoginPage from "./pages/Login";
 import DashboardPage from "./pages/Dashboard";
+import CodeServerPortalPage from "./pages/CodeServerPortal";
 import EditorPage from "./pages/Editor";
 import AdminPage from "./pages/Admin";
 import SettingsPage from "./pages/Settings";
@@ -74,9 +75,14 @@ function AdminOnly({ children }: { children: JSX.Element }) {
   return children;
 }
 
+function isCodeServerPortalHost(): boolean {
+  return typeof window !== "undefined" && window.location.hostname.split(".")[0].toLowerCase() === "code";
+}
+
 export default function App() {
   const { check } = useAuth();
   const location = useLocation();
+  const codeServerPortal = isCodeServerPortalHost();
   useEffect(() => {
     // The login screen is public and does not need a background /auth/me
     // request. Avoid making a cold or unavailable API delay the first paint.
@@ -87,7 +93,7 @@ export default function App() {
     <ErrorBoundary>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={<Protected><DashboardPage /></Protected>} />
+        <Route path="/" element={<Protected>{codeServerPortal ? <CodeServerPortalPage /> : <DashboardPage />}</Protected>} />
         <Route path="/workspace/:id" element={<Protected><ErrorBoundary><EditorPage /></ErrorBoundary></Protected>} />
         <Route path="/settings" element={<Protected><SettingsPage /></Protected>} />
         <Route path="/admin" element={<AdminOnly><AdminPage /></AdminOnly>} />
