@@ -3,7 +3,12 @@ import http from "node:http";
 import net from "node:net";
 import { db, DbWorkspace, dnsSafe, getActiveDomains } from "../lib/db.js";
 import { config } from "../lib/config.js";
-import { docker } from "../lib/runtime.js";
+import { ensureWorkspaceDir, docker } from "../lib/runtime.js";
+import { resolveWorkspaceEnv } from "../lib/workspace-env.js";
+import {
+  codeServerIsRunning,
+  startCodeServer,
+} from "../lib/code-server.js";
 
 /**
  * Decide whether a proxy connection failure means the workspace is *truly*
@@ -151,6 +156,82 @@ function privateProxyLoginUrl(req: any): string {
     ? `?returnTo=${encodeURIComponent(req.url)}`
     : "";
   return `${scheme}://${host}/login${returnTo}`;
+}
+
+const codeServerStartLocks = new Map<string, Promise<boolean>>();
+
+/**
+ * Opening a saved Code Server URL is an explicit request to start that
+ * workspace-scoped IDE. It must not depend on the primary pw_* runtime being
+ * running, and it must recover a session row that was left stopped after a
+ * redeploy or an earlier liveness check.
+ */
+async function ensureCodeServerForOwner(workspaceId: string, ownerId: string): Promise<boolean> {
+  const existingLock = codeServerStartLocks.get(workspaceId);
+  if (existingLock) return existingLock;
+
+  const start = (async () => {
+    const row = db.prepare(`
+      SELECT w.*, u.username, u.quota_cpu, u.quota_mem_mb
+      FROM workspaces w
+      JOIN users u ON u.id = w.user_id
+      WHERE w.id = ? AND w.user_id = ?
+    `).get(workspaceId, ownerId) as (DbWorkspace & {
+      username: string;
+      quota_cpu: number;
+      quota_mem_mb: number;
+    }) | undefined;
+    if (!row) return false;
+
+    if (await codeServerIsRunning(workspaceId)) {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO code_server_sessions
+          (workspace_id, owner_id, status, code_server_port, preview_status, last_client_at, created_at, updated_at)
+        VALUES (?, ?, 'running', ?, 'stopped', ?, ?, ?)
+        ON CONFLICT(workspace_id) DO UPDATE SET
+          owner_id = excluded.owner_id,
+          status = 'running',
+          last_client_at = excluded.last_client_at,
+          updated_at = excluded.updated_at
+      `).run(workspaceId, ownerId, config.CODE_SERVER_PORT, now, now, now);
+      return true;
+    }
+
+    try {
+      const started = await startCodeServer({
+        workspaceId,
+        username: row.username,
+        cpu: row.quota_cpu,
+        memMb: Math.min(row.quota_mem_mb, 2048),
+        envVars: resolveWorkspaceEnv(row, ensureWorkspaceDir(workspaceId)),
+      });
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO code_server_sessions
+          (workspace_id, owner_id, container_id, status, code_server_port, preview_status, last_client_at, created_at, updated_at)
+        VALUES (?, ?, ?, 'running', ?, 'stopped', ?, ?, ?)
+        ON CONFLICT(workspace_id) DO UPDATE SET
+          owner_id = excluded.owner_id,
+          container_id = excluded.container_id,
+          status = 'running',
+          code_server_port = excluded.code_server_port,
+          last_client_at = excluded.last_client_at,
+          updated_at = excluded.updated_at
+      `).run(workspaceId, ownerId, started.containerId, started.port, now, now, now);
+      return true;
+    } catch (error) {
+      console.warn(`[proxy] Code Server lazy-start failed for ${workspaceId}:`, error);
+      return false;
+    }
+  })();
+
+  codeServerStartLocks.set(workspaceId, start);
+  try {
+    return await start;
+  } finally {
+    codeServerStartLocks.delete(workspaceId);
+  }
 }
 
 /**
@@ -363,9 +444,15 @@ export function setupProxy(app: FastifyInstance): void {
   // ---- Plain HTTP requests ----
   app.addHook("onRequest", async (req, reply) => {
     const privateWorkspaceId = privateWorkspaceIdFromPath(req.url ?? "");
-    if (privateWorkspaceId && !(await privateProxyUserId(req, (token) => app.jwt.verify(token)))) {
-      reply.redirect(privateProxyLoginUrl(req), 302);
-      return reply;
+    if (privateWorkspaceId) {
+      const userId = await privateProxyUserId(req, (token) => app.jwt.verify(token));
+      if (!userId) {
+        reply.redirect(privateProxyLoginUrl(req), 302);
+        return reply;
+      }
+      if ((req.url ?? "").startsWith("/code-server/")) {
+        await ensureCodeServerForOwner(privateWorkspaceId, userId);
+      }
     }
     const decision = privatePathDecision(req.url ?? "") ?? targetForHost(req.headers.host ?? "");
     if (!decision) return; // fall through to other handlers
@@ -517,10 +604,16 @@ export function setupProxy(app: FastifyInstance): void {
   // we return early so @fastify/websocket's listener handles it.
   app.server.on("upgrade", async (req, clientSocket, head) => {
     const privateWorkspaceId = privateWorkspaceIdFromPath(req.url ?? "");
-    if (privateWorkspaceId && !(await privateProxyUserId(req, (token) => app.jwt.verify(token)))) {
-      try { clientSocket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"); } catch {}
-      try { clientSocket.destroy(); } catch {}
-      return;
+    if (privateWorkspaceId) {
+      const userId = await privateProxyUserId(req, (token) => app.jwt.verify(token));
+      if (!userId) {
+        try { clientSocket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"); } catch {}
+        try { clientSocket.destroy(); } catch {}
+        return;
+      }
+      if ((req.url ?? "").startsWith("/code-server/")) {
+        await ensureCodeServerForOwner(privateWorkspaceId, userId);
+      }
     }
     const decision = privatePathDecision(req.url ?? "") ?? targetForHost(req.headers.host ?? "");
     if (!decision) return; // not a workspace upgrade — let fastify-websocket handle it
