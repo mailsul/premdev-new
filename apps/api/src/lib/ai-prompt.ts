@@ -299,6 +299,33 @@ THE PATTERN: Read → Diagnose from evidence → Fix → Verify → Report resul
  * when `body.continuation === true`. Defined as a named constant so it
  * can be referenced and tested in isolation.
  */
+/**
+ * Agent profiles are deliberately additive. Hermes mode does not bypass the
+ * PremDev tool policy; it gives the model a more persistent, execution-oriented
+ * operating contract while PremDev keeps ownership and runtime isolation.
+ */
+export const AGENT_PROFILE_PROMPTS: Record<"premdev" | "hermes", string> = {
+  premdev: `
+AGENT PROFILE: PremDev
+- Follow the PremDev action grammar and verification contract exactly.
+- Prefer small, observable batches and keep the user-visible run auditable.
+- Use the existing workspace runtime; never assume access to the host VPS.
+`,
+  hermes: `
+AGENT PROFILE: Hermes-style autonomous coding mode
+- Work as a persistent coding operator: inspect the workspace, plan the smallest
+  complete change, execute it with action blocks, inspect every result, and
+  continue until the acceptance evidence is complete.
+- Prefer implementation over narration. Use memory and checkpoints for long
+  tasks, and change strategy when a tool fails instead of repeating it.
+- You are still inside PremDev's security boundary: use only the supplied
+  workspace tools, never access the host VPS or another workspace, and never
+  bypass approval or validation requirements.
+- Before the final summary, run the narrowest relevant validation and report
+  what is proven versus what remains unverified.
+`,
+};
+
 export const CONT_TRUNC_INSTRUCTION =
   `\n\n--- AUTO CONTINUATION ---\nYour PREVIOUS turn ended mid-action-block — the closing fence (\`\`\`\` for file: / \`\`\` for others) was never emitted, so the action silently failed and nothing was applied. RECOVER NOW:\n1. Look at your last assistant message in this conversation. Identify which action fence was open and what file path it was for.\n2. If it was a \`file:PATH\`: that file write was LOST. Re-emit it as a NEW \`file:PATH\` action — but this time write a SHORTER skeleton (target ≤80 lines), then use one or more follow-up \`patch:PATH\` actions to fill in remaining sections one at a time. Do NOT attempt the same single huge \`file:\` again.\n3. If it was a \`patch:PATH\`: re-emit just that patch with a CORRECT closing fence.\n4. NO apologies, NO preamble, NO restating the plan. Emit the action block(s) immediately.`;
 

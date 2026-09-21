@@ -28,6 +28,7 @@ import {
   AUTO_PILOT_PROMPT,
   SYSTEM_PROMPT,
   CONT_TRUNC_INSTRUCTION,
+  AGENT_PROFILE_PROMPTS,
   trimHistory,
   getAIBudgets,
 } from "../lib/ai-prompt.js";
@@ -84,6 +85,7 @@ const Body = z.object({
   // already knows the stack, running processes, ports, and memory without
   // needing to emit a bash:run cat .premdev / ps aux itself.
   preFlight: z.string().max(8_000).optional(),
+  agentMode: z.enum(["premdev", "hermes"]).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -112,7 +114,11 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       .get(body.workspaceId, u.id) as DbWorkspace | undefined;
     if (!w) return reply.code(404).send({ error: "Workspace not found" });
 
-    const sys = body.autoPilot ? AUTO_PILOT_PROMPT : SYSTEM_PROMPT;
+    const agentSetting = db.prepare(`
+      SELECT mode, provider, model FROM workspace_agent_settings WHERE workspace_id = ?
+    `).get(body.workspaceId) as { mode?: "premdev" | "hermes"; provider?: string | null; model?: string | null } | undefined;
+    const agentMode = body.agentMode ?? agentSetting?.mode ?? "premdev";
+    const sys = `${body.autoPilot ? AUTO_PILOT_PROMPT : SYSTEM_PROMPT}\n${AGENT_PROFILE_PROMPTS[agentMode]}`;
     const ownerRow = db
       .prepare("SELECT username FROM users WHERE id = ?")
       .get(w.user_id) as { username?: string } | undefined;
@@ -160,7 +166,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       },
       ...trimmed,
     ];
-    let model = body.model || DEFAULT_MODELS[body.provider];
+    let model = body.model || agentSetting?.model || DEFAULT_MODELS[body.provider];
     // 9Router is user-managed. Do not accept a stale/forged model id that is
     // no longer exposed by its live /v1/models endpoint.
     if (body.provider === "9router") {

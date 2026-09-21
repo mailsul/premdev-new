@@ -1337,6 +1337,8 @@ export function AIChat({
   const [model, setModel] = useState<string>(() => {
     try { return localStorage.getItem("premdev:ai:model") ?? ""; } catch { return ""; }
   });
+  const [agentMode, setAgentMode] = useState<"premdev" | "hermes">("premdev");
+  const [agentSessionOnly, setAgentSessionOnly] = useState(false);
   const [streaming, setStreaming] = useState(false);
   // True while the 65s rate-limit quota-reset wait is in progress.
   // Keeps Stop button visible so the user can cancel the retry at any time.
@@ -1694,6 +1696,15 @@ export function AIChat({
     queryFn: () => API.get<{ providers: Provider[] }>("/ai/providers"),
     staleTime: 60_000,
   });
+  const { data: workspaceAgentConfig } = useQuery({
+    queryKey: ["workspace", workspaceId, "agent-config"],
+    queryFn: () => API.get<{ config: {
+      mode: "premdev" | "hermes";
+      provider: string | null;
+      model: string | null;
+    } }>(`/workspaces/${workspaceId}/agent-config`),
+    staleTime: 30_000,
+  });
   const { data: agentSettings } = useQuery({
     queryKey: ["ai", "agent-settings"],
     queryFn: () => API.get<{ limits: {
@@ -1933,6 +1944,16 @@ export function AIChat({
     }
   }, [providers]);
 
+  useEffect(() => {
+    const saved = workspaceAgentConfig?.config;
+    if (!saved) return;
+    setAgentMode(saved.mode);
+    if (saved.provider && providers?.providers.some((p) => p.id === saved.provider && p.configured)) {
+      setProvider(saved.provider);
+    }
+    if (saved.model) setModel(saved.model);
+  }, [workspaceAgentConfig, providers]);
+
   // ── Server-side chat history persistence ─────────────────────────────────
   // Save to server (5s debounce) as a cross-device/cross-browser backup.
   useEffect(() => {
@@ -1968,6 +1989,35 @@ export function AIChat({
     const m = p?.defaultModel ?? "";
     setModel(m);
     try { localStorage.setItem("premdev:ai:model", m); } catch {}
+  }
+
+  function changeAgentMode(mode: "premdev" | "hermes") {
+    setAgentMode(mode);
+    const hermesModel = "nousresearch/hermes-3-llama-3.1-405b:free";
+    let nextProvider = provider;
+    let nextModel = model;
+    if (mode === "hermes") {
+      const openRouter = providers?.providers.find((p) => p.id === "openrouter" && p.configured);
+      if (openRouter) {
+        nextProvider = openRouter.id;
+        nextModel = openRouter.models.includes(hermesModel)
+          ? hermesModel
+          : openRouter.defaultModel;
+        setProvider(nextProvider);
+        setModel(nextModel);
+      }
+    }
+    if (!agentSessionOnly) {
+      API.put(`/workspaces/${workspaceId}/agent-config`, {
+        mode,
+        provider: nextProvider || null,
+        model: nextModel || null,
+      }).catch(() => {
+        window.dispatchEvent(new CustomEvent("premdev:toast", {
+          detail: { kind: "error", message: "Profil agent gagal disimpan." },
+        }));
+      });
+    }
   }
 
   useEffect(() => {
@@ -2105,6 +2155,7 @@ export function AIChat({
           tabId: activeTabId,
           provider,
           model,
+            agentMode,
           autoPilot,
           // Server-authoritative signal that this turn is an auto-continuation
           // recovery from a previously truncated reply. Cannot be forged by
@@ -3285,6 +3336,29 @@ export function AIChat({
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <select
+            className="rounded-md border border-accent/40 bg-accent/5 px-2 py-1 text-xs font-medium"
+            value={agentMode}
+            onChange={(e) => changeAgentMode(e.target.value as "premdev" | "hermes")}
+            title="Pilih profil agent untuk workspace ini"
+          >
+            <option value="premdev">PremDev Agent</option>
+            <option value="hermes">Hermes Agent</option>
+          </select>
+          <label
+            className={`flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[10px] ${
+              agentSessionOnly ? "bg-warning/15 text-warning" : "bg-bg-hover text-text-muted"
+            }`}
+            title="Jika aktif, pilihan agent hanya berlaku untuk sesi ini"
+          >
+            <input
+              type="checkbox"
+              className="h-3 w-3 accent-warning"
+              checked={agentSessionOnly}
+              onChange={(e) => setAgentSessionOnly(e.target.checked)}
+            />
+            Sesi ini
+          </label>
           <select
             className="rounded-md border border-bg-border bg-bg-subtle px-2 py-1 text-xs"
             value={provider}

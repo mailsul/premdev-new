@@ -116,6 +116,55 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
+  // ── Per-workspace AI agent profile ────────────────────────────────────────
+  // The profile changes the agent's operating style/model preference only.
+  // File access, approvals, workspace ownership, and runtime isolation stay
+  // enforced by PremDev.
+  const AgentConfigBody = z.object({
+    mode: z.enum(["premdev", "hermes"]),
+    provider: z.string().min(1).max(80).nullable().optional(),
+    model: z.string().min(1).max(200).nullable().optional(),
+  });
+
+  app.get("/:id/agent-config", async (req, reply) => {
+    const u = await requireUser(req, reply);
+    if (!u) return;
+    const id = (req.params as any).id;
+    const w = db.prepare("SELECT id FROM workspaces WHERE id = ? AND user_id = ?").get(id, u.id);
+    if (!w) return reply.code(404).send({ error: "Not found" });
+    const row = db.prepare(`
+      SELECT mode, provider, model, updated_at AS updatedAt
+      FROM workspace_agent_settings WHERE workspace_id = ?
+    `).get(id) as { mode?: "premdev" | "hermes"; provider?: string | null; model?: string | null; updatedAt?: number } | undefined;
+    return {
+      config: {
+        mode: row?.mode ?? "premdev",
+        provider: row?.provider ?? null,
+        model: row?.model ?? null,
+        updatedAt: row?.updatedAt ?? null,
+      },
+    };
+  });
+
+  app.put("/:id/agent-config", async (req, reply) => {
+    const u = await requireUser(req, reply);
+    if (!u) return;
+    const id = (req.params as any).id;
+    const w = db.prepare("SELECT id FROM workspaces WHERE id = ? AND user_id = ?").get(id, u.id);
+    if (!w) return reply.code(404).send({ error: "Not found" });
+    const body = AgentConfigBody.parse(req.body ?? {});
+    db.prepare(`
+      INSERT INTO workspace_agent_settings (workspace_id, mode, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(workspace_id) DO UPDATE SET
+        mode = excluded.mode,
+        provider = excluded.provider,
+        model = excluded.model,
+        updated_at = excluded.updated_at
+    `).run(id, body.mode, body.provider ?? null, body.model ?? null, Date.now());
+    return { ok: true, config: { ...body, updatedAt: Date.now() } };
+  });
+
   // Rename workspace (update name only)
   app.put("/:id", async (req, reply) => {
     const u = await requireUser(req, reply);

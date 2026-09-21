@@ -116,6 +116,18 @@ export function initDb() {
       PRIMARY KEY (workspace_id, tab_id)
     );
 
+    -- Per-workspace AI agent profile. The workspace owner controls which
+    -- agent personality/model profile is used; the runtime and tool policy
+    -- remain owned by PremDev.
+    CREATE TABLE IF NOT EXISTS workspace_agent_settings (
+      workspace_id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL DEFAULT 'premdev' CHECK (mode IN ('premdev', 'hermes')),
+      provider TEXT,
+      model TEXT,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS share_tokens (
       token TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
@@ -173,6 +185,7 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_due ON scheduled_jobs(enabled, next_run_at);
     CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_workspace ON scheduled_jobs(workspace_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_job ON scheduled_job_runs(job_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workspace_agent_settings_updated ON workspace_agent_settings(updated_at DESC);
   `);
 
   // Owner scope was added with scheduled jobs. Keep this migration idempotent

@@ -70,6 +70,7 @@ import {
 import { API } from "@/lib/api";
 import { TerminalPane } from "@/components/Terminal";
 import { AIChat } from "@/components/AIChat";
+import { AgentSettingsPanel } from "@/components/AgentSettingsPanel";
 import { SecretsPanel } from "@/components/SecretsPanel";
 import { CronJobsPanel } from "@/components/CronJobsPanel";
 import { useConfirm } from "@/lib/useConfirm";
@@ -126,7 +127,7 @@ function isBinaryFile(p: string) {
 }
 
 type WorkspaceTool =
-  | "tools" | "console" | "terminal" | "preview" | "database" | "cron" | "secrets" | "git"
+  | "tools" | "agent" | "console" | "terminal" | "preview" | "database" | "cron" | "secrets" | "git"
   | "checkpoints" | "db-connection" | "subdomain" | "workspace-config"
   | "quick-actions" | "editor-settings" | "command-palette" | "workspace-search"
   | "share" | "activity" | "find-replace" | "shortcuts" | "diff";
@@ -145,7 +146,7 @@ function hashState(): { file: string | null; tool: WorkspaceTool | null } {
   return {
     file: file ? file.replace(/^\/+/, "") : null,
     tool: tool && [
-      "tools", "console", "terminal", "preview", "database", "cron", "secrets", "git",
+      "tools", "agent", "console", "terminal", "preview", "database", "cron", "secrets", "git",
       "checkpoints", "db-connection", "subdomain", "workspace-config",
       "quick-actions", "editor-settings", "command-palette", "workspace-search",
       "share", "activity", "find-replace", "shortcuts", "diff",
@@ -547,6 +548,8 @@ export default function EditorPage() {
     switch (activeSurface) {
       case "tools":
         return <ToolsSurface onOpenTool={openTool} />;
+      case "agent":
+        return <AgentSettingsPanel workspaceId={id!} embedded onClose={closeSurface} />;
       case "cron":
         return <CronJobsPanel workspaceId={id!} embedded onClose={closeSurface} />;
       case "git":
@@ -2024,6 +2027,7 @@ function WorkspaceSidePanel({
 }) {
   const libraryItems: Array<{ id: WorkspaceTool; label: string; description: string; icon: React.ReactNode }> = [
     { id: "tools", label: "Tools", description: "Everything to configure, connect, and ship", icon: <Wand2 size={14} /> },
+    { id: "agent", label: "Agent Workspace", description: "Choose PremDev or Hermes per workspace", icon: <Bot size={14} /> },
     { id: "console", label: "Console", description: "Process logs and workflows", icon: <Layers size={14} /> },
     { id: "preview", label: "Preview", description: "Live app preview", icon: <Eye size={14} /> },
     { id: "terminal", label: "Shell", description: "Workspace terminal", icon: <Terminal size={14} /> },
@@ -2293,6 +2297,7 @@ function ToolsSurface({ onOpenTool }: { onOpenTool: (tool: WorkspaceTool) => voi
       items: [
         { id: "db-connection", label: "Database Connection", description: "External database credentials", icon: <Database size={15} /> },
         { id: "secrets", label: "Secrets", description: "Workspace environment variables", icon: <Lock size={15} /> },
+        { id: "agent", label: "Agent Workspace", description: "Choose PremDev or Hermes per workspace", icon: <Bot size={15} /> },
         { id: "cron", label: "Cron Jobs", description: "Scheduled workspace tasks", icon: <Clock size={15} /> },
         { id: "workspace-config", label: "Workspace Config", description: "Open .premdev settings", icon: <Settings size={15} /> },
       ],
@@ -3106,6 +3111,7 @@ function NewTabPage({
 
   const TOOLS: { id: WorkspaceTool; label: string; desc: string; icon: React.ReactNode }[] = [
     { id: "tools",    label: "Tools", desc: "Everything to configure, connect, and ship", icon: <Wand2 size={18} /> },
+    { id: "agent",    label: "Agent Workspace", desc: "Choose PremDev or Hermes per workspace", icon: <Bot size={18} /> },
     { id: "console",  label: "Console", desc: "View terminal output after running your code", icon: <Layers size={18} /> },
     { id: "preview",  label: "Preview", desc: "Live preview of your running app",    icon: <Eye size={18} /> },
     { id: "terminal", label: "Shell", desc: "Shell akses langsung ke workspace",      icon: <Terminal size={18} /> },
