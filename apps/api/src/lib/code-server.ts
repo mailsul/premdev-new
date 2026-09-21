@@ -155,7 +155,6 @@ export async function startCodeServer(opts: {
     "PIP_CACHE_DIR=/home/premdev/.cache/pip",
     "PATH=/home/premdev/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
   );
-  const basePath = codeServerBasePath(opts.workspaceId);
   const container = await docker.createContainer({
     name,
     Image: config.RUNTIME_IMAGE,
@@ -167,7 +166,7 @@ export async function startCodeServer(opts: {
     Cmd: [
       "bash",
       "-lc",
-      `exec code-server --bind-addr 0.0.0.0:${config.CODE_SERVER_PORT} --auth=none --disable-telemetry --base-path=${basePath} /workspace`,
+      `exec code-server --bind-addr 0.0.0.0:${config.CODE_SERVER_PORT} --auth=none --disable-telemetry /workspace`,
     ],
     HostConfig: {
       NetworkMode: config.DOCKER_NETWORK,

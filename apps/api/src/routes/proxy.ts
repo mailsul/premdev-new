@@ -116,6 +116,7 @@ function privatePathDecision(rawUrl: string): ProxyDecision | null {
     ok: true,
     target: { containerName: `pwc_${workspaceId}`, port: config.CODE_SERVER_PORT },
     privateWorkspaceId: workspaceId,
+    rewritePrefix: `/code-server/${encodeURIComponent(workspaceId)}`,
   };
 }
 
