@@ -14,7 +14,7 @@ import {
 
 const PREVIEW_LOG = "/tmp/premdev-code-server-preview.log";
 const PREVIEW_PID = "/tmp/premdev-code-server-preview.pid";
-const CODE_SERVER_CONFIG_VERSION = "open-vsx-gallery-v1";
+const CODE_SERVER_CONFIG_VERSION = "open-vsx-gallery-v2";
 const DEFAULT_EXTENSIONS_GALLERY = JSON.stringify({
   serviceUrl: "https://open-vsx.org/vscode/gallery",
   itemUrl: "https://open-vsx.org/vscode/item",
@@ -187,7 +187,7 @@ export async function startCodeServer(opts: {
     Cmd: [
       "bash",
       "-lc",
-      `exec code-server --bind-addr 0.0.0.0:${config.CODE_SERVER_PORT} --auth=none --disable-telemetry /workspace`,
+       `exec code-server --bind-addr 0.0.0.0:${config.CODE_SERVER_PORT} --auth=none --disable-telemetry --trusted-origins=${JSON.stringify(codeServerHost(opts.workspaceId))} /workspace`,
     ],
     HostConfig: {
       NetworkMode: config.DOCKER_NETWORK,
