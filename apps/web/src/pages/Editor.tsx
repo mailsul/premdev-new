@@ -250,6 +250,14 @@ export default function EditorPage() {
   const openRequestRef = useRef(0);
   const splitRequestRef = useRef(0);
 
+  // Monaco's theme is separate from the Tailwind palette. Keep both in sync
+  // so Editor Settings visibly changes the whole IDE, not only the code canvas.
+  useEffect(() => {
+    const light = editorTheme === "vs";
+    document.documentElement.dataset.theme = light ? "light" : "dark";
+    document.documentElement.style.colorScheme = light ? "light" : "dark";
+  }, [editorTheme]);
+
   // The desktop editor has three side-by-side panes. On a phone those panes
   // must stack vertically; forcing the desktop horizontal layout made every
   // panel too narrow to use. Listen for rotation/resizing as well.
@@ -402,11 +410,12 @@ export default function EditorPage() {
 
   function openTool(tool: WorkspaceTool, options: { syncUrl?: boolean } = {}) {
     const syncUrl = options.syncUrl !== false;
+    const canonicalTool = tool === "db-connection" ? "secrets" : tool;
     setNewTabOpen(false);
-    if (syncUrl) setWorkspaceHash("tool", tool);
-    setActiveSurface(tool);
-    if (tool === "console" || tool === "terminal" || tool === "preview" || tool === "database") {
-      setBottomTab(tool);
+    if (syncUrl) setWorkspaceHash("tool", canonicalTool);
+    setActiveSurface(canonicalTool);
+    if (canonicalTool === "console" || canonicalTool === "terminal" || canonicalTool === "preview" || canonicalTool === "database") {
+      setBottomTab(canonicalTool);
     }
   }
 
@@ -2061,7 +2070,6 @@ function WorkspaceSidePanel({
     { id: "cron", label: "Cron Jobs", description: "Scheduled workspace tasks", icon: <Clock size={14} /> },
     { id: "git", label: "Git", description: "Changes, commits, and history", icon: <GitBranch size={14} /> },
     { id: "secrets", label: "Secrets", description: "Workspace environment variables", icon: <Lock size={14} /> },
-    { id: "db-connection", label: "Database Connection", description: "External database credentials", icon: <Database size={14} /> },
     { id: "checkpoints", label: "Checkpoints", description: "Save and restore workspace states", icon: <History size={14} /> },
     { id: "subdomain", label: "Custom Subdomain", description: "Configure the workspace URL", icon: <Globe size={14} /> },
     { id: "workspace-config", label: "Workspace Config", description: "Open .premdev settings", icon: <Settings size={14} /> },
@@ -2321,8 +2329,7 @@ function ToolsSurface({ onOpenTool }: { onOpenTool: (tool: WorkspaceTool) => voi
     {
       title: "Configure",
       items: [
-        { id: "db-connection", label: "Database Connection", description: "External database credentials", icon: <Database size={15} /> },
-        { id: "secrets", label: "Secrets", description: "Workspace environment variables", icon: <Lock size={15} /> },
+        { id: "secrets", label: "Secrets & Database", description: "Environment variables and external database credentials", icon: <Lock size={15} /> },
         { id: "agent", label: "Agent Workspace", description: "Choose PremDev or Hermes per workspace", icon: <Bot size={15} /> },
         { id: "cron", label: "Cron Jobs", description: "Scheduled workspace tasks", icon: <Clock size={15} /> },
         { id: "workspace-config", label: "Workspace Config", description: "Open .premdev settings", icon: <Settings size={15} /> },
@@ -2454,6 +2461,11 @@ function EditorSettingsSurface({
               <option value="vs-dark">Dark</option>
               <option value="vs">Light</option>
             </select>
+            <span className="mt-2 flex items-center gap-2 text-[10px] text-text-muted">
+              <span className="inline-block h-3 w-3 rounded-full border border-bg-border bg-[#0a0a0f]" />
+              <span className="inline-block h-3 w-3 rounded-full border border-bg-border bg-[#f8f9fc]" />
+              {editorTheme === "vs" ? "Light UI + editor" : "Dark UI + editor"}
+            </span>
           </label>
           <label className="rounded-lg border border-bg-border bg-bg-subtle p-3">
             <span className="block text-xs font-medium text-text">Font size</span>
@@ -3610,12 +3622,27 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*[mGKHF]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
 }
 
-function parseLogLine(line: string): { proc: string | null; content: string } {
+function parseLogLine(line: string): {
+  kind: "start" | "end" | "output";
+  proc: string | null;
+  command: string | null;
+  content: string;
+} {
   const clean = stripAnsi(line);
-  // Matches lines like "[web] 200 GET /" or "[runner ] start: ..."
+  // Runtime boundaries are plain text so Docker and local runtimes expose
+  // the same format: "> command" … "< command (exit 0)".
+  const start = clean.match(/^>\s*(?:\[([^\]]{1,40})\]\s*)?(.*)$/s);
+  if (start) {
+    return { kind: "start", proc: start[1]?.trim() || null, command: start[2].trim(), content: "" };
+  }
+  const end = clean.match(/^<\s*(?:\[([^\]]{1,40})\]\s*)?(.*)$/s);
+  if (end) {
+    return { kind: "end", proc: end[1]?.trim() || null, command: end[2].trim(), content: "" };
+  }
+  // Matches lines like "[web] 200 GET /" or "[runner] start: ..."
   const m = clean.match(/^\[([^\]]{1,20})\]\s*(.*)/s);
-  if (m) return { proc: m[1].trim(), content: m[2] };
-  return { proc: null, content: clean };
+  if (m) return { kind: "output", proc: m[1].trim(), command: null, content: m[2] };
+  return { kind: "output", proc: null, command: null, content: clean };
 }
 
 function ConsolePane({
@@ -3746,28 +3773,56 @@ function ConsolePane({
             (Console kosong. Klik Run untuk memulai proyek — output akan muncul di sini.)
           </span>
         ) : (
-          displayLines.map((line, i) => {
-            const { proc, content } = parseLogLine(line);
-            if (!proc) {
+          (() => {
+            const openCommands = new Set<string>();
+            return displayLines.map((line, i) => {
+              const parsed = parseLogLine(line);
+              const { proc, content } = parsed;
+              if (parsed.kind === "start") {
+                const key = proc ? `${proc}:${parsed.command}` : parsed.command ?? `command-${i}`;
+                openCommands.add(key);
+                return (
+                  <div key={i} className="my-1 flex items-center gap-2 rounded-md border border-accent/30 bg-accent/10 px-2 py-1.5 text-[11px]">
+                    <span className="font-bold text-accent">&gt;</span>
+                    {proc && <span className="rounded bg-accent/20 px-1.5 py-0.5 font-semibold text-accent">[{proc}]</span>}
+                    <span className="min-w-0 flex-1 truncate font-semibold text-text" title={parsed.command ?? ""}>{parsed.command}</span>
+                    <span className="shrink-0 text-[10px] text-accent">started</span>
+                  </div>
+                );
+              }
+              if (parsed.kind === "end") {
+                const matching = Array.from(openCommands).find((value) => proc ? value.startsWith(`${proc}:`) : true);
+                if (matching) openCommands.delete(matching);
+                return (
+                  <div key={i} className="my-1 flex items-center gap-2 rounded-md border border-bg-border bg-bg-subtle px-2 py-1 text-[11px]">
+                    <span className="font-bold text-text-muted">&lt;</span>
+                    {proc && <span className="rounded bg-bg-hover px-1.5 py-0.5 font-semibold text-text-muted">[{proc}]</span>}
+                    <span className="min-w-0 flex-1 truncate text-text-muted" title={parsed.command ?? ""}>{parsed.command}</span>
+                    <span className="shrink-0 text-[10px] text-text-muted">closed</span>
+                  </div>
+                );
+              }
+              if (!proc) {
+                return (
+                  <div key={i} className={`text-text whitespace-pre-wrap break-all ${openCommands.size > 0 ? "pl-5" : ""}`}>
+                    {content || "\u00a0"}
+                  </div>
+                );
+              }
+              const color = getProcColor(proc);
               return (
-                <div key={i} className="text-text whitespace-pre-wrap break-all">
-                  {content || "\u00a0"}
+                <div key={i} className="flex gap-0 whitespace-pre-wrap break-all pl-5">
+                  <span
+                    className="mr-2 shrink-0 font-semibold"
+                    style={{ color }}
+                  >
+                    [{proc}]
+                  </span>
+                  <span className="text-text">{content}</span>
                 </div>
               );
-            }
-            const color = getProcColor(proc);
-            return (
-              <div key={i} className="flex gap-0 whitespace-pre-wrap break-all">
-                <span
-                  className="mr-2 shrink-0 font-semibold"
-                  style={{ color }}
-                >
-                  [{proc}]
-                </span>
-                <span className="text-text">{content}</span>
-              </div>
-            );
-          })
+            });
+          })()
         )}
       </div>
     </div>

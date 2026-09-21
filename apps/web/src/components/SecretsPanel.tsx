@@ -253,10 +253,10 @@ export function SecretsPanel({
               <Lock size={16} />
             </div>
             <div>
-              <div className="text-base font-semibold">Secrets</div>
+              <div className="text-base font-semibold">Secrets &amp; Database</div>
               <p className="mt-0.5 text-xs text-text-muted">
-                Stored in <code>.premdev</code> in your workspace (file mode 0600). Visible to anyone with shell access — don't paste production keys.
-                Available inside the container as env vars: <code>getenv('KEY')</code>, <code>process.env.KEY</code>, <code>os.environ['KEY']</code>. Restart the workspace after changes.
+                Kelola secret environment dan koneksi database eksternal dari satu tempat. Semua data disimpan di <code>.premdev</code> workspace (file mode 0600).
+                Nilai tersedia di container sebagai env vars; restart workspace setelah perubahan.
               </p>
             </div>
           </div>

@@ -6,16 +6,16 @@ export default {
     extend: {
       colors: {
         bg: {
-          DEFAULT: "#0a0a0f",
-          subtle: "#11111a",
-          panel: "#16161f",
-          hover: "#1d1d28",
-          border: "#252532",
+          DEFAULT: "rgb(var(--color-bg) / <alpha-value>)",
+          subtle: "rgb(var(--color-bg-subtle) / <alpha-value>)",
+          panel: "rgb(var(--color-bg-panel) / <alpha-value>)",
+          hover: "rgb(var(--color-bg-hover) / <alpha-value>)",
+          border: "rgb(var(--color-bg-border) / <alpha-value>)",
         },
         text: {
-          DEFAULT: "#e6e6f0",
-          muted: "#9090a0",
-          subtle: "#606070",
+          DEFAULT: "rgb(var(--color-text) / <alpha-value>)",
+          muted: "rgb(var(--color-text-muted) / <alpha-value>)",
+          subtle: "rgb(var(--color-text-subtle) / <alpha-value>)",
         },
         accent: {
           DEFAULT: "#7c5cff",

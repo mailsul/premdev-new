@@ -155,6 +155,9 @@ export function startLocal(workspaceId: string, command: string, cwd: string, po
   localProcesses.set(workspaceId, proc);
   const logs: string[] = localLogs.get(workspaceId) ?? [];
   localLogs.set(workspaceId, logs);
+  // Keep local development logs in the same workflow format as Docker logs.
+  // The web console uses these boundaries to render one block per command.
+  logs.push(`\n> ${command}\n`);
   proc.stdout?.on("data", (d) => {
     const s = d.toString();
     logs.push(s);
@@ -165,7 +168,8 @@ export function startLocal(workspaceId: string, command: string, cwd: string, po
     logs.push(s);
     if (logs.length > 1000) logs.shift();
   });
-  proc.on("exit", () => {
+  proc.on("exit", (code, signal) => {
+    logs.push(`\n< ${command} (exit ${code ?? (signal ? `signal ${signal}` : 0)})\n`);
     localProcesses.delete(workspaceId);
   });
   return true;
@@ -233,12 +237,15 @@ function buildMultiProcessScript(
     // The runner: background loop with colored prefix and auto-restart
     "_pd_run() {",
     '  local name="$1" cmd="$2"',
+    "  set +e",
     "  while true; do",
-    '    printf "\\e[1;36m[%s]\\e[0m \\e[2mStarting...\\e[0m\\n" "${name}"',
+    '    printf "\\n> [%s] %s\\n" "${name}" "$cmd"',
     '    bash -lc "$cmd" 2>&1 | while IFS= read -r _pd_line; do',
     '      printf "\\e[1;36m[%s]\\e[0m %s\\n" "${name}" "${_pd_line}"',
     "    done",
-    '    printf "\\e[1;33m[%s]\\e[0m Exited — restarting in 3s...\\n" "${name}"',
+    '    _pd_status=${PIPESTATUS[0]}',
+    '    printf "< [%s] %s (exit %s)\\n" "${name}" "$cmd" "${_pd_status}"',
+    '    printf "\\e[1;33m[%s]\\e[0m restarting in 3s...\\n" "${name}"',
     "    sleep 3",
     "  done &",
     "}",
@@ -357,7 +364,13 @@ if [ -f /workspace/package-lock.json ] && [ ! -d /workspace/node_modules ]; then
   echo "[premdev] running npm ci…"; \
   cd /workspace && npm ci --silent 2>&1 | tail -20 || true; \
 fi
-cd /workspace && exec bash -lc ${JSON.stringify(opts.runCommand)}`
+cd /workspace
+printf '\\n> %s\\n' ${JSON.stringify(opts.runCommand)}
+set +e
+bash -lc ${JSON.stringify(opts.runCommand)}
+_pd_status=$?
+printf '< %s (exit %s)\\n' ${JSON.stringify(opts.runCommand)} "$_pd_status"
+exit "$_pd_status"`
       : null;
 
   // Mount docker socket supaya `docker compose up` bisa jalan dari tombol Run.
