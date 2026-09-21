@@ -4,5 +4,6 @@
 - [Browser verification boundary](browser-verification.md) — HTTP 200 is not UI proof; button claims require workspace-scoped browser evidence and console/page-error results.
 - [Agent completion evidence](agent-completion-evidence.md) — implementation, project validation, and browser verification are separate states; unavailable evidence cannot become success.
 - [API local dependency boundary](api-validation-environment.md) — the API workflow needs its app-local dev dependencies; web dependencies alone do not provide `tsx` or API TypeScript validation.
+- [API dependency security compatibility](api-dependency-security.md) — old transitive packages can be blocked by the package firewall; keep API lockfiles on public registry URLs after safe overrides.
 - [Workspace agent profile boundary](agent-profile-boundary.md) — Hermes is an additive workspace profile under PremDev isolation, not a host-level second runtime.
 - [Browser reload boot behavior](browser-reload-boot.md) — reload lag is separate from tool navigation; prioritize auth bootstrap and initial API retries.
