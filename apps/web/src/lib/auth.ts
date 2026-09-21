@@ -43,6 +43,7 @@ export const useAuth = create<AuthState>((set) => ({
   loading: !readCachedUser(),
   async check() {
     if (checkPromise) return checkPromise;
+    const cachedUser = readCachedUser();
     checkPromise = (async () => {
       try {
         // Keep a dead/cold API from holding the protected-route boot screen
@@ -50,9 +51,17 @@ export const useAuth = create<AuthState>((set) => ({
         const res = await API.get<{ user: User }>("/auth/me", { timeoutMs: 3_000, silent: true });
         cacheUser(res.user);
         set({ user: res.user, loading: false });
-      } catch {
-        cacheUser(null);
-        set({ user: null, loading: false });
+      } catch (error: any) {
+        // A timeout or a temporary 5xx does not prove that the session is
+        // invalid. Keep the last verified user so a transient API/proxy
+        // hiccup does not turn an ordinary browser refresh into a logout.
+        // Only an explicit 401 from /auth/me is authoritative logout state.
+        if (error?.status !== 401 && cachedUser) {
+          set({ user: cachedUser, loading: false });
+        } else {
+          cacheUser(null);
+          set({ user: null, loading: false });
+        }
       } finally {
         checkPromise = null;
       }

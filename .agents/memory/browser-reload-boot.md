@@ -7,4 +7,4 @@ The workspace tools were responsive after opening; the reported lag was specific
 
 **Why:** The user confirmed all tools open normally and identified the delay as occurring only during reload.
 
-**How to apply:** When diagnosing reload latency, inspect auth bootstrap and initial React Query requests before changing tool panels or editor navigation.
+**How to apply:** When diagnosing reload latency, inspect auth bootstrap and initial React Query requests before changing tool panels or editor navigation. A transport timeout or server error from `/auth/me` must preserve a cached user; only an explicit `401` should clear the session.
