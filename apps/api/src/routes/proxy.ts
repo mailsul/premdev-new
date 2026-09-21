@@ -67,6 +67,67 @@ const HOP_BY_HOP = new Set([
 ]);
 
 type Target = { containerName: string; port: number };
+type ProxyDecision =
+  | { ok: true; target: Target; privateWorkspaceId?: string; rewritePrefix?: string }
+  | { ok: false; status: number; msg: string };
+
+function privatePathDecision(rawUrl: string): ProxyDecision | null {
+  const pathname = rawUrl.split("?")[0];
+  const match = pathname.match(/^\/(code-server|code-preview)\/([^/]+)(?:\/|$)/);
+  if (!match) return null;
+  let workspaceId: string;
+  try { workspaceId = decodeURIComponent(match[2]); } catch { return { ok: false, status: 400, msg: "Invalid workspace path" }; }
+  const row = db.prepare(`
+    SELECT s.status, s.preview_status, s.preview_port
+    FROM code_server_sessions s
+    JOIN workspaces w ON w.id = s.workspace_id
+    WHERE s.workspace_id = ?
+  `).get(workspaceId) as { status?: string; preview_status?: string; preview_port?: number | null } | undefined;
+  if (!row || row.status !== "running") {
+    return { ok: false, status: 503, msg: "Code Server is not running" };
+  }
+  if (match[1] === "code-preview") {
+    if (row.preview_status !== "running" || !row.preview_port) {
+      return { ok: false, status: 503, msg: "Code Server preview is not running" };
+    }
+    return {
+      ok: true,
+      target: { containerName: `pwc_${workspaceId}`, port: row.preview_port },
+      privateWorkspaceId: workspaceId,
+      rewritePrefix: `/code-preview/${encodeURIComponent(workspaceId)}`,
+    };
+  }
+  return {
+    ok: true,
+    target: { containerName: `pwc_${workspaceId}`, port: config.CODE_SERVER_PORT },
+    privateWorkspaceId: workspaceId,
+  };
+}
+
+async function authorizePrivateProxy(req: any, workspaceId: string, verifyToken?: (token: string) => any): Promise<boolean> {
+  try {
+    let userId: string | undefined;
+    if (typeof req.jwtVerify === "function") {
+      await req.jwtVerify();
+      userId = (req.user as any)?.sub;
+    } else {
+      const cookie = String(req.headers?.cookie ?? "");
+      const raw = cookie.match(/(?:^|;\s*)token=([^;]+)/)?.[1];
+      if (!raw || !verifyToken) return false;
+      const payload = verifyToken(decodeURIComponent(raw));
+      userId = payload?.sub;
+    }
+    const row = db.prepare(`
+      SELECT 1
+      FROM code_server_sessions s
+      JOIN workspaces w ON w.id = s.workspace_id
+      WHERE s.workspace_id = ? AND s.owner_id = ? AND w.user_id = ?
+    `).get(workspaceId, userId, userId);
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * For workspaces that run multiple processes (e.g. a PHP/AdonisJS web server
@@ -104,10 +165,7 @@ function resolveSocketIOTarget(base: Target): Target {
  * "flixprem.org"). Used for domain-aware routing so that `myapp.domainA`
  * cannot accidentally hit a workspace pinned to `myapp.domainB`.
  */
-function resolveSubdomain(sub: string, incomingDomain: string):
-  | { ok: true; target: Target }
-  | { ok: false; status: number; msg: string }
-  | null {
+function resolveSubdomain(sub: string, incomingDomain: string): ProxyDecision | null {
   const primary = config.PRIMARY_DOMAIN.toLowerCase();
 
   // 1) Custom-subdomain lookup wins over the auto-form. The workspace's
@@ -209,10 +267,7 @@ function resolveSubdomain(sub: string, incomingDomain: string):
  * fall through to the rest of the app (main UI, /api, /ws, etc.).
  * Handles PRIMARY_DOMAIN and all active custom domains from the DB.
  */
-function targetForHost(rawHost: string):
-  | { ok: true; target: Target }
-  | { ok: false; status: number; msg: string }
-  | null {
+function targetForHost(rawHost: string): ProxyDecision | null {
   if (!rawHost) return null;
   const host = rawHost.toLowerCase().split(":")[0];
   const primary = config.PRIMARY_DOMAIN.toLowerCase();
@@ -283,7 +338,7 @@ function workspaceErrorHtml(title: string, body: string, statusCode: number): st
 export function setupProxy(app: FastifyInstance): void {
   // ---- Plain HTTP requests ----
   app.addHook("onRequest", async (req, reply) => {
-    const decision = targetForHost(req.headers.host ?? "");
+    const decision = privatePathDecision(req.url ?? "") ?? targetForHost(req.headers.host ?? "");
     if (!decision) return; // fall through to other handlers
     if (!decision.ok) {
       reply
@@ -296,6 +351,10 @@ export function setupProxy(app: FastifyInstance): void {
         ));
       return reply;
     }
+    if (decision.privateWorkspaceId && !(await authorizePrivateProxy(req, decision.privateWorkspaceId, (token) => app.jwt.verify(token)))) {
+      reply.code(401).header("content-type", "text/plain; charset=utf-8").send("Unauthorized");
+      return reply;
+    }
     // For Socket.IO paths, transparently route to the NODE process port so
     // that MPWA-style apps using TYPE_SERVER=hosting (socket = io()) work
     // without having to configure a separate WA_URL_SERVER.
@@ -303,6 +362,9 @@ export function setupProxy(app: FastifyInstance): void {
     if ((req.url ?? "").startsWith("/socket.io")) {
       target = resolveSocketIOTarget(target);
     }
+    const upstreamPath = decision.rewritePrefix
+      ? (req.url ?? "/").replace(decision.rewritePrefix, "") || "/"
+      : req.url;
 
     // Buffer the body up-front so we can send a precise Content-Length
     // and never resort to chunked transfer encoding. PHP's built-in dev
@@ -360,7 +422,7 @@ export function setupProxy(app: FastifyInstance): void {
         host: target.containerName,
         port: target.port,
         method,
-        path: req.url,
+         path: upstreamPath,
         headers: fwdHeaders,
         timeout: 120_000,
       }, (upRes) => {
@@ -424,13 +486,18 @@ export function setupProxy(app: FastifyInstance): void {
   // workspace-host upgrades and tunnels them as raw bidirectional sockets.
   // For non-workspace hosts (e.g. /ws/terminal/* served by the app itself),
   // we return early so @fastify/websocket's listener handles it.
-  app.server.on("upgrade", (req, clientSocket, head) => {
-    const decision = targetForHost(req.headers.host ?? "");
+  app.server.on("upgrade", async (req, clientSocket, head) => {
+    const decision = privatePathDecision(req.url ?? "") ?? targetForHost(req.headers.host ?? "");
     if (!decision) return; // not a workspace upgrade — let fastify-websocket handle it
     if (!decision.ok) {
       try {
         clientSocket.write(`HTTP/1.1 ${decision.status} ${decision.msg}\r\n\r\n`);
       } catch {}
+      try { clientSocket.destroy(); } catch {}
+      return;
+    }
+    if (decision.privateWorkspaceId && !(await authorizePrivateProxy(req, decision.privateWorkspaceId, (token) => app.jwt.verify(token)))) {
+      try { clientSocket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"); } catch {}
       try { clientSocket.destroy(); } catch {}
       return;
     }
@@ -471,7 +538,10 @@ export function setupProxy(app: FastifyInstance): void {
       // transparent to any intermediate proxy.
       const WS_STRIP = new Set(["sec-websocket-extensions"]);
 
-      const headerLines: string[] = [`${req.method} ${req.url} HTTP/1.1`];
+      const upstreamPath = decision.rewritePrefix
+        ? (req.url ?? "/").replace(decision.rewritePrefix, "") || "/"
+        : req.url;
+      const headerLines: string[] = [`${req.method} ${upstreamPath} HTTP/1.1`];
       for (const [k, v] of Object.entries(req.headers)) {
         if (WS_STRIP.has(k.toLowerCase())) continue;
         if (Array.isArray(v)) for (const vv of v) headerLines.push(`${k}: ${vv}`);

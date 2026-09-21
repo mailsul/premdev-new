@@ -28,6 +28,7 @@ import { config } from "../lib/config.js";
 import { closeWorkspaceDb } from "../lib/semantic-search.js";
 import { createProjectDb, dropProjectDb, ensureMysqlUser, ensureWorkspaceAdminUser, warmupMysqlUserCache, runWorkspaceQuery } from "../lib/mysql.js";
 import { createCheckpoint, listCheckpoints, listCheckpointFiles, restoreCheckpoint, deleteCheckpoint, deleteAllCheckpointsFor } from "../lib/checkpoints.js";
+import { stopCodeServer } from "../lib/code-server.js";
 
 /**
  * Build the full set of MySQL env vars to inject into a workspace container.
@@ -1341,6 +1342,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     if (!w) return reply.code(404).send({ error: "Not found" });
 
     if (isDocker()) {
+      await stopCodeServer(id);
       await stopContainer(id);
       await stopShellContainer(id);
     } else {

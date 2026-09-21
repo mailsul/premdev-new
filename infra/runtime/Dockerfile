@@ -51,6 +51,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
                   http-server serve vite && \
     rm -rf /var/lib/apt/lists/*
 
+# Keep the optional secondary IDE in the same runtime image as the workspace
+# tools. PremDev starts it only on demand in a workspace-scoped container.
+ARG CODE_SERVER_VERSION=4.96.4
+RUN curl -fsSL https://code-server.dev/install.sh | sh -s -- --version=${CODE_SERVER_VERSION}
+
 # Pre-install common Python web frameworks + DB drivers system-wide so
 # `python3 main.py` Just Works without `pip install` in .premdev. The
 # user's own pinned requirements.txt will still be installed on top

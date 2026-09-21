@@ -172,6 +172,25 @@ export function initDb() {
       FOREIGN KEY (job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
     );
 
+    -- Optional code-server interface for a workspace. This is intentionally
+    -- separate from the primary pw_<workspace> runtime and its preview.
+    CREATE TABLE IF NOT EXISTS code_server_sessions (
+      workspace_id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      container_id TEXT,
+      status TEXT NOT NULL DEFAULT 'stopped',
+      code_server_port INTEGER NOT NULL DEFAULT 8080,
+      preview_port INTEGER,
+      preview_pid TEXT,
+      preview_status TEXT NOT NULL DEFAULT 'stopped',
+      preview_started_at INTEGER,
+      last_client_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id);
     CREATE INDEX IF NOT EXISTS idx_workspaces_status ON workspaces(status);
     CREATE INDEX IF NOT EXISTS idx_checkpoints_workspace ON checkpoints(workspace_id);
@@ -185,6 +204,7 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_due ON scheduled_jobs(enabled, next_run_at);
     CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_workspace ON scheduled_jobs(workspace_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_job ON scheduled_job_runs(job_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_code_server_sessions_owner ON code_server_sessions(owner_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_workspace_agent_settings_updated ON workspace_agent_settings(updated_at DESC);
   `);
 

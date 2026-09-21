@@ -35,6 +35,10 @@ export const config = {
   DOCKER_NETWORK: env("DOCKER_NETWORK", "premdev_net"),
   RUNTIME_IMAGE: env("RUNTIME_IMAGE", "premdev/runtime:latest"),
   RUNTIME_DEFAULT_PORT: Number(env("RUNTIME_DEFAULT_PORT", "3000")),
+  // Optional secondary IDE. It runs in its own workspace-scoped container
+  // using the same runtime image, which must contain the `code-server` binary.
+  CODE_SERVER_PORT: Number(env("CODE_SERVER_PORT", "8080")),
+  CODE_SERVER_PREVIEW_PORT: Number(env("CODE_SERVER_PREVIEW_PORT", "4173")),
 
   MYSQL_HOST: env("MYSQL_HOST", "mysql"),
   MYSQL_PORT: Number(env("MYSQL_PORT", "3306")),

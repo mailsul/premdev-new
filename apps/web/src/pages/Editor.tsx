@@ -90,6 +90,16 @@ type Workspace = {
   runCommand?: string | null;
 };
 
+type CodeServerSession = {
+  active: boolean;
+  status: "running" | "stopped";
+  previewStatus: "running" | "stopped";
+  previewPort: number | null;
+  codeServerPath: string | null;
+  previewPath: string | null;
+  lastClientAt?: number | null;
+};
+
 type FileNode = {
   name: string;
   path: string;
@@ -313,6 +323,7 @@ export default function EditorPage() {
   const lastEditGenRef = useRef(0);
   const openRequestRef = useRef(0);
   const splitRequestRef = useRef(0);
+  const codeServerWindowRef = useRef<Window | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -357,6 +368,55 @@ export default function EditorPage() {
     refetchInterval: 10_000,
     retry: 0,
   });
+
+  const { data: codeServerData } = useQuery({
+    queryKey: ["code-server", id],
+    queryFn: () => API.get<{ session: CodeServerSession }>(`/workspaces/${id}/code-server`, { timeoutMs: 5_000, silent: true }),
+    enabled: Boolean(id),
+    refetchInterval: (query) => query.state.data?.session.active ? 5_000 : false,
+    retry: 0,
+  });
+
+  const codeServerOpen = useMutation({
+    mutationFn: () => API.post<{ session: CodeServerSession }>(`/workspaces/${id}/code-server/open`),
+    onSuccess: (result) => {
+      qc.setQueryData(["code-server", id], result);
+      const path = result.session.codeServerPath;
+      if (!path) return;
+      const popup = codeServerWindowRef.current;
+      if (popup && !popup.closed) popup.location.href = path;
+      else window.open(path, "_blank", "noopener,noreferrer");
+    },
+  });
+
+  const codeServerStop = useMutation({
+    mutationFn: () => API.post(`/workspaces/${id}/code-server/stop`),
+    onSuccess: (result) => qc.setQueryData(["code-server", id], result),
+  });
+
+  function launchCodeServer() {
+    const popup = window.open("about:blank", "_blank");
+    if (popup) {
+      try { popup.opener = null; } catch {}
+      codeServerWindowRef.current = popup;
+    }
+    codeServerOpen.mutate();
+  }
+
+  // A code-server tab is an optional secondary interface. If the user closes
+  // that tab while its separate preview is running, stop only that preview.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const popup = codeServerWindowRef.current;
+      if (!popup || !popup.closed) return;
+      codeServerWindowRef.current = null;
+      if (codeServerData?.session.previewStatus === "running") {
+        API.post(`/workspaces/${id}/code-server/preview/stop`, undefined).catch(() => {});
+        qc.invalidateQueries({ queryKey: ["code-server", id] });
+      }
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [codeServerData?.session.previewStatus, id, qc]);
 
   // When tab comes back from background (Chrome pauses hidden tabs), force
   // a refetch so the workspace status / UI is always up to date.
@@ -905,6 +965,15 @@ export default function EditorPage() {
         >
           {editorTheme === "vs-dark" ? <Sun size={14} /> : <Moon size={14} />}
           <span className="hidden lg:inline">{editorTheme === "vs-dark" ? "Light" : "Dark"}</span>
+        </button>
+        <button
+          className="btn-secondary"
+          onClick={launchCodeServer}
+          disabled={codeServerOpen.isPending}
+          title="Open this workspace in Code Server"
+        >
+          {codeServerOpen.isPending ? <Loader2 size={14} className="animate-spin" /> : <Server size={14} />}
+          <span className="hidden lg:inline">Open with Code Server</span>
         </button>
         <button
           className="btn-secondary hidden md:flex"
@@ -2604,7 +2673,7 @@ function WorkspaceRightDock({
             onFilesMutated={onFilesMutated}
           />
         ) : (
-          <WorkspacePreviewPanel workspace={workspace} onOpenTool={onOpenTool} />
+          <WorkspacePreviewPanel workspaceId={workspaceId} workspace={workspace} onOpenTool={onOpenTool} />
         )}
       </div>
     </aside>
@@ -2612,9 +2681,11 @@ function WorkspaceRightDock({
 }
 
 function WorkspacePreviewPanel({
+  workspaceId,
   workspace,
   onOpenTool,
 }: {
+  workspaceId: string;
   workspace?: Workspace;
   onOpenTool: (tool: WorkspaceTool) => void;
 }) {
@@ -2695,8 +2766,136 @@ function WorkspacePreviewPanel({
             ))}
           </div>
         </div>
+        <CodeServerCard workspaceId={workspaceId} />
       </div>
     </aside>
+  );
+}
+
+function CodeServerCard({ workspaceId }: { workspaceId: string }) {
+  const [showLogs, setShowLogs] = useState(false);
+  const codeServerWindowRef = useRef<Window | null>(null);
+  const query = useQuery({
+    queryKey: ["code-server", workspaceId],
+    queryFn: () => API.get<{ session: CodeServerSession }>(`/workspaces/${workspaceId}/code-server`, { timeoutMs: 5_000, silent: true }),
+    refetchInterval: (result) => result.state.data?.session.active ? 5_000 : false,
+    retry: 0,
+  });
+  const open = useMutation({
+    mutationFn: () => API.post<{ session: CodeServerSession }>(`/workspaces/${workspaceId}/code-server/open`),
+    onSuccess: (result) => {
+      query.refetch();
+      if (result.session.codeServerPath) {
+        const popup = codeServerWindowRef.current;
+        if (popup && !popup.closed) popup.location.href = result.session.codeServerPath;
+        else window.open(result.session.codeServerPath, "_blank");
+      }
+    },
+  });
+  const stop = useMutation({
+    mutationFn: () => API.post(`/workspaces/${workspaceId}/code-server/stop`),
+    onSuccess: () => query.refetch(),
+  });
+  const startPreview = useMutation({
+    mutationFn: () => API.post(`/workspaces/${workspaceId}/code-server/preview/start`),
+    onSuccess: () => query.refetch(),
+  });
+  const stopPreview = useMutation({
+    mutationFn: () => API.post(`/workspaces/${workspaceId}/code-server/preview/stop`),
+    onSuccess: () => query.refetch(),
+  });
+  function launch() {
+    const popup = window.open("about:blank", "_blank");
+    if (popup) {
+      try { popup.opener = null; } catch {}
+      codeServerWindowRef.current = popup;
+    }
+    open.mutate();
+  }
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const popup = codeServerWindowRef.current;
+      if (!popup || !popup.closed) return;
+      codeServerWindowRef.current = null;
+      if (query.data?.session.previewStatus === "running") stopPreview.mutate();
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [query.data?.session.previewStatus, stopPreview]);
+  const logs = useQuery({
+    queryKey: ["code-server-preview-logs", workspaceId],
+    queryFn: () => API.get<{ output: string }>(`/workspaces/${workspaceId}/code-server/preview/logs`, { timeoutMs: 5_000, silent: true }),
+    enabled: showLogs && query.data?.session.previewStatus === "running",
+    refetchInterval: showLogs ? 3_000 : false,
+    retry: 0,
+  });
+  const session = query.data?.session;
+  return (
+    <section className="mt-5 rounded-xl border border-accent/20 bg-accent/5 p-3">
+      <div className="flex items-start gap-2">
+        <Server size={15} className="mt-0.5 shrink-0 text-accent" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="text-[11px] font-semibold text-text">Code Server</p>
+            <span className={`flex items-center gap-1 text-[9px] ${session?.active ? "text-success" : "text-text-muted"}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${session?.active ? "bg-success" : "bg-text-subtle"}`} />
+              {session?.active ? "active" : "optional"}
+            </span>
+          </div>
+          <p className="mt-1 text-[10px] leading-relaxed text-text-muted">
+            IDE tambahan untuk Cline dan extension lain. Tidak menggantikan PremDev atau Preview utama.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {!session?.active ? (
+              <button className="btn-primary px-2 py-1 text-[10px]" onClick={launch} disabled={open.isPending}>
+                {open.isPending ? <Loader2 size={11} className="animate-spin" /> : <Server size={11} />}
+                Open with Code Server
+              </button>
+            ) : (
+              <>
+                <button
+                  className="btn-secondary px-2 py-1 text-[10px]"
+                  onClick={() => session.codeServerPath && window.open(session.codeServerPath, "_blank", "noopener,noreferrer")}
+                >
+                  <ExternalLink size={11} /> Open
+                </button>
+                {session.previewStatus !== "running" ? (
+                  <button className="btn-secondary px-2 py-1 text-[10px]" onClick={() => startPreview.mutate()} disabled={startPreview.isPending}>
+                    {startPreview.isPending ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />} Start preview
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      className="btn-secondary px-2 py-1 text-[10px]"
+                      onClick={() => session.previewPath && window.open(session.previewPath, "_blank", "noopener,noreferrer")}
+                    >
+                      <Eye size={11} /> Preview
+                    </button>
+                    <button className="btn-secondary px-2 py-1 text-[10px]" onClick={() => stopPreview.mutate()} disabled={stopPreview.isPending}>
+                      <Square size={11} /> Stop preview
+                    </button>
+                  </>
+                )}
+                <button className="btn-secondary px-2 py-1 text-[10px]" onClick={() => stop.mutate()} disabled={stop.isPending}>
+                  <Square size={11} /> Stop Code Server
+                </button>
+              </>
+            )}
+          </div>
+          {session?.previewStatus === "running" && session.previewPath && (
+            <div className="mt-3 overflow-hidden rounded-lg border border-bg-border bg-bg">
+              <div className="flex items-center justify-between border-b border-bg-border px-2 py-1.5 text-[9px] text-text-muted">
+                <span>Code Server Preview · port {session.previewPort}</span>
+                <button className="hover:text-text" onClick={() => setShowLogs((value) => !value)}>
+                  {showLogs ? "Hide logs" : "Logs"}
+                </button>
+              </div>
+              <iframe title="Code Server preview" src={session.previewPath} className="h-[180px] w-full bg-white" />
+              {showLogs && <pre className="max-h-32 overflow-auto border-t border-bg-border p-2 text-[9px] text-text-muted">{logs.data?.output || "Belum ada output."}</pre>}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 

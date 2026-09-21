@@ -24,6 +24,7 @@ import { apiLimiter, aiLimiter, fileWriteLimiter, loginLimiter, clientIp } from 
 import { getAllRtSettings } from "./lib/ai-settings.js";
 import { applyAIBudgets } from "./lib/ai-prompt.js";
 import { cronJobRoutes } from "./routes/cron-jobs.js";
+import { codeServerRoutes } from "./routes/code-server.js";
 import { shareRoutes, publicShareRoutes } from "./routes/share.js";
 import { startCrashMonitor, getLifecycleState } from "./lib/crash-monitor.js";
 import { startScheduler, getSchedulerState } from "./lib/scheduler.js";
@@ -147,6 +148,7 @@ await app.register(async (api) => {
   await api.register(dbRoutes, { prefix: "/db" });
   await api.register(vfsRoutes, { prefix: "/vfs" });
   await api.register(cronJobRoutes, { prefix: "/workspaces" });
+  await api.register(codeServerRoutes, { prefix: "/workspaces" });
   await api.register(shareRoutes, { prefix: "/workspaces" });
 }, { prefix: "/api" });
 
