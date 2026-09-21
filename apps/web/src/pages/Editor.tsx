@@ -3489,6 +3489,15 @@ function BottomTabs({
   const status = workspace?.status ?? "stopped";
   const [previewViewportLocal, setPreviewViewportLocal] = useState<"full" | "tablet" | "mobile">("full");
   const [previewKey, setPreviewKey] = useState(0);
+  const [visitedTabs, setVisitedTabs] = useState<Set<"console" | "terminal" | "preview" | "database">>(
+    () => new Set([tab]),
+  );
+  useEffect(() => {
+    setVisitedTabs((previous) => {
+      if (previous.has(tab)) return previous;
+      return new Set(previous).add(tab);
+    });
+  }, [tab]);
   const tabs: { id: "console" | "terminal" | "preview" | "database"; label: string; icon?: JSX.Element }[] = [
     { id: "console",  label: "Workflows", icon: <Layers size={11} /> },
     { id: "terminal", label: "Shell", icon: <Terminal size={11} /> },
@@ -3526,20 +3535,20 @@ function BottomTabs({
         </div>
       )}
       {/*
-        Keep all panes mounted at all times so the terminal session and
-        preview iframe survive tab switches. We use `hidden` instead of
-        conditional render — switching tabs no longer drops the WS or
-        wipes scrollback.
+        Mount the active pane immediately and keep panes mounted after their
+        first visit. This preserves terminal scrollback when switching tabs
+        without opening a terminal WebSocket, preview iframe, and all polling
+        queries during every workspace reload.
       */}
       <div className="relative flex-1 overflow-hidden">
         <div className={`absolute inset-0 ${tab === "console" ? "" : "hidden"}`}>
-          <ConsolePane workspaceId={workspaceId} status={status} />
+          {visitedTabs.has("console") && <ConsolePane workspaceId={workspaceId} status={status} />}
         </div>
         <div className={`absolute inset-0 ${tab === "terminal" ? "" : "hidden"}`}>
-          <TerminalPane workspaceId={workspaceId} />
+          {visitedTabs.has("terminal") && <TerminalPane workspaceId={workspaceId} />}
         </div>
         <div className={`absolute inset-0 flex flex-col ${tab === "preview" ? "" : "hidden"}`}>
-          {workspace?.previewUrl && (
+          {visitedTabs.has("preview") && workspace?.previewUrl && (
             <div className="flex shrink-0 items-center gap-1 border-b border-bg-border bg-bg-subtle/80 px-2 py-1.5">
               <button onClick={() => setPreviewViewportLocal("full")} className={`btn-ghost p-1 ${previewViewportLocal==="full"?"text-accent":""}`} title="Desktop"><Monitor size={13}/></button>
               <button onClick={() => setPreviewViewportLocal("tablet")} className={`btn-ghost p-1 ${previewViewportLocal==="tablet"?"text-accent":""}`} title="Tablet (768px)"><Tablet size={13}/></button>
@@ -3553,6 +3562,7 @@ function BottomTabs({
               <iframe
                 key={`${workspace.previewUrl}-${previewKey}`}
                 src={workspace.previewUrl}
+                loading="lazy"
                 className="h-full bg-white shadow-lg"
                 style={{
                   width: previewViewportLocal==="mobile"?"375px":previewViewportLocal==="tablet"?"768px":"100%",
@@ -3569,7 +3579,7 @@ function BottomTabs({
           </div>
         </div>
         <div className={`absolute inset-0 ${tab === "database" ? "" : "hidden"}`}>
-          <DatabasePane workspaceId={workspaceId} />
+          {visitedTabs.has("database") && <DatabasePane workspaceId={workspaceId} />}
         </div>
       </div>
     </div>
