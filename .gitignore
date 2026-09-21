@@ -10,6 +10,7 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
+apps/api/data/
 backup_db/
 
 # Zip archives

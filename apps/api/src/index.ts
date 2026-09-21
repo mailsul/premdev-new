@@ -110,10 +110,18 @@ app.addHook("onRequest", async (req, reply) => {
   if (url === "/api/health") return;
   const ip = clientIp(req);
   const isAi = url.startsWith("/api/ai/");
+  // SSE streams stay open for the duration of a model round. They do not
+  // represent a new AI request and must not consume the user's AI bucket.
+  // The active-jobs endpoint is also bookkeeping, not a provider call.
+  const isAiStreamOrBookkeeping =
+    /^\/api\/ai\/chat\/jobs\/(?:[^/]+\/stream|active)(?:\?|$)/.test(url) &&
+    ["GET", "HEAD", "OPTIONS"].includes(req.method);
   const isFileWrite =
     /^\/api\/workspaces\/[^/]+\/(?:files(?:\/(?:create|delete|rename|upload))?|upload-zip)(?:\?|$)/.test(url) &&
     !["GET", "HEAD", "OPTIONS"].includes(req.method);
-  const ok = isAi
+  const ok = isAiStreamOrBookkeeping
+    ? true
+    : isAi
     ? aiLimiter.take(`ai:${ip}`)
     : isFileWrite
       ? fileWriteLimiter.take(`file-write:${ip}`)

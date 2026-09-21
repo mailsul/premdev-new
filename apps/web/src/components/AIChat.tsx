@@ -123,8 +123,13 @@ function parseAIError(raw: string): string {
     /^(?:<!--)?__PROVIDER_ERROR__\s+status=\d+\s+retryable=(?:true|false)(?:\s+code=\S+)?(?:-->)?\s*\n?/i,
     "",
   );
+  // Keep the raw response around so the user can distinguish a PremDev
+  // limiter failure from an upstream/provider failure. The short message is
+  // useful in a bubble, but the diagnostic fields are essential for recovery.
   // Strip leading "Error: NNN " prefix that fetchJson adds
   let s = raw.replace(/^Error:\s*\d+\s*/i, "").trim();
+  const rawDetail = s;
+  let metadata = "";
   // Try to extract the human message from nested JSON
   try {
     const data = JSON.parse(s);
@@ -133,10 +138,22 @@ function parseAIError(raw: string): string {
       data?.message ||
       data?.error ||
       "";
+    const fields = [
+      data?.code,
+      data?.source,
+      typeof data?.retryable === "boolean" ? `retryable=${data.retryable}` : "",
+    ].filter(Boolean);
+    metadata = fields.join(" · ");
     if (msg) s = msg;
   } catch { /* not JSON — use as-is */ }
   if (/PREMDEV_RATE_LIMIT|source["']?\s*:\s*["']?premdev|premdev internal rate limit/i.test(s)) {
-    return "PremDev internal rate limit tercapai. Ini bukan error 9Router/provider; tunggu sebentar atau kirim ulang manual.";
+    const detail = rawDetail.length > 900 ? `${rawDetail.slice(0, 897)}…` : rawDetail;
+    return [
+      "PremDev internal rate limit tercapai.",
+      "Ini bukan error 9Router/provider.",
+      metadata ? `Sumber: ${metadata}` : "",
+      `Detail: ${detail}`,
+    ].filter(Boolean).join("\n");
   }
   // Normalize common error patterns into short friendly messages
   if (/request too large|context.*length|token.*limit|exceed.*token|tpm.*limit|tokens per minute/i.test(s)) {
@@ -157,8 +174,9 @@ function parseAIError(raw: string): string {
   if (/model.*not.*found|404/i.test(s)) {
     return `Model tidak ditemukan — coba pilih model lain dari dropdown.`;
   }
-  // Trim to 200 chars so a massive JSON blob doesn't overflow the bubble
-  return s.length > 200 ? s.slice(0, 197) + "…" : s;
+  // Preserve enough detail to diagnose the exact provider/HTTP failure. The
+  // Bubble renders this in a scrollable diagnostic panel instead of hiding it.
+  return s.length > 1400 ? s.slice(0, 1397) + "…" : s;
 }
 
 function isPremDevInternalError(text: string): boolean {
@@ -187,6 +205,14 @@ function isRetryableProviderErrorText(text: string): boolean {
   // clearly describe a transient condition. Generic warnings and HTTP 400
   // validation errors must stop immediately.
   return /rate.?limit|HTTP\s*429|server error\s*\((?:5\d\d)\)|overload|timeout/i.test(text);
+}
+
+function splitRecoveryProtocol(text: string): { visible: string; protocol: string | null } {
+  const match = text.match(/(?:^|\n)(RECOVERY PROTOCOL[\s\S]*?)(?=\n\s*Tool results:|\s*$)/i);
+  if (!match) return { visible: text, protocol: null };
+  const protocol = match[1].trim();
+  const visible = text.replace(match[0], "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return { visible, protocol };
 }
 
 // Match the backend's per-image cap (~5 MB raw → ~7 MB base64).
@@ -465,7 +491,10 @@ function formatToolResults(actions: Action[], results: ActionResult[], maxOutput
 
     // Collect errors for structured analysis injection below.
     if (!ok) {
-      errorActions.push({ label: actionLabel(a), output: trimmed.slice(0, 400) });
+      errorActions.push({
+        label: actionLabel(a),
+        output: trimmed.slice(0, Math.min(maxOutputChars, 4000)),
+      });
     }
   });
 
@@ -1719,9 +1748,9 @@ export function AIChat({
     staleTime: 30_000,
   });
   const agentLimits = agentSettings?.limits ?? {
-    maxActions: 30,
-    maxRuntimeSeconds: 600,
-    maxContinuations: 3,
+    maxActions: 0,
+    maxRuntimeSeconds: 0,
+    maxContinuations: 0,
     maxProviderRetries: 2,
     maxToolOutputChars: 12000,
     maxProviderRoundSeconds: 180,
@@ -2038,6 +2067,7 @@ export function AIChat({
     // sent to the AI after the user explicitly cancelled.
     if (stoppedRef.current) return;
     if (
+      agentLimits.maxRuntimeSeconds > 0 &&
       sessionStartRef.current > 0 &&
       Date.now() - sessionStartRef.current >= agentLimits.maxRuntimeSeconds * 1000
     ) {
@@ -2056,7 +2086,10 @@ export function AIChat({
       return;
     }
     if (opts?.continuation) {
-      if (continuationCountRef.current >= agentLimits.maxContinuations) {
+      if (
+        agentLimits.maxContinuations > 0 &&
+        continuationCountRef.current >= agentLimits.maxContinuations
+      ) {
         stoppedRef.current = true;
         setAgentRunStatus("limit_reached");
         setMsgs((cur) => [
@@ -2112,9 +2145,11 @@ export function AIChat({
 
     const ac = new AbortController();
     abortRef.current = ac;
-    const runRemainingMs = sessionStartRef.current > 0
-      ? Math.max(1, sessionStartRef.current + agentLimits.maxRuntimeSeconds * 1000 - Date.now())
-      : agentLimits.maxRuntimeSeconds * 1000;
+    const runRemainingMs = agentLimits.maxRuntimeSeconds > 0
+      ? sessionStartRef.current > 0
+        ? Math.max(1, sessionStartRef.current + agentLimits.maxRuntimeSeconds * 1000 - Date.now())
+        : agentLimits.maxRuntimeSeconds * 1000
+      : Number.POSITIVE_INFINITY;
     const roundTimer = setTimeout(() => {
       const jobId = activeJobIdRef.current;
       if (jobId) {
@@ -2582,6 +2617,24 @@ export function AIChat({
     }
     abortRef.current?.abort();
     actionAbortRef.current?.abort();
+  }
+
+  // Resume from the last tool result without making the user retype the task.
+  // Reset only per-segment counters; the plan, recovery evidence, and chat
+  // history stay in the context for the next model turn.
+  function resumeFromLastStop() {
+    if (streaming || autoExecuting) return;
+    stoppedRef.current = false;
+    continuationCountRef.current = 0;
+    if (agentLimits.maxRuntimeSeconds > 0) sessionStartRef.current = Date.now();
+    if (agentLimits.maxActions > 0) sessionActionsRef.current = 0;
+    finalVerifyDoneRef.current = false;
+    setAgentRunStatus("running");
+    void sendRaw(
+      "[LANJUTKAN TASK DARI HASIL TERAKHIR]\nJangan mengulang action yang sudah berhasil. Baca error lengkap yang terakhir, perbaiki root cause, jalankan validasi yang relevan, lalu lanjutkan sampai acceptance criteria terpenuhi.",
+      undefined,
+      { synthetic: true, hidden: true, eventType: "system" },
+    );
   }
 
   // Queue a message typed while the AI is still running. Called from the
@@ -3061,12 +3114,14 @@ export function AIChat({
       }
       const results: ActionResult[] = [];
       let recoveryActionAdded = false;
-      const sessionDeadline = sessionStartRef.current + agentLimits.maxRuntimeSeconds * 1000;
+      const sessionDeadline = agentLimits.maxRuntimeSeconds > 0
+        ? sessionStartRef.current + agentLimits.maxRuntimeSeconds * 1000
+        : Number.POSITIVE_INFINITY;
       for (let i = 0; i < toRun.length; i++) {
         if (stoppedRef.current) break;
         const remainingMs = sessionDeadline - Date.now();
         if (
-          sessionActionsRef.current >= agentLimits.maxActions ||
+          (agentLimits.maxActions > 0 && sessionActionsRef.current >= agentLimits.maxActions) ||
           remainingMs <= 0
         ) {
           stoppedRef.current = true;
@@ -3075,7 +3130,7 @@ export function AIChat({
             ...prev,
             {
               role: "assistant" as const,
-              content: sessionActionsRef.current >= agentLimits.maxActions
+              content: agentLimits.maxActions > 0 && sessionActionsRef.current >= agentLimits.maxActions
                 ? `⚠️ **Batas action tercapai** — ${agentLimits.maxActions} action dijalankan.`
                 : `⚠️ **Batas durasi tercapai** — run dihentikan setelah ${agentLimits.maxRuntimeSeconds} detik.`,
               synthetic: true,
@@ -3090,7 +3145,9 @@ export function AIChat({
         actionAbortRef.current = ac;
         setAgentRunStatus("waiting_tool");
         let stopAfterAction = false;
-        const actionTimer = setTimeout(() => ac.abort(), remainingMs);
+        const actionTimer = Number.isFinite(remainingMs)
+          ? setTimeout(() => ac.abort(), remainingMs)
+          : null;
         // Show realtime activity label in the status bar while action runs.
         setCurrentActivity(actionLabel(toRun[i]));
         const r = await runAction(workspaceId, toRun[i], ac.signal, {
@@ -3098,7 +3155,7 @@ export function AIChat({
           model,
           explicitDatabaseDeletion: explicitDatabaseDeletionRef.current,
         });
-        clearTimeout(actionTimer);
+        if (actionTimer) clearTimeout(actionTimer);
         actionAbortRef.current = null;
         results[i] = r;
         recordExecution(toRun[i], r);
@@ -3594,24 +3651,46 @@ export function AIChat({
             <span className="min-w-0 truncate">{currentActivity}</span>
           </div>
         )}
-        {agentRunStatus !== "idle" && !streaming && !autoExecuting && (
-          <div className={`mx-1 my-0.5 rounded-md border px-2.5 py-1 text-[10px] ${
-            agentRunStatus === "completed"
-              ? "border-success/25 bg-success/5 text-success"
-              : agentRunStatus === "limit_reached" || agentRunStatus === "failed"
-                ? "border-warning/30 bg-warning/5 text-warning"
-                : "border-bg-border bg-bg-subtle text-text-muted"
-          }`}>
-            Agent Run: {
-              agentRunStatus === "completed" ? "selesai" :
-              agentRunStatus === "limit_reached" ? "dihentikan oleh batas" :
-              agentRunStatus === "failed" ? "gagal" :
-              agentRunStatus === "stopped" ? "dihentikan user" :
-              agentRunStatus === "waiting_tool" ? "menunggu hasil tool" :
-              "berjalan"
-            }
-          </div>
-        )}
+        {agentRunStatus !== "idle" && !streaming && !autoExecuting && (() => {
+          const latestRunNote = [...msgs]
+            .reverse()
+            .find((m) => m.synthetic && !m.hidden && !m.continuation && m.content?.trim());
+          const needsResume =
+            agentRunStatus === "limit_reached" || agentRunStatus === "failed";
+          return (
+            <div className={`mx-1 my-0.5 rounded-md border px-2.5 py-2 text-[10px] ${
+              agentRunStatus === "completed"
+                ? "border-success/25 bg-success/5 text-success"
+                : needsResume
+                  ? "border-warning/30 bg-warning/5 text-warning"
+                  : "border-bg-border bg-bg-subtle text-text-muted"
+            }`}>
+              <div className="flex items-center gap-1.5 font-medium">
+                <span>Agent Run: {
+                  agentRunStatus === "completed" ? "selesai" :
+                  agentRunStatus === "limit_reached" ? "dihentikan oleh batas" :
+                  agentRunStatus === "failed" ? "gagal" :
+                  agentRunStatus === "stopped" ? "dihentikan user" :
+                  agentRunStatus === "waiting_tool" ? "menunggu hasil tool" :
+                  "berjalan"
+                }</span>
+                {needsResume && (
+                  <button
+                    className="ml-auto flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[10px] text-accent hover:bg-accent/20"
+                    onClick={resumeFromLastStop}
+                  >
+                    <RotateCcw size={10} /> Lanjutkan
+                  </button>
+                )}
+              </div>
+              {needsResume && latestRunNote && (
+                <div className="mt-1.5 max-h-40 overflow-auto border-t border-current/10 pt-1.5 text-text-muted">
+                  <Markdown text={latestRunNote.content} />
+                </div>
+              )}
+            </div>
+          );
+        })()}
         {rateLimitWaiting && (
           <div className="mx-1 my-0.5 flex items-center gap-1.5 rounded-md border border-warning/30 bg-warning/5 px-2.5 py-1.5 text-[11px] text-warning">
             <Loader2 size={10} className="animate-spin shrink-0" />
@@ -4045,6 +4124,8 @@ function Bubble({
     : { actions: [], cleaned: msg.content };
   const actions = parsed.actions;
   const cleanText = parsed.cleaned;
+  const recoveryView = isAssistant ? splitRecoveryProtocol(cleanText) : { visible: cleanText, protocol: null };
+  const visibleText = recoveryView.visible;
   // Truncate long synthetic "Tool results" user messages to keep the UI tidy.
   const isToolResults = !isAssistant && msg.content.startsWith("Tool results:");
 
@@ -4111,7 +4192,14 @@ function Bubble({
 
       {isAIError ? (
         <div className="space-y-2">
-          <p className="text-[11px] leading-relaxed text-danger/90">{aiErrorText}</p>
+          <div className="rounded border border-danger/20 bg-danger/5 px-2 py-1.5">
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-danger/80">
+              Detail error
+            </div>
+            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-danger/90">
+              {aiErrorText}
+            </pre>
+          </div>
           <button
             className="flex items-center gap-1 rounded border border-danger/30 px-2 py-0.5 text-[10px] text-danger/80 hover:bg-danger/10 transition"
             onClick={() => window.dispatchEvent(new CustomEvent("premdev:ai:retry"))}
@@ -4141,7 +4229,17 @@ function Bubble({
               <span>Model mengulangi teks yang sama — kemungkinan bingung atau model kurang kapabel. Coba ganti model atau ubah perintah.</span>
             </div>
           )}
-          <Markdown text={cleanText || (isLast && isStreaming ? "" : cleanText)} isStreaming={isStreaming} />
+          <Markdown text={visibleText || (isLast && isStreaming ? "" : visibleText)} isStreaming={isStreaming} />
+          {recoveryView.protocol && (
+            <details className="mt-2 rounded border border-warning/20 bg-warning/5 px-2 py-1.5 text-[10px] text-text-muted">
+              <summary className="cursor-pointer select-none font-medium text-warning/90">
+                Detail recovery protocol
+              </summary>
+              <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono leading-relaxed">
+                {recoveryView.protocol}
+              </pre>
+            </details>
+          )}
         </>
       ) : (
         <div className="whitespace-pre-wrap leading-relaxed">{cleanText}</div>

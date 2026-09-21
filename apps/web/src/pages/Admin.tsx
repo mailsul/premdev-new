@@ -1903,9 +1903,9 @@ const RATE_FIELDS: SettingField[] = [
 ];
 
 const AGENT_FIELDS: SettingField[] = [
-  { key: "ai.agent.maxActions",              label: "Agent — max actions/run",       hint: "Batas total tool/action yang dapat dijalankan dalam satu task. Aman untuk task besar dan subagent, tetapi tetap memiliki hard ceiling.", min: 1, max: 200, step: 1 },
-  { key: "ai.agent.maxRuntimeSeconds",       label: "Agent — max durasi (detik)",    hint: "Batas waktu satu run agent, termasuk action dan continuation.", min: 30, max: 3600, step: 30 },
-  { key: "ai.agent.maxContinuations",        label: "Agent — max continuation",      hint: "Continuation otomatis hanya boleh setelah tool result. 0 = dimatikan.", min: 0, max: 20, step: 1 },
+  { key: "ai.agent.maxActions",              label: "Agent — max actions/run",       hint: "Batas action per sesi. Tombol ∞ membuat sesi dapat terus bekerja sampai selesai atau dihentikan oleh safety guard.", min: 0, max: 200, step: 1, unlimitedAllowed: true },
+  { key: "ai.agent.maxRuntimeSeconds",       label: "Agent — max durasi (detik)",    hint: "Batas waktu sesi agent. Tombol ∞ menghapus batas waktu konfigurasi; timeout provider dan safety guard tetap berlaku.", min: 0, max: 3600, step: 30, unlimitedAllowed: true },
+  { key: "ai.agent.maxContinuations",        label: "Agent — max continuation",      hint: "Jumlah putaran lanjutan setelah hasil tool. Tombol ∞ mencegah agent berhenti hanya karena continuation.", min: 0, max: 20, step: 1, unlimitedAllowed: true },
   { key: "ai.agent.maxProviderRetries",     label: "Agent — max retry provider",    hint: "Retry otomatis untuk error upstream/provider. Rate limit internal PremDev tidak dianggap error provider.", min: 0, max: 5, step: 1 },
   { key: "ai.agent.maxToolOutputChars",     label: "Agent — max output tool",       hint: "Output tool yang diteruskan kembali ke model per hasil. Minimal 4000 agar diagnosis/error tidak terpotong terlalu agresif.", min: 4000, max: 50000, step: 1000 },
   { key: "ai.agent.maxProviderRoundSeconds",label: "Agent — timeout provider",      hint: "Timeout untuk satu giliran provider sebelum run dianggap gagal.", min: 30, max: 600, step: 30 },
@@ -1997,9 +1997,9 @@ function AIRuntimeSettingsSection() {
           <Shield size={14} className="text-accent" /> Batas Agent
         </h3>
         <p className="mb-4 text-xs text-text-muted">
-          Satu user request diperlakukan sebagai satu Agent Run. Batas ini berlaku tanpa restart dan tidak dapat
-          dinaikkan melewati hard ceiling keselamatan di server. Nilai lebih besar berguna untuk task panjang atau subagent,
-          tetapi concurrent run tetap berisiko konflik pada file dan database workspace.
+          Tombol ∞ hanya tersedia untuk action, durasi sesi, dan continuation. Ini mencegah agent berhenti di tengah
+          pekerjaan panjang seperti membangun website. Retry provider, output tool, riwayat konteks, dan concurrent run
+          tetap dibatasi agar error upstream, biaya, konteks, dan konflik file tidak menjadi loop tak terkendali.
         </p>
         <div className="space-y-4">
           {AGENT_FIELDS.map((f) => (
@@ -2014,9 +2014,24 @@ function AIRuntimeSettingsSection() {
         </div>
         <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-bg-border pt-4">
           <button
+            className="btn-primary !py-1.5 text-xs"
+            onClick={() => {
+              const unlimitedSession: RtSettings = {
+                "ai.agent.maxActions": 0,
+                "ai.agent.maxRuntimeSeconds": 0,
+                "ai.agent.maxContinuations": 0,
+              };
+              setDraft((d) => ({ ...d, ...unlimitedSession }));
+              setSaved(false);
+              setErr("");
+            }}
+          >
+            ∞ Aktifkan sesi unlimited
+          </button>
+          <button
             className="btn-secondary !py-1.5 text-xs"
             onClick={() => {
-              const profile: RtSettings = {
+            const profile: RtSettings = {
                 "ai.agent.maxActions": 100,
                 "ai.agent.maxRuntimeSeconds": 1800,
                 "ai.agent.maxContinuations": 8,
@@ -2033,7 +2048,7 @@ function AIRuntimeSettingsSection() {
             <Sparkles size={12} /> Terapkan profil Website Builder
           </button>
           <span className="text-[11px] text-text-muted">
-            Batas lebih besar tetapi tetap finite; concurrency tetap 1 untuk mencegah konflik file.
+            Sesi unlimited tetap memakai retry provider, output tool, context, concurrency, loop detection, dan command safety.
           </span>
         </div>
       </section>

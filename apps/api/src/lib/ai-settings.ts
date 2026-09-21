@@ -169,11 +169,12 @@ export const RT_DEFAULTS: Record<RtSettingKey, number> = {
   "ai.rate.apiRefillPerSec":          2,
   "ai.rate.aiCapacity":               30,
   "ai.rate.aiRefillPerSec":           0.2,
-  // Agent safety limits. These are deliberately finite; Admin may tune them
-  // upward for larger/sub-agent workflows, but never beyond RT_BOUNDS.
-  "ai.agent.maxActions":              30,
-  "ai.agent.maxRuntimeSeconds":       600,
-  "ai.agent.maxContinuations":        3,
+  // A value of 0 means no user-configured boundary for the session. The
+  // runtime still keeps non-configurable safety guards (workspace isolation,
+  // command validation, loop detection, and provider transport protection).
+  "ai.agent.maxActions":              0,
+  "ai.agent.maxRuntimeSeconds":       0,
+  "ai.agent.maxContinuations":        0,
   "ai.agent.maxProviderRetries":      2,
   "ai.agent.maxToolOutputChars":      12000,
   "ai.agent.maxProviderRoundSeconds": 180,
@@ -192,8 +193,8 @@ export const RT_BOUNDS: Record<RtSettingKey, { min: number; max: number }> = {
   "ai.rate.apiRefillPerSec":          { min: 0.1, max: 100 },
   "ai.rate.aiCapacity":               { min: 0, max: 500 },
   "ai.rate.aiRefillPerSec":           { min: 0.01, max: 10 },
-  "ai.agent.maxActions":              { min: 1, max: 200 },
-  "ai.agent.maxRuntimeSeconds":       { min: 30, max: 3600 },
+  "ai.agent.maxActions":              { min: 0, max: 200 },
+  "ai.agent.maxRuntimeSeconds":       { min: 0, max: 3600 },
   "ai.agent.maxContinuations":        { min: 0, max: 20 },
   "ai.agent.maxProviderRetries":      { min: 0, max: 5 },
   // 1k is too small for diagnostics and error output: it causes the agent to

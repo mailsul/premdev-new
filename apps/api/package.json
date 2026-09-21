@@ -40,5 +40,13 @@
     "@types/yauzl": "^2.10.3",
     "tsx": "^4.19.1",
     "typescript": "^5.6.2"
+  },
+  "overrides": {
+    "@xenova/transformers": {
+      "onnxruntime-web": "1.30.0"
+    },
+    "@fastify/jwt": {
+      "fast-jwt": "6.3.3"
+    }
   }
 }
