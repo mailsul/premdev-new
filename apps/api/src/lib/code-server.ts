@@ -14,6 +14,13 @@ import {
 
 const PREVIEW_LOG = "/tmp/premdev-code-server-preview.log";
 const PREVIEW_PID = "/tmp/premdev-code-server-preview.pid";
+const CODE_SERVER_CONFIG_VERSION = "open-vsx-gallery-v1";
+const DEFAULT_EXTENSIONS_GALLERY = JSON.stringify({
+  serviceUrl: "https://open-vsx.org/vscode/gallery",
+  itemUrl: "https://open-vsx.org/vscode/item",
+  publisherUrl: "https://open-vsx.org/vscode/publisher",
+  resourceUrlTemplate: "https://open-vsx.org/vscode-unpkg/{publisher}/{name}/{version}/{path}",
+});
 
 export function codeServerContainerName(workspaceId: string): string {
   return `pwc_${workspaceId}`;
@@ -137,7 +144,8 @@ export async function startCodeServer(opts: {
   try {
     const existing = docker.getContainer(name);
     const info = await existing.inspect();
-    if (info.State?.Running && !info.State?.Paused && !info.State?.Dead) {
+    const hasCurrentConfig = info.Config?.Labels?.["premdev.code-server.config"] === CODE_SERVER_CONFIG_VERSION;
+    if (hasCurrentConfig && info.State?.Running && !info.State?.Paused && !info.State?.Dead) {
       try {
         await waitForCodeServerReady(opts.workspaceId);
         return { containerId: info.Id, port: config.CODE_SERVER_PORT };
@@ -152,7 +160,15 @@ export async function startCodeServer(opts: {
   await ensureRuntimeImage();
   const wsHostDir = workspaceHostPath(opts.workspaceId);
   const homeHostDir = ensureCodeServerHome(opts.workspaceId);
-  const env = Object.entries(opts.envVars).map(([key, value]) => `${key}=${value}`);
+  const envVars = {
+    ...opts.envVars,
+    // Keep the gallery explicit instead of relying on product.json from the
+    // runtime image. This also makes freshly built/older images behave the
+    // same way and prevents the Extensions view from waiting on an undefined
+    // gallery service.
+    EXTENSIONS_GALLERY: opts.envVars.EXTENSIONS_GALLERY?.trim() || DEFAULT_EXTENSIONS_GALLERY,
+  };
+  const env = Object.entries(envVars).map(([key, value]) => `${key}=${value}`);
   env.push(
     "HOME=/home/premdev",
     "USER=premdev",
@@ -190,6 +206,7 @@ export async function startCodeServer(opts: {
       "premdev.interface": "code-server",
       "premdev.workspace": opts.workspaceId,
       "premdev.user": opts.username,
+      "premdev.code-server.config": CODE_SERVER_CONFIG_VERSION,
     },
   });
   await container.start();

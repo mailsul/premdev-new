@@ -7,4 +7,4 @@ Private Code Server and Code Preview paths must authenticate with the PremDev se
 
 **Why:** Checking workspace state first exposed a misleading “Workspace Not Running” page to logged-out users instead of the normal PremDev login flow.
 
-**How to apply:** Keep the auth gate ahead of private-path routing for both HTTP requests and WebSocket upgrades. Use the configured app/deploy domain for the login URL and only accept same-origin relative return paths. Serialize lazy-start requests per workspace so parallel browser asset/WebSocket requests do not create duplicate containers.
+**How to apply:** Keep the auth gate ahead of private-path routing for both HTTP requests and WebSocket upgrades. Use the configured app/deploy domain for the login URL and only accept same-origin relative return paths. Serialize lazy-start requests per workspace so parallel browser asset/WebSocket requests do not create duplicate containers. Configure Open VSX explicitly for each Code Server container and version the container config so old long-lived containers are recreated after config changes.
