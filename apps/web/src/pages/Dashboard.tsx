@@ -78,12 +78,13 @@ export default function Dashboard() {
   const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ["workspaces"],
     queryFn: async () => {
-      const result = await API.get<{ workspaces: Workspace[] }>("/workspaces", { timeoutMs: 8_000 });
+      const result = await API.get<{ workspaces: Workspace[] }>("/workspaces", { timeoutMs: 5_000 });
       writeWorkspaceCache(result);
       return result;
     },
     initialData: readWorkspaceCache,
     initialDataUpdatedAt: 0,
+    retry: 0,
   });
   const workspaces = data?.workspaces ?? [];
   const visibleWorkspaces = useMemo(() => workspaces.filter((workspace) => {

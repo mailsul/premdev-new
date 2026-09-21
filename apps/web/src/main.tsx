@@ -12,7 +12,12 @@ const qc = new QueryClient({
       refetchOnReconnect: true,
       staleTime: 30_000,
       gcTime: 10 * 60_000,
-      retry: (failureCount, error: any) => error?.status === 401 ? false : failureCount < 1,
+      retry: (failureCount, error: any) => {
+        // A dead API should fail once, not hold every mounted panel through
+        // another full timeout. Keep one retry only for real server errors.
+        if (error?.status === 0 || error?.status === 401) return false;
+        return failureCount < 1;
+      },
     },
   },
 });

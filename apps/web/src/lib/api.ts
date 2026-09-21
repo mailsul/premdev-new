@@ -47,6 +47,9 @@ export async function api<T = any>(
       ...requestOpts,
       headers,
       credentials: "include",
+      // API state must not be served from a browser's old HTTP cache. This
+      // matters after a deploy when an older tab survives for a long time.
+      cache: "no-store",
       signal: controller.signal,
     });
   } catch (cause: any) {

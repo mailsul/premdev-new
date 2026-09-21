@@ -106,6 +106,17 @@ type Checkpoint = {
 };
 
 const AUTO_SAVE_DELAY_MS = 1500;
+const WORKSPACE_CACHE_KEY = "premdev:workspace:";
+
+function readWorkspaceCache(id: string | undefined): { workspace: Workspace } | undefined {
+  if (!id) return undefined;
+  try {
+    const raw = sessionStorage.getItem(`${WORKSPACE_CACHE_KEY}${id}`);
+    return raw ? JSON.parse(raw) as { workspace: Workspace } : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp", ".tiff"]);
 function isImageFile(p: string) {
@@ -252,9 +263,15 @@ export default function EditorPage() {
 
   const { data: ws, error: wsError, refetch: wsRefetch } = useQuery({
     queryKey: ["workspace", id],
-    queryFn: () => API.get<{ workspace: Workspace }>(`/workspaces/${id}`, { timeoutMs: 8_000 }),
-    refetchInterval: 3000,
-    retry: 1,
+    queryFn: async () => {
+      const result = await API.get<{ workspace: Workspace }>(`/workspaces/${id}`, { timeoutMs: 5_000 });
+      try { sessionStorage.setItem(`${WORKSPACE_CACHE_KEY}${id}`, JSON.stringify(result)); } catch {}
+      return result;
+    },
+    initialData: () => readWorkspaceCache(id),
+    initialDataUpdatedAt: 0,
+    refetchInterval: 10_000,
+    retry: 0,
   });
 
   // When tab comes back from background (Chrome pauses hidden tabs), force

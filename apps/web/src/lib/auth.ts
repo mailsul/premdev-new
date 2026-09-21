@@ -47,7 +47,7 @@ export const useAuth = create<AuthState>((set) => ({
       try {
         // Keep a dead/cold API from holding the protected-route boot screen
         // for the full generic request timeout.
-        const res = await API.get<{ user: User }>("/auth/me", { timeoutMs: 5_000, silent: true });
+        const res = await API.get<{ user: User }>("/auth/me", { timeoutMs: 3_000, silent: true });
         cacheUser(res.user);
         set({ user: res.user, loading: false });
       } catch {
