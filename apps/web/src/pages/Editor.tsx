@@ -144,6 +144,32 @@ type WorkspaceTool =
   | "share" | "activity" | "find-replace" | "shortcuts" | "diff";
 type WorkspaceSurface = "file" | WorkspaceTool;
 
+type LayoutPreferences = {
+  menuBar: boolean;
+  activityBar: boolean;
+  secondaryActivityBar: boolean;
+  primarySideBar: boolean;
+  secondarySideBar: boolean;
+  panel: boolean;
+  statusBar: boolean;
+  primarySideBarPosition: "left" | "right";
+  panelAlignment: "left" | "right" | "center" | "justify";
+  quickInputPosition: "top" | "center" | "bottom";
+};
+
+const DEFAULT_LAYOUT_PREFERENCES: LayoutPreferences = {
+  menuBar: true,
+  activityBar: true,
+  secondaryActivityBar: false,
+  primarySideBar: true,
+  secondarySideBar: true,
+  panel: true,
+  statusBar: true,
+  primarySideBarPosition: "right",
+  panelAlignment: "center",
+  quickInputPosition: "top",
+};
+
 function hashState(): { file: string | null; tool: WorkspaceTool | null } {
   if (typeof window === "undefined") return { file: null, tool: null };
   const raw = window.location.hash.replace(/^#/, "");
@@ -180,6 +206,17 @@ export default function EditorPage() {
   const [compactLayout, setCompactLayout] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches,
   );
+  const [layoutPreferences, setLayoutPreferences] = useState<LayoutPreferences>(() => {
+    if (typeof window === "undefined" || !id) return DEFAULT_LAYOUT_PREFERENCES;
+    try {
+      const saved = localStorage.getItem(`premdev.layout.${id}`);
+      if (!saved) return DEFAULT_LAYOUT_PREFERENCES;
+      return { ...DEFAULT_LAYOUT_PREFERENCES, ...JSON.parse(saved) } as LayoutPreferences;
+    } catch {
+      return DEFAULT_LAYOUT_PREFERENCES;
+    }
+  });
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [activePath, setActivePath] = useState<string | null>(() => {
     if (initialHash.file) return initialHash.file;
     try { return localStorage.getItem(`premdev.activePath.${id}`) || null; } catch { return null; }
@@ -249,6 +286,13 @@ export default function EditorPage() {
   const lastEditGenRef = useRef(0);
   const openRequestRef = useRef(0);
   const splitRequestRef = useRef(0);
+
+  useEffect(() => {
+    if (!id) return;
+    try {
+      localStorage.setItem(`premdev.layout.${id}`, JSON.stringify(layoutPreferences));
+    } catch {}
+  }, [id, layoutPreferences]);
 
   // Monaco's theme is separate from the Tailwind palette. Keep both in sync
   // so Editor Settings visibly changes the whole IDE, not only the code canvas.
@@ -537,8 +581,14 @@ export default function EditorPage() {
         e.preventDefault();
         setShowAI((v) => !v);
       }
+      // Ctrl+Shift+L → workspace layout customization
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "l") {
+        e.preventDefault();
+        setLayoutMenuOpen(true);
+      }
       if (e.key === "Escape") {
         setActiveSurface("file");
+        setLayoutMenuOpen(false);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -575,6 +625,21 @@ export default function EditorPage() {
     : savingState === "error" ? "Save failed"
     : dirty ? "Modified"
     : "Saved";
+  const showSecondarySidebar = showAI && layoutPreferences.secondarySideBar;
+  const workspaceSidePanel = (
+    <WorkspaceSidePanel
+      workspaceId={id!}
+      confirm={confirm}
+      tab={sidePanelTab}
+      onTabChange={setSidePanelTab}
+      onSelect={openFile}
+      activePath={activePath}
+      onOpenTool={(tool) => {
+        if (tool === "secrets") setSecretsOpenDbTemplate(false);
+        openTool(tool);
+      }}
+    />
+  );
 
   function renderActiveSurface() {
     const closeSurface = () => setActiveSurface("file");
@@ -706,7 +771,7 @@ export default function EditorPage() {
           </button>
         </div>
       )}
-      <header className="workspace-topbar relative flex shrink-0 items-center gap-2 overflow-x-auto whitespace-nowrap border-b border-bg-border bg-bg-panel/95 px-3 py-2">
+      {layoutPreferences.menuBar && <header className="workspace-topbar relative flex shrink-0 items-center gap-2 overflow-x-auto whitespace-nowrap border-b border-bg-border bg-bg-panel/95 px-3 py-2">
         <button className="btn-ghost shrink-0" onClick={() => nav("/")} title="Back to workspaces">
           <ChevronLeft size={16} />
         </button>
@@ -787,15 +852,50 @@ export default function EditorPage() {
             <Play size={14} /> Run
           </button>
         )}
+        <button
+          className="btn-secondary hidden sm:flex"
+          onClick={() => openTool("command-palette", { syncUrl: false })}
+          title="Command palette (Ctrl+K)"
+        >
+          <Command size={14} /> <span className="hidden lg:inline">Command</span>
+        </button>
+        <button
+          className="btn-secondary hidden md:flex"
+          onClick={() => setLayoutMenuOpen(true)}
+          title="Customize workspace layout"
+        >
+          <SlidersHorizontal size={14} /> <span className="hidden lg:inline">Customize Layout</span>
+        </button>
         <button className="btn-secondary" onClick={() => setShowAI((s) => !s)}>
           <Sparkles size={14} /> AI
         </button>
         </div>
       </header>
+      }
 
       <div className="flex flex-1 overflow-hidden">
+        {layoutPreferences.activityBar && (
+          <WorkspaceActivityRail
+            activeSurface={activeSurface}
+            onOpenFiles={() => setSidePanelTab("files")}
+            onOpenTool={(tool) => {
+              if (tool === "secrets") setSecretsOpenDbTemplate(false);
+              openTool(tool);
+            }}
+            onCustomize={() => setLayoutMenuOpen(true)}
+          />
+        )}
         <PanelGroup direction={compactLayout ? "vertical" : "horizontal"}>
-          {showAI && (
+          {layoutPreferences.primarySideBar && layoutPreferences.primarySideBarPosition === "left" && !compactLayout && (
+            <>
+              <Panel defaultSize={compactLayout ? 24 : 18} minSize={compactLayout ? 16 : 12} maxSize={compactLayout ? 45 : 30}>
+                {workspaceSidePanel}
+              </Panel>
+              <PanelResizeHandle className="w-px bg-bg-border hover:bg-accent" />
+            </>
+          )}
+
+          {showSecondarySidebar && (
             <>
               <Panel defaultSize={compactLayout ? 30 : 22} minSize={compactLayout ? 18 : 18}>
                 <AIChat
@@ -813,7 +913,7 @@ export default function EditorPage() {
             </>
           )}
 
-          <Panel defaultSize={compactLayout ? 70 : (showAI ? 56 : 72)}>
+          <Panel defaultSize={compactLayout ? 70 : (showSecondarySidebar ? 56 : 72)}>
             <PanelGroup direction="vertical">
               <Panel defaultSize={65} minSize={20}>
                 <div className="flex h-full min-h-0 flex-col">
@@ -828,14 +928,14 @@ export default function EditorPage() {
                     ))}
                   </div>
                 )}
-                <WorkspaceTabBar
+                {layoutPreferences.panel && <WorkspaceTabBar
                   openTabs={openTabs}
                   activePath={activePath}
                   activeSurface={activeSurface}
                   newTabOpen={newTabOpen}
                   bottomTab={bottomTab}
                   sidePanelTab={sidePanelTab}
-                  showAI={showAI}
+                   showAI={showSecondarySidebar}
                   showCronJobs={activeSurface === "cron"}
                   onOpenFiles={() => setSidePanelTab("files")}
                   onOpenAI={() => setShowAI((value) => !value)}
@@ -855,7 +955,7 @@ export default function EditorPage() {
                   }}
                   onCloseNewTab={() => setNewTabOpen(false)}
                   dirty={dirty}
-                />
+                 />}
                 <div className="relative min-h-0 flex-1">
                 {activeSurface !== "file" ? renderActiveSurface() : (
                   <>
@@ -1038,30 +1138,23 @@ export default function EditorPage() {
               </Panel>
             </>
           )}
-          <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
-          <Panel
-            defaultSize={compactLayout ? 24 : 18}
-            minSize={compactLayout ? 16 : 12}
-            maxSize={compactLayout ? 45 : 30}
-          >
-            <WorkspaceSidePanel
-              workspaceId={id!}
-              confirm={confirm}
-              tab={sidePanelTab}
-              onTabChange={setSidePanelTab}
-              onSelect={openFile}
-              activePath={activePath}
-              onOpenTool={(tool) => {
-                if (tool === "secrets") setSecretsOpenDbTemplate(false);
-                openTool(tool);
-              }}
-            />
-          </Panel>
+          {layoutPreferences.primarySideBar && (layoutPreferences.primarySideBarPosition === "right" || compactLayout) && (
+            <>
+              <PanelResizeHandle className={compactLayout ? "h-px bg-bg-border hover:bg-accent" : "w-px bg-bg-border hover:bg-accent"} />
+              <Panel
+                defaultSize={compactLayout ? 24 : 18}
+                minSize={compactLayout ? 16 : 12}
+                maxSize={compactLayout ? 45 : 30}
+              >
+                {workspaceSidePanel}
+              </Panel>
+            </>
+          )}
         </PanelGroup>
       </div>
 
       {/* ── Status Bar (VS Code-style bottom bar) ─────────────────────── */}
-      <div className="workspace-statusbar flex shrink-0 items-center gap-3 border-t border-bg-border bg-bg-panel px-3 py-1 text-[10px] text-text-muted select-none">
+      {layoutPreferences.statusBar && <div className="workspace-statusbar flex shrink-0 items-center gap-3 border-t border-bg-border bg-bg-panel px-3 py-1 text-[10px] text-text-muted select-none">
         {/* Workspace status indicator */}
         <span
           className={`flex items-center gap-1 ${
@@ -1103,9 +1196,18 @@ export default function EditorPage() {
             Ctrl+J → AI
           </span>
         </span>
-      </div>
+      </div>}
 
       {confirmDialog}
+      {layoutMenuOpen && (
+        <CustomizeLayoutModal
+          preferences={layoutPreferences}
+          onChange={setLayoutPreferences}
+          onClose={() => setLayoutMenuOpen(false)}
+          onReset={() => setLayoutPreferences(DEFAULT_LAYOUT_PREFERENCES)}
+          onOpenTool={openTool}
+        />
+      )}
     </div>
   );
 }
@@ -2141,6 +2243,207 @@ function WorkspaceSidePanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function WorkspaceActivityRail({
+  activeSurface,
+  onOpenFiles,
+  onOpenTool,
+  onCustomize,
+}: {
+  activeSurface: WorkspaceSurface;
+  onOpenFiles: () => void;
+  onOpenTool: (tool: WorkspaceTool) => void;
+  onCustomize: () => void;
+}) {
+  const items: Array<{ label: string; icon: React.ReactNode; active?: boolean; onClick: () => void }> = [
+    { label: "Files", icon: <FileSearch size={16} />, active: activeSurface === "file", onClick: onOpenFiles },
+    { label: "Tools", icon: <LayoutGrid size={16} />, active: activeSurface === "tools", onClick: () => onOpenTool("tools") },
+    { label: "Git", icon: <GitBranch size={16} />, active: activeSurface === "git", onClick: () => onOpenTool("git") },
+    { label: "Cron Jobs", icon: <Clock size={16} />, active: activeSurface === "cron", onClick: () => onOpenTool("cron") },
+  ];
+  return (
+    <aside className="hidden w-12 shrink-0 flex-col items-center gap-1 border-r border-bg-border bg-bg-panel py-2 md:flex">
+      {items.map((item) => (
+        <button
+          key={item.label}
+          className={`group relative grid h-9 w-9 place-items-center rounded-lg transition ${
+            item.active ? "bg-accent/15 text-accent" : "text-text-muted hover:bg-bg-hover hover:text-text"
+          }`}
+          onClick={item.onClick}
+          title={item.label}
+          aria-label={item.label}
+        >
+          {item.icon}
+          <span className="pointer-events-none absolute left-11 z-20 hidden whitespace-nowrap rounded-md border border-bg-border bg-bg-panel px-2 py-1 text-[10px] text-text shadow-lg group-hover:block">
+            {item.label}
+          </span>
+        </button>
+      ))}
+      <div className="flex-1" />
+      <button
+        className="grid h-9 w-9 place-items-center rounded-lg text-text-muted transition hover:bg-bg-hover hover:text-text"
+        onClick={onCustomize}
+        title="Customize Layout"
+        aria-label="Customize Layout"
+      >
+        <SlidersHorizontal size={16} />
+      </button>
+    </aside>
+  );
+}
+
+function CustomizeLayoutModal({
+  preferences,
+  onChange,
+  onClose,
+  onReset,
+  onOpenTool,
+}: {
+  preferences: LayoutPreferences;
+  onChange: (next: LayoutPreferences) => void;
+  onClose: () => void;
+  onReset: () => void;
+  onOpenTool?: (tool: WorkspaceTool) => void;
+}) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const update = (patch: Partial<LayoutPreferences>) => onChange({ ...preferences, ...patch });
+  const visibility: Array<{ key: keyof Pick<LayoutPreferences, "menuBar" | "activityBar" | "secondaryActivityBar" | "primarySideBar" | "secondarySideBar" | "panel" | "statusBar">; label: string; hint?: string }> = [
+    { key: "menuBar", label: "Menu Bar" },
+    { key: "activityBar", label: "Activity Bar" },
+    { key: "secondaryActivityBar", label: "Secondary Activity Bar" },
+    { key: "primarySideBar", label: "Primary Side Bar" },
+    { key: "secondarySideBar", label: "Secondary Side Bar", hint: "AI" },
+    { key: "panel", label: "Panel" },
+    { key: "statusBar", label: "Status Bar" },
+  ];
+  const toolGroups: Array<{ title: string; items: Array<{ label: string; id?: WorkspaceTool }> }> = [
+    { title: "Develop", items: [{ label: "Console", id: "console" }, { label: "Shell", id: "terminal" }, { label: "Preview", id: "preview" }, { label: "Database", id: "database" }] },
+    { title: "Configure", items: [{ label: "Secrets & Database", id: "secrets" }, { label: "Agent Workspace", id: "agent" }, { label: "Cron Jobs", id: "cron" }, { label: "Workspace Config", id: "workspace-config" }] },
+    { title: "Ship", items: [{ label: "Git", id: "git" }, { label: "Checkpoints", id: "checkpoints" }, { label: "Custom Subdomain", id: "subdomain" }] },
+  ];
+  const quickInputClass =
+    preferences.quickInputPosition === "center" ? "items-center" :
+    preferences.quickInputPosition === "bottom" ? "items-end pb-12" : "items-start pt-14";
+
+  return (
+    <div
+      className={`fixed inset-0 z-[60] flex justify-center bg-black/50 p-4 backdrop-blur-sm ${quickInputClass}`}
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="customize-layout-title"
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-bg-border bg-bg-panel shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="flex items-center gap-3 border-b border-bg-border px-5 py-4">
+          <div className="grid h-8 w-8 place-items-center rounded-lg bg-accent/10 text-accent"><SlidersHorizontal size={16} /></div>
+          <div className="min-w-0 flex-1">
+            <h2 id="customize-layout-title" className="text-sm font-semibold text-text">Customize Layout</h2>
+            <p className="mt-0.5 text-[11px] text-text-muted">Atur panel Workspace Editor tanpa meninggalkan workspace.</p>
+          </div>
+          <button className="btn-ghost p-1.5" onClick={onClose} aria-label="Close customize layout"><X size={15} /></button>
+        </header>
+
+        <div className="grid min-h-0 gap-6 overflow-auto p-5 md:grid-cols-2">
+          <div className="space-y-5">
+            <section>
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Visibility</h3>
+              <div className="divide-y divide-bg-border overflow-hidden rounded-xl border border-bg-border">
+                {visibility.map((item) => (
+                  <label key={item.key} className="flex min-h-10 cursor-pointer items-center gap-3 px-3 text-xs text-text-muted hover:bg-bg-hover">
+                    <input
+                      type="checkbox"
+                      checked={preferences[item.key]}
+                      onChange={(event) => update({ [item.key]: event.target.checked } as Partial<LayoutPreferences>)}
+                      className="accent-accent"
+                    />
+                    <span className="flex-1">{item.label}</span>
+                    {item.hint && <span className="text-[10px] text-text-subtle">{item.hint}</span>}
+                  </label>
+                ))}
+              </div>
+            </section>
+
+            <section>
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Primary Side Bar Position</h3>
+              <div className="grid grid-cols-2 gap-2">
+                {(["left", "right"] as const).map((value) => (
+                  <label key={value} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs capitalize ${preferences.primarySideBarPosition === value ? "border-accent/60 bg-accent/10 text-text" : "border-bg-border text-text-muted hover:bg-bg-hover"}`}>
+                    <input type="radio" name="primary-sidebar-position" checked={preferences.primarySideBarPosition === value} onChange={() => update({ primarySideBarPosition: value })} className="accent-accent" />
+                    {value}
+                  </label>
+                ))}
+              </div>
+            </section>
+
+            <section>
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Quick Input Position</h3>
+              <div className="grid grid-cols-3 gap-2">
+                {(["top", "center", "bottom"] as const).map((value) => (
+                  <label key={value} className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs capitalize ${preferences.quickInputPosition === value ? "border-accent/60 bg-accent/10 text-text" : "border-bg-border text-text-muted hover:bg-bg-hover"}`}>
+                    <input type="radio" name="quick-input-position" checked={preferences.quickInputPosition === value} onChange={() => update({ quickInputPosition: value })} className="accent-accent" />
+                    {value}
+                  </label>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <div className="space-y-5">
+            <section>
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Panel Alignment</h3>
+              <div className="grid grid-cols-2 gap-2">
+                {(["left", "right", "center", "justify"] as const).map((value) => (
+                  <label key={value} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs capitalize ${preferences.panelAlignment === value ? "border-accent/60 bg-accent/10 text-text" : "border-bg-border text-text-muted hover:bg-bg-hover"}`}>
+                    <input type="radio" name="panel-alignment" checked={preferences.panelAlignment === value} onChange={() => update({ panelAlignment: value })} className="accent-accent" />
+                    {value}
+                  </label>
+                ))}
+              </div>
+            </section>
+
+            <section>
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Workspace Tools</h3>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {toolGroups.map((group) => (
+                  <div key={group.title} className="rounded-xl border border-bg-border bg-bg-subtle/50 p-3">
+                    <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-accent">{group.title}</h4>
+                    <div className="space-y-1">
+                      {group.items.map((item) => (
+                        <button
+                          key={item.label}
+                          className="block w-full truncate text-left text-[10px] text-text-muted hover:text-text"
+                          onClick={() => item.id && onOpenTool?.(item.id)}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <footer className="flex items-center gap-2 border-t border-bg-border bg-bg-subtle/50 px-5 py-3">
+          <span className="flex-1 text-[10px] text-text-muted">Preferensi layout tersimpan untuk workspace ini.</span>
+          <button className="btn-secondary" onClick={onReset}>Reset</button>
+          <button className="btn-primary" onClick={onClose}>Done</button>
+        </footer>
+      </section>
     </div>
   );
 }
