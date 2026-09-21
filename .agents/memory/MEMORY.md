@@ -7,3 +7,4 @@
 - [API dependency security compatibility](api-dependency-security.md) — old transitive packages can be blocked by the package firewall; keep API lockfiles on public registry URLs after safe overrides.
 - [Workspace agent profile boundary](agent-profile-boundary.md) — Hermes is an additive workspace profile under PremDev isolation, not a host-level second runtime.
 - [Browser reload boot behavior](browser-reload-boot.md) — reload lag is separate from tool navigation; prioritize auth bootstrap and initial API retries.
+- [Git push authentication](git-push-auth.md) — when remote credential headers fail, the workspace GitHub CLI credential helper is the reliable push path.
