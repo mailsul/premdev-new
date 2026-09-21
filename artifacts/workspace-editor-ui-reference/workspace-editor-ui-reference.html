@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PremDev Workspace Editor — UI Reference</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #edf2f1;
+      --panel: #fbfcfa;
+      --panel-2: #f3f7f5;
+      --panel-3: #e7efec;
+      --line: #d7e3df;
+      --line-strong: #bfd1cb;
+      --text: #182827;
+      --muted: #6e817d;
+      --muted-2: #9aaba7;
+      --accent: #128477;
+      --accent-2: #286e87;
+      --accent-soft: rgba(18,132,119,.12);
+      --cyan: #3b8292;
+      --green: #2c9870;
+      --yellow: #a97428;
+      --red: #bf5b5d;
+      --shadow: 0 20px 60px rgba(42,72,66,.14);
+      --editor-bg: #f7faf8;
+      --code-text: #243a37;
+      --code-muted: #94a7a2;
+      --code-key: #9a568d;
+      --code-string: #598846;
+      --code-fn: #2c7690;
+      --code-comment: #849995;
+      --radius: 12px;
+      --topbar: 58px;
+      --sidebar: 232px;
+    }
+
+    [data-theme="light"] {
+      color-scheme: light;
+      --bg: #edf2f1;
+      --panel: #fbfcfa;
+      --panel-2: #f3f7f5;
+      --panel-3: #e7efec;
+      --line: #d7e3df;
+      --line-strong: #bfd1cb;
+      --text: #182827;
+      --muted: #6e817d;
+      --muted-2: #9aaba7;
+      --accent: #128477;
+      --accent-2: #286e87;
+      --accent-soft: rgba(18,132,119,.12);
+      --cyan: #3b8292;
+      --green: #2c9870;
+      --yellow: #a97428;
+      --red: #bf5b5d;
+      --shadow: 0 20px 60px rgba(42,72,66,.14);
+      --editor-bg: #f7faf8;
+      --code-text: #243a37;
+      --code-muted: #94a7a2;
+      --code-key: #9a568d;
+      --code-string: #598846;
+      --code-fn: #2c7690;
+      --code-comment: #849995;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background:
+        radial-gradient(circle at 15% -10%, var(--accent-soft), transparent 32rem),
+        var(--bg);
+      color: var(--text);
+      font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      transition: background .2s ease, color .2s ease;
+    }
+    button, input, select { font: inherit; }
+    button { color: inherit; cursor: pointer; }
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: var(--topbar) 1fr 28px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 18px;
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border-bottom: 1px solid var(--line);
+      box-shadow: 0 8px 24px rgba(0,0,0,.08);
+      position: relative;
+      z-index: 3;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 188px;
+      font-weight: 750;
+      letter-spacing: -.02em;
+    }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      color: #fff;
+      background: linear-gradient(135deg, var(--accent), #47c7e6);
+      box-shadow: 0 6px 18px rgba(124,108,255,.28);
+      font-size: 14px;
+    }
+    .brand small { display: block; color: var(--muted); font-size: 10px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
+    .crumbs { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+    .crumbs strong { color: var(--text); font-weight: 650; }
+    .slash { color: var(--muted-2); }
+    .top-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    .button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+      padding: 7px 10px;
+      transition: .18s ease;
+    }
+    .button:hover { border-color: var(--line-strong); background: var(--panel-3); transform: translateY(-1px); }
+    .button.icon { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; font-size: 16px; }
+    .button.primary { border-color: transparent; color: #fff; background: linear-gradient(135deg, var(--accent), #5b92f5); box-shadow: 0 6px 16px rgba(101,87,220,.22); }
+    .button.primary:hover { filter: brightness(1.08); }
+    .button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+    .button.ghost:hover { color: var(--text); background: var(--panel-3); }
+    .run-control { display: flex; align-items: center; gap: 7px; padding: 6px 10px 6px 8px; }
+    .run-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(84,214,155,.12); }
+    .run-control.running .run-dot { animation: pulse 1.3s infinite; }
+    @keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(84,214,155,0); } }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 58px var(--sidebar) minmax(420px, 1fr) minmax(300px, 34%);
+      overflow: hidden;
+    }
+    .activitybar {
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+      padding: 12px 8px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 7px;
+    }
+    .activity {
+      width: 40px; height: 40px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 17px;
+      position: relative;
+    }
+    .activity:hover, .activity.active { color: var(--text); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 38%, transparent); }
+    .activity.active::before { content: ""; position: absolute; left: -9px; top: 10px; height: 20px; width: 2px; border-radius: 2px; background: var(--accent); }
+    .activity-spacer { flex: 1; }
+    .sidebar {
+      min-width: 0;
+      background: var(--panel-2);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+    }
+    .side-head, .panel-head {
+      height: 50px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 0 15px;
+      border-bottom: 1px solid var(--line);
+    }
+    .side-head { justify-content: space-between; }
+    .eyebrow { color: var(--muted-2); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .side-title { font-size: 12px; font-weight: 700; }
+    .side-content { padding: 13px 10px; overflow: auto; }
+    .tree-group { margin-bottom: 18px; }
+    .tree-label { display: flex; align-items: center; gap: 5px; padding: 3px 7px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .tree-item {
+      width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+      border: 0; border-radius: 7px; background: transparent; color: var(--muted);
+      text-align: left; transition: .16s ease;
+    }
+    .tree-item:hover, .tree-item.active { color: var(--text); background: var(--panel-3); }
+    .tree-item.active { box-shadow: inset 2px 0 var(--accent); }
+    .tree-icon { width: 16px; color: var(--accent-2); text-align: center; }
+    .tree-item .badge { margin-left: auto; color: var(--muted-2); font-size: 10px; }
+    .recent { margin-top: 22px; padding-top: 15px; border-top: 1px solid var(--line); }
+    .recent-row { display: flex; align-items: center; gap: 8px; padding: 7px; color: var(--muted); font-size: 11px; }
+    .recent-row b { color: var(--text); font-weight: 600; }
+    .file-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--yellow); }
+
+    .center {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 42px minmax(240px, 1fr) 230px;
+      background: var(--editor-bg);
+    }
+    .tabs {
+      display: flex;
+      align-items: stretch;
+      min-width: 0;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .tab {
+      min-width: 135px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .tab.active { color: var(--text); background: var(--editor-bg); border-bottom-color: var(--accent); }
+    .tab-close { margin-left: auto; color: var(--muted-2); }
+    .editor { min-height: 0; overflow: auto; padding: 19px 0 22px; }
+    .code-line { display: grid; grid-template-columns: 48px minmax(0, 1fr); min-height: 22px; padding-right: 26px; white-space: pre; }
+    .code-line:hover { background: color-mix(in srgb, var(--accent-soft) 65%, transparent); }
+    .ln { color: var(--code-muted); text-align: right; padding-right: 17px; user-select: none; }
+    .code { color: var(--code-text); }
+    .kw { color: var(--code-key); } .str { color: var(--code-string); } .fn { color: var(--code-fn); } .comment { color: var(--code-comment); }
+    .cursor { display: inline-block; width: 1px; height: 15px; background: var(--accent); vertical-align: -3px; animation: blink 1.1s infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .bottom {
+      min-height: 0;
+      background: var(--panel);
+      border-top: 1px solid var(--line);
+      display: grid;
+      grid-template-rows: 40px 1fr;
+    }
+    .bottom-tabs { display: flex; align-items: center; gap: 4px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+    .bottom-tab { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 11px 10px 9px; font-size: 11px; }
+    .bottom-tab.active { color: var(--text); border-color: var(--accent); }
+    .bottom-content { overflow: auto; padding: 12px 15px; font: 12px/1.65 "SFMono-Regular", Consolas, monospace; color: var(--muted); }
+    .log-line { display: flex; gap: 10px; }
+    .log-time { color: var(--muted-2); } .log-ok { color: var(--green); } .log-info { color: var(--cyan); }
+
+    .right {
+      min-width: 0;
+      min-height: 0;
+      border-left: 1px solid var(--line);
+      background: var(--panel-2);
+      display: grid;
+      grid-template-rows: 50px 1fr;
+    }
+    .right-head { display: flex; align-items: center; justify-content: space-between; padding: 0 15px; border-bottom: 1px solid var(--line); }
+    .right-title { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+    .live { display: flex; align-items: center; gap: 6px; color: var(--green); font-size: 11px; font-weight: 650; }
+    .live i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .right-scroll { overflow: auto; padding: 15px; }
+    .preview-card {
+      min-height: 192px;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--bg);
+      box-shadow: var(--shadow);
+    }
+    .browser-bar { display: flex; align-items: center; gap: 6px; padding: 9px 11px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .browser-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+    .browser-dot:nth-child(2) { background: var(--yellow); } .browser-dot:nth-child(3) { background: var(--green); }
+    .address { margin-left: 7px; overflow: hidden; flex: 1; padding: 4px 8px; border-radius: 5px; color: var(--muted); background: var(--panel-3); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+    .preview-body { padding: 24px 22px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, var(--bg)), var(--bg) 62%); }
+    .preview-kicker { color: var(--cyan); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .preview-body h2 { max-width: 240px; margin: 8px 0; font-size: 23px; line-height: 1.12; letter-spacing: -.04em; }
+    .preview-body p { max-width: 260px; color: var(--muted); font-size: 11px; }
+    .preview-cta { display: inline-block; margin-top: 8px; border-radius: 6px; padding: 7px 10px; color: #fff; background: var(--accent); font-size: 10px; font-weight: 700; }
+    .section-label { margin: 22px 0 9px; color: var(--muted-2); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .tool-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .tool-card { min-width: 0; padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); transition: .16s ease; }
+    .tool-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .tool-icon { color: var(--accent-2); font-size: 16px; }
+    .tool-card strong { display: block; margin-top: 7px; font-size: 11px; }
+    .tool-card span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .insight { display: flex; gap: 10px; padding: 11px; border: 1px solid color-mix(in srgb, var(--cyan) 32%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--cyan) 7%, var(--panel)); }
+    .insight b { display: block; font-size: 11px; } .insight p { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
+    .cron-list { display: grid; gap: 8px; }
+    .cron-row { padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+    .cron-top { display: flex; align-items: center; gap: 7px; }
+    .cron-top strong { flex: 1; font-size: 11px; }
+    .status { border-radius: 999px; padding: 3px 7px; color: var(--green); background: rgba(84,214,155,.11); font-size: 9px; font-weight: 750; }
+    .cron-meta { display: flex; gap: 12px; margin-top: 7px; color: var(--muted); font-size: 10px; }
+    .cron-command { margin-top: 8px; overflow: hidden; border-radius: 5px; padding: 5px 7px; color: var(--code-string); background: var(--editor-bg); font: 10px monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .footer {
+      display: flex; align-items: center; gap: 15px; padding: 0 15px;
+      border-top: 1px solid var(--line); background: var(--panel);
+      color: var(--muted); font-size: 10px;
+    }
+    .footer span { display: inline-flex; align-items: center; gap: 5px; }
+    .footer .spacer { flex: 1; }
+    .green { color: var(--green); } .purple { color: var(--accent-2); }
+
+    .palette-backdrop { position: fixed; inset: 0; z-index: 10; display: none; place-items: start center; padding-top: 105px; background: rgba(3,5,8,.56); backdrop-filter: blur(5px); }
+    .palette-backdrop.open { display: grid; }
+    .palette { width: min(560px, calc(100vw - 28px)); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 13px; background: var(--panel); box-shadow: 0 30px 90px rgba(0,0,0,.38); }
+    .palette input { width: 100%; border: 0; border-bottom: 1px solid var(--line); outline: 0; padding: 15px; color: var(--text); background: transparent; }
+    .palette-items { padding: 8px; }
+    .palette-item { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; border-radius: 8px; padding: 10px; color: var(--muted); background: transparent; text-align: left; }
+    .palette-item:hover { color: var(--text); background: var(--accent-soft); }
+    .palette-key { margin-left: auto; color: var(--muted-2); font-size: 10px; }
+
+    @media (max-width: 1100px) {
+      .workspace { grid-template-columns: 58px 205px minmax(400px, 1fr); }
+      .right { display: none; }
+    }
+    @media (max-width: 720px) {
+      :root { --sidebar: 0px; }
+      .topbar { gap: 9px; padding: 0 10px; }
+      .brand { min-width: auto; } .brand > div:last-child, .crumbs { display: none; }
+      .workspace { grid-template-columns: 48px minmax(0, 1fr); }
+      .sidebar { display: none; }
+      .activitybar { padding: 8px 4px; }
+      .activity { width: 36px; height: 36px; }
+      .center { grid-template-rows: 42px minmax(300px, 1fr) 200px; }
+      .top-actions .button:not(.primary):not(.icon) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">{ }</div>
+        <div>PremDev<small>Workspace Editor</small></div>
+      </div>
+      <div class="crumbs"><span>Workspaces</span><span class="slash">/</span><strong>saas-landing</strong></div>
+      <div class="top-actions">
+        <button class="button ghost" id="paletteButton">⌘ K&nbsp; Command</button>
+        <button class="button icon" id="themeButton" title="Toggle light and dark theme">D</button>
+        <button class="button run-control running" id="runButton"><i class="run-dot"></i><span id="runLabel">Running</span></button>
+        <button class="button primary" id="shareButton">↗ Share</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <nav class="activitybar" aria-label="Workspace navigation">
+        <button class="activity active" data-nav="explorer" title="Explorer">▤</button>
+        <button class="activity" data-nav="search" title="Search">⌕</button>
+        <button class="activity" data-nav="git" title="Git">⑂</button>
+        <button class="activity" data-nav="cron" title="Cron Jobs">◷</button>
+        <div class="activity-spacer"></div>
+        <button class="activity" data-nav="settings" title="Settings">||</button>
+      </nav>
+
+      <aside class="sidebar">
+        <div class="side-head">
+          <div><div class="eyebrow">Workspace</div><div class="side-title" id="sideTitle">Explorer</div></div>
+          <button class="button icon ghost" title="More actions">⋯</button>
+        </div>
+        <div class="side-content" id="sideContent">
+          <div class="tree-group">
+            <div class="tree-label">⌄ <span>saas-landing</span></div>
+            <button class="tree-item active"><span class="tree-icon">◇</span><span>src</span><span class="badge">4</span></button>
+            <button class="tree-item"><span class="tree-icon">◈</span><span>public</span></button>
+            <button class="tree-item"><span class="tree-icon">◆</span><span>package.json</span></button>
+            <button class="tree-item"><span class="tree-icon">◆</span><span>vite.config.ts</span></button>
+            <button class="tree-item"><span class="tree-icon">◆</span><span>.premdev</span></button>
+          </div>
+          <div class="tree-group">
+            <div class="tree-label">⌄ <span>src</span></div>
+            <button class="tree-item active"><span class="tree-icon">◈</span><span>App.tsx</span><span class="badge">M</span></button>
+            <button class="tree-item"><span class="tree-icon">◈</span><span>main.tsx</span></button>
+            <button class="tree-item"><span class="tree-icon">◈</span><span>styles.css</span></button>
+          </div>
+          <div class="recent">
+            <div class="eyebrow" style="padding: 0 7px 4px">Recent files</div>
+            <div class="recent-row"><i class="file-dot"></i><span><b>App.tsx</b><br />edited 2 min ago</span></div>
+            <div class="recent-row"><i class="file-dot" style="background:var(--cyan)"></i><span><b>styles.css</b><br />edited yesterday</span></div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="center">
+        <div class="tabs">
+          <button class="tab active"><span class="purple">◈</span> App.tsx <span class="tab-close">×</span></button>
+          <button class="tab"><span class="cyan">◈</span> styles.css <span class="tab-close">×</span></button>
+          <button class="button icon ghost" style="margin:5px 0 5px 4px" title="New file">+</button>
+        </div>
+        <div class="editor" aria-label="Code editor">
+          <div class="code-line"><span class="ln">1</span><span class="code"><span class="kw">import</span> { useState } <span class="kw">from</span> <span class="str">'react'</span>;</span></div>
+          <div class="code-line"><span class="ln">2</span><span class="code"><span class="kw">import</span> { Sparkles, ArrowRight } <span class="kw">from</span> <span class="str">'lucide-react'</span>;</span></div>
+          <div class="code-line"><span class="ln">3</span><span class="code"></span></div>
+          <div class="code-line"><span class="ln">4</span><span class="code"><span class="kw">const</span> <span class="fn">features</span> = [</span></div>
+          <div class="code-line"><span class="ln">5</span><span class="code">  { title: <span class="str">'Ship faster'</span>, icon: <span class="str">'↗'</span> },</span></div>
+          <div class="code-line"><span class="ln">6</span><span class="code">  { title: <span class="str">'Stay focused'</span>, icon: <span class="str">'✦'</span> },</span></div>
+          <div class="code-line"><span class="ln">7</span><span class="code">  { title: <span class="str">'Scale calmly'</span>, icon: <span class="str">'◌'</span> },</span></div>
+          <div class="code-line"><span class="ln">8</span><span class="code">];</span></div>
+          <div class="code-line"><span class="ln">9</span><span class="code"></span></div>
+          <div class="code-line"><span class="ln">10</span><span class="code"><span class="kw">export default function</span> <span class="fn">App</span>() {</span></div>
+          <div class="code-line"><span class="ln">11</span><span class="code">  <span class="kw">const</span> [email, setEmail] = <span class="fn">useState</span>(<span class="str">''</span>);</span></div>
+          <div class="code-line"><span class="ln">12</span><span class="code"></span></div>
+          <div class="code-line"><span class="ln">13</span><span class="code">  <span class="kw">return</span> (</span></div>
+          <div class="code-line"><span class="ln">14</span><span class="code">    &lt;<span class="fn">main</span> className=<span class="str">"hero"</span>&gt;</span></div>
+          <div class="code-line"><span class="ln">15</span><span class="code">      &lt;<span class="fn">span</span> className=<span class="str">"eyebrow"</span>&gt;Build with clarity&lt;/<span class="fn">span</span>&gt;</span></div>
+          <div class="code-line"><span class="ln">16</span><span class="code">      &lt;<span class="fn">h1</span>&gt;A better place to build.&lt;/<span class="fn">h1</span>&gt;</span></div>
+          <div class="code-line"><span class="ln">17</span><span class="code">      &lt;<span class="fn">p</span>&gt;Your next idea deserves a focused workspace.&lt;/<span class="fn">p</span>&gt;</span></div>
+          <div class="code-line"><span class="ln">18</span><span class="code">      &lt;<span class="fn">button</span> onClick={() =&gt; setEmail(<span class="str">'hello'</span>)}&gt;</span></div>
+          <div class="code-line"><span class="ln">19</span><span class="code">        Start building &lt;<span class="fn">ArrowRight</span> /&gt;</span></div>
+          <div class="code-line"><span class="ln">20</span><span class="code">      &lt;/<span class="fn">button</span>&gt;<span class="cursor"></span></span></div>
+          <div class="code-line"><span class="ln">21</span><span class="code">    &lt;/<span class="fn">main</span>&gt;</span></div>
+          <div class="code-line"><span class="ln">22</span><span class="code">  );</span></div>
+          <div class="code-line"><span class="ln">23</span><span class="code">}</span></div>
+        </div>
+        <div class="bottom">
+          <div class="bottom-tabs">
+            <button class="bottom-tab active" data-bottom="console">Console</button>
+            <button class="bottom-tab" data-bottom="terminal">Shell</button>
+            <button class="bottom-tab" data-bottom="preview">Preview</button>
+            <span style="margin-left:auto;color:var(--muted-2);font-size:11px">⌃ J</span>
+          </div>
+          <div class="bottom-content" id="bottomContent">
+            <div class="log-line"><span class="log-time">09:41:12</span><span class="log-info">info</span><span>Vite dev server ready in 438ms</span></div>
+            <div class="log-line"><span class="log-time">09:41:13</span><span class="log-ok">done</span><span>Local: http://localhost:5173/</span></div>
+            <div class="log-line"><span class="log-time">09:42:03</span><span class="log-info">hmr</span><span>updated /src/App.tsx</span></div>
+            <div class="log-line"><span class="log-time">09:42:09</span><span class="log-ok">ready</span><span>workspace preview connected</span></div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="right">
+        <div class="right-head">
+          <div class="right-title"><span class="purple">◉</span><span id="rightTitle">Live Preview</span></div>
+          <div class="live"><i></i> healthy</div>
+        </div>
+        <div class="right-scroll" id="rightContent">
+          <div class="preview-card">
+            <div class="browser-bar"><i class="browser-dot"></i><i class="browser-dot"></i><i class="browser-dot"></i><div class="address">saas-landing — 5173.preview.premdev.app</div><span style="color:var(--muted)">↗</span></div>
+            <div class="preview-body">
+              <div class="preview-kicker">Build with clarity</div>
+              <h2>A better place to build.</h2>
+              <p>Your next idea deserves a focused workspace with less noise and more momentum.</p>
+              <span class="preview-cta">Start building&nbsp; →</span>
+            </div>
+          </div>
+          <div class="section-label">Workspace pulse</div>
+          <div class="insight"><span style="font-size:17px;color:var(--cyan)">✦</span><div><b>Everything is ready to ship</b><p>Build passed 2 minutes ago. Preview is responding normally.</p></div></div>
+          <div class="section-label">Quick tools</div>
+          <div class="tool-grid">
+            <button class="tool-card" data-open="cron"><div class="tool-icon">◷</div><strong>Cron Jobs</strong><span>2 active schedules</span></button>
+            <button class="tool-card" data-open="database"><div class="tool-icon">▦</div><strong>Database</strong><span>3 tables connected</span></button>
+            <button class="tool-card" data-open="git"><div class="tool-icon">⑂</div><strong>Git</strong><span>1 changed file</span></button>
+            <button class="tool-card" data-open="secrets"><div class="tool-icon">♢</div><strong>Secrets</strong><span>Environment ready</span></button>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <span><i class="green">●</i> Workspace running</span>
+      <span>main*</span>
+      <span>UTF-8</span>
+      <span>Ln 20, Col 48</span>
+      <span class="spacer"></span>
+      <span>PremDev Runtime 20</span>
+      <span class="purple">⌘ K</span>
+    </footer>
+  </div>
+
+  <div class="palette-backdrop" id="palette">
+    <div class="palette">
+      <input id="paletteInput" placeholder="Search tools, files, and actions…" autocomplete="off" />
+      <div class="palette-items">
+        <button class="palette-item" data-command="cron">◷ <span>Open Cron Jobs</span><span class="palette-key">⌘ 1</span></button>
+        <button class="palette-item" data-command="database">▦ <span>Open Database</span><span class="palette-key">⌘ 2</span></button>
+        <button class="palette-item" data-command="terminal">›_ <span>Open Shell</span><span class="palette-key">⌘ 3</span></button>
+        <button class="palette-item" data-command="theme">◐ <span>Toggle light / dark mode</span><span class="palette-key">⌘ J</span></button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const root = document.documentElement;
+    const themeButton = document.getElementById("themeButton");
+    const runButton = document.getElementById("runButton");
+    const runLabel = document.getElementById("runLabel");
+    const palette = document.getElementById("palette");
+    const paletteInput = document.getElementById("paletteInput");
+    const sideTitle = document.getElementById("sideTitle");
+    const rightTitle = document.getElementById("rightTitle");
+    const rightContent = document.getElementById("rightContent");
+    const bottomContent = document.getElementById("bottomContent");
+
+    const savedTheme = localStorage.getItem("premdev-reference-theme");
+    if (savedTheme) root.dataset.theme = savedTheme;
+    function syncThemeIcon() { themeButton.textContent = root.dataset.theme === "dark" ? "L" : "D"; }
+    syncThemeIcon();
+    themeButton.addEventListener("click", () => {
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      localStorage.setItem("premdev-reference-theme", root.dataset.theme);
+      syncThemeIcon();
+    });
+
+    runButton.addEventListener("click", () => {
+      const running = runButton.classList.toggle("running");
+      runLabel.textContent = running ? "Running" : "Run";
+      runButton.querySelector(".run-dot").style.background = running ? "var(--green)" : "var(--muted-2)";
+      if (running) {
+        bottomContent.insertAdjacentHTML("beforeend", '<div class="log-line"><span class="log-time">now</span><span class="log-info">run</span><span>workspace process started</span></div>');
+      } else {
+        bottomContent.insertAdjacentHTML("beforeend", '<div class="log-line"><span class="log-time">now</span><span style="color:var(--yellow)">stop</span><span>workspace process stopped</span></div>');
+      }
+      bottomContent.scrollTop = bottomContent.scrollHeight;
+    });
+
+    document.querySelectorAll(".activity").forEach(button => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".activity").forEach(item => item.classList.remove("active"));
+        button.classList.add("active");
+        const nav = button.dataset.nav;
+        const names = { explorer: "Explorer", search: "Search", git: "Source Control", cron: "Cron Jobs", settings: "Settings" };
+        sideTitle.textContent = names[nav] || "Explorer";
+        if (nav === "cron") showCron();
+        else if (nav === "git") showTool("Git");
+        else if (nav === "settings") showTool("Workspace settings");
+        else if (nav === "search") showTool("Search files");
+      });
+    });
+
+    document.querySelectorAll("[data-bottom]").forEach(button => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("[data-bottom]").forEach(item => item.classList.remove("active"));
+        button.classList.add("active");
+        if (button.dataset.bottom === "terminal") {
+          bottomContent.innerHTML = '<div class="log-line"><span class="log-ok">~/saas-landing</span><span style="color:var(--text)">$ npm run dev</span></div><div class="log-line"><span class="log-info">›</span><span>VITE v5.4.0 ready in 438ms</span></div><div class="log-line"><span class="log-ok">›</span><span>Local: http://localhost:5173/</span></div>';
+        } else if (button.dataset.bottom === "preview") {
+          bottomContent.innerHTML = '<div class="log-line"><span class="log-info">preview</span><span>Connected to 5173.preview.premdev.app</span></div><div class="log-line"><span class="log-ok">200</span><span>GET / 16ms</span></div>';
+        } else {
+          bottomContent.innerHTML = '<div class="log-line"><span class="log-time">09:41:12</span><span class="log-info">info</span><span>Vite dev server ready in 438ms</span></div><div class="log-line"><span class="log-time">09:42:09</span><span class="log-ok">ready</span><span>workspace preview connected</span></div>';
+        }
+      });
+    });
+
+    function showCron() {
+      rightTitle.textContent = "Cron Jobs";
+      rightContent.innerHTML = '<div class="section-label" style="margin-top:0">Scheduled workspace tasks</div><button class="button primary" data-cron-add style="width:100%;margin-bottom:14px">+ New Cron Job</button><div class="cron-list"><div class="cron-row"><div class="cron-top"><strong>Refresh content cache</strong><button class="button ghost cron-toggle" data-cron-toggle="cache">active</button></div><div class="cron-meta"><span>Every 15 minutes</span><span>Next 09:45</span></div><div class="cron-command">npm run content:refresh</div></div><div class="cron-row"><div class="cron-top"><strong>Daily cleanup</strong><button class="button ghost cron-toggle" data-cron-toggle="cleanup">active</button></div><div class="cron-meta"><span>0 0 * * *</span><span>Next tomorrow</span></div><div class="cron-command">node scripts/cleanup.js</div></div><div class="cron-row"><div class="cron-top"><strong>Sync usage report</strong><button class="button ghost cron-toggle" data-cron-toggle="usage">paused</button></div><div class="cron-meta"><span>Mon–Fri at 08:30</span><span>Paused by team</span></div><div class="cron-command">node scripts/report.ts</div></div></div><div class="section-label">Execution safety</div><div class="insight"><span style="font-size:17px;color:var(--green)">✓</span><div><b>Central runner protected</b><p>Timeouts, output limits, and anti-overlap locks are enabled.</p></div></div>';
+    }
+    function showTool(name) {
+      rightTitle.textContent = name;
+      rightContent.innerHTML = '<div class="section-label" style="margin-top:0">' + name + '</div><div class="insight"><span style="font-size:17px;color:var(--cyan)">✦</span><div><b>Focused workspace surface</b><p>This reference keeps the task context visible without leaving the editor.</p></div></div><div class="section-label">Available actions</div><div class="tool-grid"><button class="tool-card" data-tool-action="create"><div class="tool-icon">+</div><strong>Create</strong><span>Start a new action</span></button><button class="tool-card" data-tool-action="refresh"><div class="tool-icon">↻</div><strong>Refresh</strong><span>Sync latest state</span></button></div>';
+    }
+    document.querySelectorAll("[data-open]").forEach(button => button.addEventListener("click", () => button.dataset.open === "cron" ? showCron() : showTool(button.textContent.trim())));
+    rightContent.addEventListener("click", event => {
+      const cronAdd = event.target.closest("[data-cron-add]");
+      const cronToggle = event.target.closest("[data-cron-toggle]");
+      const toolAction = event.target.closest("[data-tool-action]");
+      if (cronAdd) showToast("Cron form opened — choose a schedule and command");
+      if (cronToggle) {
+        const enabled = cronToggle.textContent.trim() === "active";
+        cronToggle.textContent = enabled ? "paused" : "active";
+        cronToggle.style.color = enabled ? "var(--yellow)" : "var(--green)";
+        showToast(enabled ? "Schedule paused" : "Schedule resumed");
+      }
+      if (toolAction) showToast(toolAction.dataset.toolAction === "create" ? "Create flow opened" : "Latest workspace state synced");
+    });
+
+    function closePalette() { palette.classList.remove("open"); paletteInput.value = ""; }
+    document.getElementById("paletteButton").addEventListener("click", () => { palette.classList.add("open"); paletteInput.focus(); });
+    paletteInput.addEventListener("input", () => {
+      const query = paletteInput.value.trim().toLowerCase();
+      document.querySelectorAll("[data-command]").forEach(item => {
+        item.hidden = query && !item.textContent.toLowerCase().includes(query);
+      });
+    });
+    palette.addEventListener("click", event => { if (event.target === palette) closePalette(); });
+    document.addEventListener("keydown", event => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); palette.classList.add("open"); paletteInput.focus(); }
+      if (event.key === "Escape") closePalette();
+    });
+    document.querySelectorAll("[data-command]").forEach(item => item.addEventListener("click", () => {
+      const command = item.dataset.command;
+      if (command === "theme") themeButton.click();
+      else if (command === "cron") showCron();
+      else showTool(item.textContent.trim());
+      closePalette();
+    }));
+  </script>
+</body>
+</html>
