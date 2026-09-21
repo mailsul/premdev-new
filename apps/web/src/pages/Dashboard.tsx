@@ -24,6 +24,7 @@ type Workspace = {
   name: string;
   template: string;
   status: "stopped" | "starting" | "running" | "error";
+  desiredRunning?: boolean;
   createdAt: string;
   previewPort?: number;
   previewUrl?: string;
@@ -197,7 +198,7 @@ export default function Dashboard() {
                           : "bg-bg-hover text-text-muted"
                       }`}
                     >
-                      {w.status === "running" ? "Running" : w.status === "starting" ? "Starting" : w.status === "error" ? "Needs attention" : "Stopped"}
+                       {w.status === "running" ? "Running" : w.status === "starting" ? "Starting" : w.status === "error" ? "Needs attention" : "Stopped"}
                     </span>
                   </div>
 
@@ -207,6 +208,9 @@ export default function Dashboard() {
                   >
                     <div className="font-semibold tracking-tight">{w.name}</div>
                     <div className="mt-1 flex items-center gap-2 text-xs text-text-muted"><Activity size={12} /> {tmpl.label}</div>
+                   {w.desiredRunning && (
+                     <div className="mt-1 text-[10px] text-success">Auto-restore after redeploy enabled</div>
+                   )}
                   </button>
 
                   <div className="mt-4 flex items-center gap-1.5">

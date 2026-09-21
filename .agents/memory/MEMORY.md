@@ -8,3 +8,4 @@
 - [Workspace agent profile boundary](agent-profile-boundary.md) — Hermes is an additive workspace profile under PremDev isolation, not a host-level second runtime.
 - [Browser reload boot behavior](browser-reload-boot.md) — reload lag is separate from tool navigation; prioritize auth bootstrap and initial API retries.
 - [Git push authentication](git-push-auth.md) — when remote credential headers fail, the workspace GitHub CLI credential helper is the reliable push path.
+- [Workspace redeploy restore](workspace-redeploy-restore.md) — remove stale workspace containers before app restart so boot restore cannot race with redeploy cleanup.

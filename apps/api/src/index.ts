@@ -29,6 +29,7 @@ import { shareRoutes, publicShareRoutes } from "./routes/share.js";
 import { startCrashMonitor, getLifecycleState } from "./lib/crash-monitor.js";
 import { startScheduler, getSchedulerState } from "./lib/scheduler.js";
 import { reloadCaddy, syncActiveDomainSnippets } from "./lib/caddy.js";
+import { startWorkspaceLifecycleReconciler } from "./lib/workspace-lifecycle.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -212,6 +213,7 @@ try {
   caddyRetry.unref?.();
   startScheduler();
   startCrashMonitor();
+  startWorkspaceLifecycleReconciler();
 } catch (e) {
   app.log.error(e);
   process.exit(1);

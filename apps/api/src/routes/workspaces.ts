@@ -401,7 +401,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     const w = db.prepare("SELECT * FROM workspaces WHERE id = ? AND user_id = ?").get(id, u.id) as DbWorkspace | undefined;
     if (!w) return reply.code(404).send({ error: "Not found" });
 
-    db.prepare("UPDATE workspaces SET status = 'starting', last_active_at = ? WHERE id = ?").run(Date.now(), id);
+    db.prepare("UPDATE workspaces SET status = 'starting', desired_running = 1, last_active_at = ? WHERE id = ?").run(Date.now(), id);
 
     const dir = workspacePath(id);
     const tmpl = getTemplate(w.template);
@@ -483,7 +483,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         startLocal(id, cmd, dir, port);
       }
       db.prepare(
-        "UPDATE workspaces SET status = 'running', preview_port = ?, preview_ports = ? WHERE id = ?",
+        "UPDATE workspaces SET status = 'running', desired_running = 1, preview_port = ?, preview_ports = ? WHERE id = ?",
       ).run(port, previewPortsJson, id);
     } catch (e: any) {
       db.prepare("UPDATE workspaces SET status = 'error' WHERE id = ?").run(id);
@@ -503,7 +503,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     if (isDocker()) await stopContainer(id);
     else stopLocal(id);
 
-    db.prepare("UPDATE workspaces SET status = 'stopped', preview_port = NULL WHERE id = ?").run(id);
+    db.prepare("UPDATE workspaces SET status = 'stopped', desired_running = 0, preview_port = NULL WHERE id = ?").run(id);
     return { ok: true };
   });
 
@@ -517,7 +517,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     if (isDocker()) await stopContainer(id);
     else stopLocal(id);
 
-    db.prepare("UPDATE workspaces SET status = 'starting', last_active_at = ? WHERE id = ?").run(Date.now(), id);
+    db.prepare("UPDATE workspaces SET status = 'starting', desired_running = 1, last_active_at = ? WHERE id = ?").run(Date.now(), id);
 
     const dir = workspacePath(id);
     const tmpl = getTemplate(w.template);
@@ -562,7 +562,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         startLocal(id, cmd2, dir, port2);
       }
       db.prepare(
-        "UPDATE workspaces SET status = 'running', preview_port = ?, preview_ports = ? WHERE id = ?",
+        "UPDATE workspaces SET status = 'running', desired_running = 1, preview_port = ?, preview_ports = ? WHERE id = ?",
       ).run(port2, previewPortsJson2, id);
     } catch (e: any) {
       db.prepare("UPDATE workspaces SET status = 'error' WHERE id = ?").run(id);

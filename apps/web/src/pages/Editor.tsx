@@ -80,6 +80,7 @@ type Workspace = {
   name: string;
   template: string;
   status: "stopped" | "starting" | "running" | "error";
+  desiredRunning?: boolean;
   previewPort?: number;
   previewUrl?: string;
   // Auto-generated <project>-<user>.<domain> URL — always present so the
@@ -917,6 +918,11 @@ export default function EditorPage() {
             }`} />
             {w?.status ?? "loading"}
           </span>
+          {w?.desiredRunning && w.status === "running" && (
+            <span className="hidden text-[9px] text-success xl:inline" title="Workspace akan otomatis dijalankan kembali setelah API/redeploy">
+              auto-restore
+            </span>
+          )}
         </div>
         <div className="workspace-toolbar ml-auto flex min-w-0 items-center gap-1.5">
         <span className={`hidden text-xs sm:inline ${dirty ? "text-warning" : "text-text-muted"}`}>{saveLabel}</span>

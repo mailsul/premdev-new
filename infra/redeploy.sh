@@ -128,22 +128,10 @@ if ! docker run --rm "$RUNTIME_TAG" sh -c 'test -f /usr/include/python3.12/Pytho
   echo "  Re-run with: RUNTIME_NOCACHE=1 bash redeploy.sh"
 fi
 
-echo "==> Restarting services"
-docker compose -f "$COMPOSE_FILE" up -d app caddy
-docker compose -f "$COMPOSE_FILE" restart caddy   # force Caddyfile reload
-
-echo "==> Validating Caddy config"
-docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile && echo "  OK"
-
-echo "==> Ensuring userhome bind-mount root exists (for shared pip/npm cache)"
-mkdir -p "$HOST_DATA_DIR/userhome"
-chown -R 1000:1000 "$HOST_DATA_DIR/userhome" 2>/dev/null || true
-chmod 755 "$HOST_DATA_DIR/userhome" 2>/dev/null || true
-
 echo "==> Cleaning stale workspace containers (forces re-spawn with new image)"
 # Match BOTH workspace labels (premdev.workspace = run container, premdev.shell
-# = terminal container) and BOTH name prefixes. Restart the app first so it
-# stops holding refs to the dying containers and respawns them on demand.
+# = terminal container) and BOTH name prefixes. This happens BEFORE the app
+# restart so startup auto-restore cannot race with this cleanup.
 remove_by() {
   local ids
   ids=$(docker ps -a "$@" -q 2>/dev/null || true)
@@ -172,6 +160,18 @@ if [[ -n "$NEW_IMAGE_ID" ]]; then
     fi
   done
 fi
+
+echo "==> Restarting services"
+docker compose -f "$COMPOSE_FILE" up -d app caddy
+docker compose -f "$COMPOSE_FILE" restart caddy   # force Caddyfile reload
+
+echo "==> Validating Caddy config"
+docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile && echo "  OK"
+
+echo "==> Ensuring userhome bind-mount root exists (for shared pip/npm cache)"
+mkdir -p "$HOST_DATA_DIR/userhome"
+chown -R 1000:1000 "$HOST_DATA_DIR/userhome" 2>/dev/null || true
+chmod 755 "$HOST_DATA_DIR/userhome" 2>/dev/null || true
 
 # --- Refresh ops scripts so bug fixes ship without re-running install.sh ---
 # These are tiny; safe to overwrite every redeploy. The bot service is only
