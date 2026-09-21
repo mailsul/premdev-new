@@ -131,6 +131,24 @@ import /etc/caddy/extra/*.caddy
                 }
         }
 
+        # Code Server gets an explicit host matcher so it never falls through
+        # to the generic unknown-subdomain handler. The API still performs the
+        # workspace ownership/session check and selects the pwc_<id> container.
+        @code_server host code-*.${PRIMARY_DOMAIN}
+        handle @code_server {
+                reverse_proxy app:3001 {
+                        transport http {
+                                dial_timeout 10s
+                                read_timeout 24h
+                                write_timeout 24h
+                        }
+                        flush_interval -1
+                        header_up Host {host}
+                        header_up X-Real-IP {remote}
+                        header_up X-Forwarded-Proto https
+                }
+        }
+
         @workspace header_regexp workspace Host ^[a-z0-9](?:[a-z0-9_-]{0,48}[a-z0-9])?\.${PRIMARY_DOMAIN}(?::[0-9]+)?$
         handle @workspace {
                 reverse_proxy app:3001 {

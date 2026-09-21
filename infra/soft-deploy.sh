@@ -154,6 +154,14 @@ run_step "showing recent app logs" "${COMPOSE[@]}" logs --tail=200 app
 (( app_ready == 1 )) ||
   fail "App belum sehat setelah ${HEALTH_RETRIES} percobaan. Periksa log di atas atau: ${COMPOSE[*]} logs -f app"
 
+# The API reconciles active custom-domain snippets during boot. Reload once
+# more after the new app is healthy so Caddy also sees those regenerated
+# snippets, not only the root Caddyfile rendered above.
+caddy_id="$("${COMPOSE[@]}" ps -q caddy 2>/dev/null || true)"
+if [[ -n "$caddy_id" ]]; then
+  run_step "reloading final Caddy routing" "${COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force
+fi
+
 printf '\n[OK] Soft deploy selesai tanpa restart workspace containers.\n'
 printf '[OK] Commit aktif: %s\n' "$NEW_COMMIT"
 printf '[OK] Log tersimpan: %s\n' "$LOG_FILE"

@@ -39,7 +39,22 @@ function domainSnippet(domain: string, cfToken: string): string {
                 file_server
         }
 
-        @ws_${safeName} header_regexp ws_${safeName} Host ^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?\\.${domain.replace(/\./g, "\\.")}$
+        @code_${safeName} host code-*.${domain}
+        handle @code_${safeName} {
+                reverse_proxy app:3001 {
+                        transport http {
+                                dial_timeout 10s
+                                read_timeout 24h
+                                write_timeout 24h
+                        }
+                        flush_interval -1
+                        header_up Host {host}
+                        header_up X-Real-IP {remote}
+                        header_up X-Forwarded-Proto https
+                }
+        }
+
+        @ws_${safeName} header_regexp ws_${safeName} Host ^[a-z0-9](?:[a-z0-9_-]{0,48}[a-z0-9])?\\.${domain.replace(/\./g, "\\.")}(?::[0-9]+)?$
         handle @ws_${safeName} {
                 reverse_proxy app:3001 {
                         transport http {
