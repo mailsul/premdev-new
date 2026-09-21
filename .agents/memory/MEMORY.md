@@ -1,0 +1,8 @@
+- [Cron scheduler runtime boundary](cron-scheduler-runtime.md) — scheduled execution must stay in the persistent workspace app container, never terminal or ephemeral containers.
+- [Custom-domain redeploy invariant](custom-domain-redeploy.md) — Caddyfile must be regenerated as a regular file before Compose starts; snippets remain persisted separately.
+- [Agent provider transcript contract](agent-provider-transcript.md) — normalize turns before every provider adapter and retry only errors explicitly marked transient.
+- [Browser verification boundary](browser-verification.md) — HTTP 200 is not UI proof; button claims require workspace-scoped browser evidence and console/page-error results.
+- [Agent completion evidence](agent-completion-evidence.md) — implementation, project validation, and browser verification are separate states; unavailable evidence cannot become success.
+- [API local dependency boundary](api-validation-environment.md) — the API workflow needs its app-local dev dependencies; web dependencies alone do not provide `tsx` or API TypeScript validation.
+- [Workspace agent profile boundary](agent-profile-boundary.md) — Hermes is an additive workspace profile under PremDev isolation, not a host-level second runtime.
+- [Browser reload boot behavior](browser-reload-boot.md) — reload lag is separate from tool navigation; prioritize auth bootstrap and initial API retries.
