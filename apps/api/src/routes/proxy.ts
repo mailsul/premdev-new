@@ -71,12 +71,23 @@ type ProxyDecision =
   | { ok: true; target: Target; privateWorkspaceId?: string; rewritePrefix?: string }
   | { ok: false; status: number; msg: string };
 
+function privateWorkspaceIdFromPath(rawUrl: string): string | null {
+  const pathname = rawUrl.split("?")[0];
+  const match = pathname.match(/^\/(code-server|code-preview)\/([^/]+)(?:\/|$)/);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[2]);
+  } catch {
+    return null;
+  }
+}
+
 function privatePathDecision(rawUrl: string): ProxyDecision | null {
   const pathname = rawUrl.split("?")[0];
   const match = pathname.match(/^\/(code-server|code-preview)\/([^/]+)(?:\/|$)/);
   if (!match) return null;
-  let workspaceId: string;
-  try { workspaceId = decodeURIComponent(match[2]); } catch { return { ok: false, status: 400, msg: "Invalid workspace path" }; }
+  const workspaceId = privateWorkspaceIdFromPath(rawUrl);
+  if (!workspaceId) return { ok: false, status: 400, msg: "Invalid workspace path" };
   const row = db.prepare(`
     SELECT s.status, s.preview_status, s.preview_port
     FROM code_server_sessions s
@@ -104,29 +115,42 @@ function privatePathDecision(rawUrl: string): ProxyDecision | null {
   };
 }
 
-async function authorizePrivateProxy(req: any, workspaceId: string, verifyToken?: (token: string) => any): Promise<boolean> {
+async function privateProxyUserId(req: any, verifyToken?: (token: string) => any): Promise<string | undefined> {
   try {
-    let userId: string | undefined;
     if (typeof req.jwtVerify === "function") {
       await req.jwtVerify();
-      userId = (req.user as any)?.sub;
-    } else {
-      const cookie = String(req.headers?.cookie ?? "");
-      const raw = cookie.match(/(?:^|;\s*)token=([^;]+)/)?.[1];
-      if (!raw || !verifyToken) return false;
-      const payload = verifyToken(decodeURIComponent(raw));
-      userId = payload?.sub;
+      return (req.user as any)?.sub;
     }
-    const row = db.prepare(`
-      SELECT 1
-      FROM code_server_sessions s
-      JOIN workspaces w ON w.id = s.workspace_id
-      WHERE s.workspace_id = ? AND s.owner_id = ? AND w.user_id = ?
-    `).get(workspaceId, userId, userId);
-    return Boolean(row);
+    const cookie = String(req.headers?.cookie ?? "");
+    const raw = cookie.match(/(?:^|;\s*)token=([^;]+)/)?.[1];
+    if (!raw || !verifyToken) return undefined;
+    return verifyToken(decodeURIComponent(raw))?.sub;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+async function authorizePrivateProxy(req: any, workspaceId: string, verifyToken?: (token: string) => any): Promise<boolean> {
+  const userId = await privateProxyUserId(req, verifyToken);
+  if (!userId) return false;
+  const row = db.prepare(`
+    SELECT 1
+    FROM code_server_sessions s
+    JOIN workspaces w ON w.id = s.workspace_id
+    WHERE s.workspace_id = ? AND s.owner_id = ? AND w.user_id = ?
+  `).get(workspaceId, userId, userId);
+  return Boolean(row);
+}
+
+function privateProxyLoginUrl(req: any): string {
+  const host = config.DEPLOY_DOMAIN || `app.${config.PRIMARY_DOMAIN}`;
+  const scheme = config.NODE_ENV === "production"
+    ? "https"
+    : String(req.headers?.["x-forwarded-proto"] ?? "http").split(",")[0].trim();
+  const returnTo = typeof req.url === "string" && req.url.startsWith("/")
+    ? `?returnTo=${encodeURIComponent(req.url)}`
+    : "";
+  return `${scheme}://${host}/login${returnTo}`;
 }
 
 /**
@@ -338,6 +362,11 @@ function workspaceErrorHtml(title: string, body: string, statusCode: number): st
 export function setupProxy(app: FastifyInstance): void {
   // ---- Plain HTTP requests ----
   app.addHook("onRequest", async (req, reply) => {
+    const privateWorkspaceId = privateWorkspaceIdFromPath(req.url ?? "");
+    if (privateWorkspaceId && !(await privateProxyUserId(req, (token) => app.jwt.verify(token)))) {
+      reply.redirect(privateProxyLoginUrl(req), 302);
+      return reply;
+    }
     const decision = privatePathDecision(req.url ?? "") ?? targetForHost(req.headers.host ?? "");
     if (!decision) return; // fall through to other handlers
     if (!decision.ok) {
@@ -352,7 +381,7 @@ export function setupProxy(app: FastifyInstance): void {
       return reply;
     }
     if (decision.privateWorkspaceId && !(await authorizePrivateProxy(req, decision.privateWorkspaceId, (token) => app.jwt.verify(token)))) {
-      reply.code(401).header("content-type", "text/plain; charset=utf-8").send("Unauthorized");
+      reply.code(403).header("content-type", "text/plain; charset=utf-8").send("Forbidden");
       return reply;
     }
     // For Socket.IO paths, transparently route to the NODE process port so
@@ -487,6 +516,12 @@ export function setupProxy(app: FastifyInstance): void {
   // For non-workspace hosts (e.g. /ws/terminal/* served by the app itself),
   // we return early so @fastify/websocket's listener handles it.
   app.server.on("upgrade", async (req, clientSocket, head) => {
+    const privateWorkspaceId = privateWorkspaceIdFromPath(req.url ?? "");
+    if (privateWorkspaceId && !(await privateProxyUserId(req, (token) => app.jwt.verify(token)))) {
+      try { clientSocket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"); } catch {}
+      try { clientSocket.destroy(); } catch {}
+      return;
+    }
     const decision = privatePathDecision(req.url ?? "") ?? targetForHost(req.headers.host ?? "");
     if (!decision) return; // not a workspace upgrade — let fastify-websocket handle it
     if (!decision.ok) {
@@ -497,7 +532,7 @@ export function setupProxy(app: FastifyInstance): void {
       return;
     }
     if (decision.privateWorkspaceId && !(await authorizePrivateProxy(req, decision.privateWorkspaceId, (token) => app.jwt.verify(token)))) {
-      try { clientSocket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"); } catch {}
+      try { clientSocket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); } catch {}
       try { clientSocket.destroy(); } catch {}
       return;
     }

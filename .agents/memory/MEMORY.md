@@ -9,3 +9,4 @@
 - [Browser reload boot behavior](browser-reload-boot.md) — reload lag is separate from tool navigation; prioritize auth bootstrap and initial API retries.
 - [Git push authentication](git-push-auth.md) — when remote credential headers fail, the workspace GitHub CLI credential helper is the reliable push path.
 - [Workspace redeploy restore](workspace-redeploy-restore.md) — remove stale workspace containers before app restart so boot restore cannot race with redeploy cleanup.
+- [Code Server authentication boundary](code-server-auth-boundary.md) — unauthenticated private IDE paths redirect to the PremDev login before workspace availability checks.

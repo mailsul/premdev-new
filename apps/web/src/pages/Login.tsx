@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { Code2, Loader2, Eye, EyeOff, ShieldCheck, Zap, LockKeyhole } from "lucide-react";
 
 export default function LoginPage() {
   const nav = useNavigate();
+  const location = useLocation();
   const { login } = useAuth();
   const [u, setU] = useState(() => localStorage.getItem("premdev:lastUsername") || "");
   const [p, setP] = useState("");
@@ -30,7 +31,8 @@ export default function LoginPage() {
         localStorage.removeItem("premdev:lastUsername");
         localStorage.removeItem("premdev:remember");
       }
-      nav("/", { replace: true });
+      const returnTo = new URLSearchParams(location.search).get("returnTo");
+      nav(returnTo?.startsWith("/") ? returnTo : "/", { replace: true });
     } catch (e: any) {
       setErr(e.message || "Login failed");
     } finally {
