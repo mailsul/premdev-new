@@ -310,10 +310,37 @@
     .palette-item { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; border-radius: 8px; padding: 10px; color: var(--muted); background: transparent; text-align: left; }
     .palette-item:hover { color: var(--text); background: var(--accent-soft); }
     .palette-key { margin-left: auto; color: var(--muted-2); font-size: 10px; }
+    .layout-backdrop { position: fixed; inset: 0; z-index: 9; display: none; place-items: start center; padding-top: 78px; background: rgba(3,5,8,.44); backdrop-filter: blur(4px); }
+    .layout-backdrop.open { display: grid; }
+    .layout-panel { width: min(760px, calc(100vw - 28px)); max-height: min(680px, calc(100vh - 104px)); overflow: auto; border: 1px solid var(--line-strong); border-radius: 13px; background: var(--panel); box-shadow: 0 28px 90px rgba(0,0,0,.38); }
+    .layout-head { display: flex; align-items: center; gap: 10px; padding: 15px 17px; border-bottom: 1px solid var(--line); }
+    .layout-head h2 { margin: 0; flex: 1; font-size: 14px; }
+    .layout-head p { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
+    .layout-body { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 17px; }
+    .layout-column { min-width: 0; }
+    .layout-section { margin-bottom: 18px; }
+    .layout-section h3 { margin: 0 0 8px; color: var(--muted-2); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .layout-option { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 7px 8px; border-radius: 7px; color: var(--muted); transition: .16s ease; }
+    .layout-option:hover { color: var(--text); background: var(--panel-3); }
+    .layout-option input { accent-color: var(--accent); }
+    .layout-option span { flex: 1; }
+    .layout-option kbd { color: var(--muted-2); font-size: 10px; }
+    .layout-rule { height: 1px; margin: 4px 0 10px; background: var(--line); }
+    .workspace-directory { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .directory-group { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); }
+    .directory-group h4 { margin: 0 0 7px; color: var(--accent-2); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .directory-group button { display: block; width: 100%; border: 0; padding: 4px 0; color: var(--muted); background: transparent; text-align: left; font-size: 10px; }
+    .directory-group button:hover { color: var(--text); }
+    .layout-foot { display: flex; align-items: center; gap: 8px; padding: 12px 17px; border-top: 1px solid var(--line); background: var(--panel-2); }
+    .layout-foot span { flex: 1; color: var(--muted-2); font-size: 10px; }
+    .layout-toast { position: fixed; right: 18px; bottom: 45px; z-index: 12; display: none; border: 1px solid var(--line-strong); border-radius: 8px; padding: 9px 12px; color: var(--text); background: var(--panel); box-shadow: var(--shadow); font-size: 11px; }
+    .layout-toast.show { display: block; animation: toast-in .2s ease; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
     @media (max-width: 1100px) {
       .workspace { grid-template-columns: 58px 205px minmax(400px, 1fr); }
       .right { display: none; }
+      .layout-body { grid-template-columns: 1fr; }
     }
     @media (max-width: 720px) {
       :root { --sidebar: 0px; }
@@ -325,6 +352,7 @@
       .activity { width: 36px; height: 36px; }
       .center { grid-template-rows: 42px minmax(300px, 1fr) 200px; }
       .top-actions .button:not(.primary):not(.icon) { display: none; }
+      .workspace-directory { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -338,6 +366,7 @@
       <div class="crumbs"><span>Workspaces</span><span class="slash">/</span><strong>saas-landing</strong></div>
       <div class="top-actions">
         <button class="button ghost" id="paletteButton">⌘ K&nbsp; Command</button>
+        <button class="button ghost" id="layoutButton">☷&nbsp; Customize Layout</button>
         <button class="button icon" id="themeButton" title="Toggle light and dark theme">D</button>
         <button class="button run-control running" id="runButton"><i class="run-dot"></i><span id="runLabel">Running</span></button>
         <button class="button primary" id="shareButton">↗ Share</button>
@@ -486,6 +515,91 @@
     </div>
   </div>
 
+  <div class="layout-backdrop" id="layoutMenu">
+    <section class="layout-panel" role="dialog" aria-modal="true" aria-labelledby="layoutTitle">
+      <header class="layout-head">
+        <span class="tool-icon" style="font-size:18px">☷</span>
+        <div>
+          <h2 id="layoutTitle">Customize Layout</h2>
+          <p>Atur panel Workspace Editor tanpa meninggalkan workspace.</p>
+        </div>
+        <button class="button icon ghost" id="layoutClose" aria-label="Close customize layout">×</button>
+      </header>
+      <div class="layout-body">
+        <div class="layout-column">
+          <section class="layout-section">
+            <h3>Visibility</h3>
+            <label class="layout-option"><input type="checkbox" data-layout-toggle="menu" checked><span>Menu Bar</span><kbd>Visibility</kbd></label>
+            <label class="layout-option"><input type="checkbox" data-layout-toggle="activity" checked><span>Activity Bar</span></label>
+            <label class="layout-option"><input type="checkbox" data-layout-toggle="secondary-activity"><span>Secondary Activity Bar</span></label>
+            <label class="layout-option"><input type="checkbox" data-layout-toggle="primary-sidebar" checked><span>Primary Side Bar</span></label>
+            <label class="layout-option"><input type="checkbox" data-layout-toggle="secondary-sidebar"><span>Secondary Side Bar</span></label>
+            <label class="layout-option"><input type="checkbox" data-layout-toggle="panel" checked><span>Panel</span><kbd>Ctrl + J</kbd></label>
+            <label class="layout-option"><input type="checkbox" data-layout-toggle="status" checked><span>Status Bar</span></label>
+          </section>
+          <section class="layout-section">
+            <h3>Primary Side Bar Position</h3>
+            <label class="layout-option"><input type="radio" name="sidebar-position" value="left" checked><span>Left</span><kbd>✓</kbd></label>
+            <label class="layout-option"><input type="radio" name="sidebar-position" value="right"><span>Right</span></label>
+          </section>
+          <section class="layout-section">
+            <h3>Quick Input Position</h3>
+            <label class="layout-option"><input type="radio" name="quick-position" value="top" checked><span>Top</span></label>
+            <label class="layout-option"><input type="radio" name="quick-position" value="center"><span>Center</span></label>
+            <label class="layout-option"><input type="radio" name="quick-position" value="bottom"><span>Bottom</span></label>
+          </section>
+        </div>
+        <div class="layout-column">
+          <section class="layout-section">
+            <h3>Panel Alignment</h3>
+            <label class="layout-option"><input type="radio" name="panel-alignment" value="left"><span>Left</span></label>
+            <label class="layout-option"><input type="radio" name="panel-alignment" value="right"><span>Right</span></label>
+            <label class="layout-option"><input type="radio" name="panel-alignment" value="center" checked><span>Center</span><kbd>✓</kbd></label>
+            <label class="layout-option"><input type="radio" name="panel-alignment" value="justify"><span>Justify</span></label>
+          </section>
+          <section class="layout-section">
+            <h3>Workspace Tools</h3>
+            <div class="workspace-directory">
+              <div class="directory-group">
+                <h4>Develop</h4>
+                <button data-directory-tool="Console">Console</button>
+                <button data-directory-tool="Shell">Shell</button>
+                <button data-directory-tool="Preview">Preview</button>
+                <button data-directory-tool="Database">Database</button>
+              </div>
+              <div class="directory-group">
+                <h4>Configure</h4>
+                <button data-directory-tool="Secrets &amp; Database">Secrets &amp; Database</button>
+                <button data-directory-tool="Agent Workspace">Agent Workspace</button>
+                <button data-directory-tool="Cron Jobs">Cron Jobs</button>
+                <button data-directory-tool="Workspace Config">Workspace Config</button>
+              </div>
+              <div class="directory-group">
+                <h4>Ship</h4>
+                <button data-directory-tool="Git">Git</button>
+                <button data-directory-tool="Checkpoints">Checkpoints</button>
+                <button data-directory-tool="Custom Subdomain">Custom Subdomain</button>
+              </div>
+            </div>
+          </section>
+          <section class="layout-section">
+            <h3>Core Surfaces</h3>
+            <div class="workspace-directory" style="grid-template-columns:repeat(2,1fr)">
+              <div class="directory-group"><h4>Editor</h4><button data-directory-tool="File Explorer">File Explorer</button><button data-directory-tool="Code Editor">Code Editor</button><button data-directory-tool="Search Files">Search Files</button></div>
+              <div class="directory-group"><h4>Runtime</h4><button data-directory-tool="Run / Stop">Run / Stop</button><button data-directory-tool="AI Assistant">AI Assistant</button><button data-directory-tool="Command Palette">Command Palette</button></div>
+            </div>
+          </section>
+        </div>
+      </div>
+      <footer class="layout-foot">
+        <span>Perubahan layout hanya berlaku untuk tampilan workspace ini.</span>
+        <button class="button ghost" id="layoutReset">Reset</button>
+        <button class="button primary" id="layoutDone">Done</button>
+      </footer>
+    </section>
+  </div>
+  <div class="layout-toast" id="layoutToast" role="status"></div>
+
   <script>
     const root = document.documentElement;
     const themeButton = document.getElementById("themeButton");
@@ -493,6 +607,8 @@
     const runLabel = document.getElementById("runLabel");
     const palette = document.getElementById("palette");
     const paletteInput = document.getElementById("paletteInput");
+    const layoutMenu = document.getElementById("layoutMenu");
+    const layoutToast = document.getElementById("layoutToast");
     const sideTitle = document.getElementById("sideTitle");
     const rightTitle = document.getElementById("rightTitle");
     const rightContent = document.getElementById("rightContent");
@@ -507,6 +623,52 @@
       localStorage.setItem("premdev-reference-theme", root.dataset.theme);
       syncThemeIcon();
     });
+
+    function openLayout() { layoutMenu.classList.add("open"); }
+    function closeLayout() { layoutMenu.classList.remove("open"); }
+    function showLayoutToast(message) {
+      layoutToast.textContent = message;
+      layoutToast.classList.add("show");
+      window.clearTimeout(showLayoutToast.timer);
+      showLayoutToast.timer = window.setTimeout(() => layoutToast.classList.remove("show"), 1800);
+    }
+    document.getElementById("layoutButton").addEventListener("click", openLayout);
+    document.getElementById("layoutClose").addEventListener("click", closeLayout);
+    document.getElementById("layoutDone").addEventListener("click", () => { closeLayout(); showLayoutToast("Layout workspace tersimpan"); });
+    document.getElementById("layoutReset").addEventListener("click", () => {
+      document.querySelectorAll("[data-layout-toggle]").forEach(input => input.checked = ["menu", "activity", "primary-sidebar", "panel", "status"].includes(input.dataset.layoutToggle));
+      applyLayoutVisibility();
+      document.querySelector('input[name="sidebar-position"][value="left"]').checked = true;
+      document.querySelector('input[name="panel-alignment"][value="center"]').checked = true;
+      document.querySelector('input[name="quick-position"][value="top"]').checked = true;
+      showLayoutToast("Layout dikembalikan ke default");
+    });
+    layoutMenu.addEventListener("click", event => {
+      if (event.target === layoutMenu) closeLayout();
+      const tool = event.target.closest("[data-directory-tool]");
+      if (tool) {
+        closeLayout();
+        showTool(tool.dataset.directoryTool);
+        showLayoutToast(tool.dataset.directoryTool + " dibuka");
+      }
+    });
+    document.querySelectorAll("[data-layout-toggle]").forEach(input => input.addEventListener("change", () => {
+      applyLayoutVisibility();
+      showLayoutToast(input.parentElement.querySelector("span").textContent + (input.checked ? " ditampilkan" : " disembunyikan"));
+    }));
+    document.querySelectorAll('input[name="sidebar-position"], input[name="panel-alignment"], input[name="quick-position"]').forEach(input => input.addEventListener("change", () => showLayoutToast("Posisi layout diperbarui")));
+    function applyLayoutVisibility() {
+      const targets = {
+        menu: document.querySelector(".topbar"),
+        activity: document.querySelector(".activitybar"),
+        "primary-sidebar": document.querySelector(".sidebar"),
+        panel: document.querySelector(".bottom"),
+        status: document.querySelector(".footer")
+      };
+      document.querySelectorAll("[data-layout-toggle]").forEach(input => {
+        if (targets[input.dataset.layoutToggle]) targets[input.dataset.layoutToggle].style.display = input.checked ? "" : "none";
+      });
+    }
 
     runButton.addEventListener("click", () => {
       const running = runButton.classList.toggle("running");
@@ -608,6 +770,7 @@
     document.addEventListener("keydown", event => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); palette.classList.add("open"); paletteInput.focus(); }
       if (event.key === "Escape") closePalette();
+      if (event.key === "Escape") closeLayout();
     });
     document.querySelectorAll("[data-command]").forEach(item => item.addEventListener("click", () => {
       const command = item.dataset.command;
