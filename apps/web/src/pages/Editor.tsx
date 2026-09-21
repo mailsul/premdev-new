@@ -162,10 +162,10 @@ const DEFAULT_LAYOUT_PREFERENCES: LayoutPreferences = {
   activityBar: true,
   secondaryActivityBar: false,
   primarySideBar: true,
-  secondarySideBar: true,
+  secondarySideBar: false,
   panel: true,
   statusBar: true,
-  primarySideBarPosition: "right",
+  primarySideBarPosition: "left",
   panelAlignment: "center",
   quickInputPosition: "top",
 };
@@ -209,7 +209,7 @@ export default function EditorPage() {
   const [layoutPreferences, setLayoutPreferences] = useState<LayoutPreferences>(() => {
     if (typeof window === "undefined" || !id) return DEFAULT_LAYOUT_PREFERENCES;
     try {
-      const saved = localStorage.getItem(`premdev.layout.${id}`);
+      const saved = localStorage.getItem(`premdev.layout.v2.${id}`);
       if (!saved) return DEFAULT_LAYOUT_PREFERENCES;
       return { ...DEFAULT_LAYOUT_PREFERENCES, ...JSON.parse(saved) } as LayoutPreferences;
     } catch {
@@ -290,7 +290,7 @@ export default function EditorPage() {
   useEffect(() => {
     if (!id) return;
     try {
-      localStorage.setItem(`premdev.layout.${id}`, JSON.stringify(layoutPreferences));
+      localStorage.setItem(`premdev.layout.v2.${id}`, JSON.stringify(layoutPreferences));
     } catch {}
   }, [id, layoutPreferences]);
 
@@ -866,7 +866,14 @@ export default function EditorPage() {
         >
           <SlidersHorizontal size={14} /> <span className="hidden lg:inline">Customize Layout</span>
         </button>
-        <button className="btn-secondary" onClick={() => setShowAI((s) => !s)}>
+        <button
+          className={`btn-secondary ${showSecondarySidebar ? "text-accent" : ""}`}
+          onClick={() => {
+            setShowAI((s) => !s);
+            setLayoutPreferences((current) => ({ ...current, secondarySideBar: !current.secondarySideBar }));
+          }}
+          title="Toggle AI panel"
+        >
           <Sparkles size={14} /> AI
         </button>
         </div>
@@ -1147,6 +1154,20 @@ export default function EditorPage() {
                 maxSize={compactLayout ? 45 : 30}
               >
                 {workspaceSidePanel}
+              </Panel>
+            </>
+          )}
+          {!compactLayout && (
+            <>
+              <PanelResizeHandle className="w-px bg-bg-border hover:bg-accent" />
+              <Panel defaultSize={26} minSize={20} maxSize={40}>
+                <WorkspacePreviewPanel
+                  workspace={w}
+                  onOpenTool={(tool) => {
+                    if (tool === "secrets") setSecretsOpenDbTemplate(false);
+                    openTool(tool);
+                  }}
+                />
               </Panel>
             </>
           )}
@@ -2445,6 +2466,95 @@ function CustomizeLayoutModal({
         </footer>
       </section>
     </div>
+  );
+}
+
+function WorkspacePreviewPanel({
+  workspace,
+  onOpenTool,
+}: {
+  workspace?: Workspace;
+  onOpenTool: (tool: WorkspaceTool) => void;
+}) {
+  const quickTools: Array<{ id: WorkspaceTool; label: string; description: string; icon: React.ReactNode }> = [
+    { id: "cron", label: "Cron Jobs", description: "Scheduled tasks", icon: <Clock size={14} /> },
+    { id: "database", label: "Database", description: "3 tables connected", icon: <Database size={14} /> },
+    { id: "git", label: "Git", description: "Changes and history", icon: <GitBranch size={14} /> },
+    { id: "secrets", label: "Secrets", description: "Environment ready", icon: <Lock size={14} /> },
+    { id: "agent", label: "Agent", description: "Workspace assistant", icon: <Bot size={14} /> },
+    { id: "checkpoints", label: "Checkpoints", description: "Restore points", icon: <History size={14} /> },
+    { id: "subdomain", label: "Subdomain", description: "Custom workspace URL", icon: <Globe size={14} /> },
+  ];
+  const healthy = workspace?.status === "running";
+  return (
+    <aside className="flex h-full min-h-0 flex-col bg-bg-panel">
+      <div className="flex shrink-0 items-center justify-between border-b border-bg-border px-4 py-3">
+        <div className="flex items-center gap-2 text-xs font-semibold text-text">
+          <Eye size={14} className="text-accent" />
+          Live Preview
+        </div>
+        <span className={`flex items-center gap-1.5 text-[10px] font-medium ${healthy ? "text-success" : "text-text-muted"}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${healthy ? "bg-success" : "bg-text-subtle"}`} />
+          {healthy ? "healthy" : "offline"}
+        </span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-3">
+        <div className="overflow-hidden rounded-xl border border-bg-border bg-bg shadow-lg">
+          <div className="flex items-center gap-1.5 border-b border-bg-border bg-bg-subtle px-3 py-2">
+            <span className="h-1.5 w-1.5 rounded-full bg-danger" />
+            <span className="h-1.5 w-1.5 rounded-full bg-warning" />
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            <span className="ml-2 min-w-0 flex-1 truncate rounded bg-bg-hover px-2 py-1 text-[9px] text-text-muted">
+              {workspace?.previewUrl ?? "workspace preview"}
+            </span>
+            {workspace?.previewUrl && <a href={workspace.previewUrl} target="_blank" rel="noreferrer" className="text-text-muted hover:text-text" title="Open preview"><ExternalLink size={11} /></a>}
+          </div>
+          <div className="min-h-[210px] bg-bg-subtle">
+            {workspace?.previewUrl && healthy ? (
+              <iframe title="Live workspace preview" src={workspace.previewUrl} className="h-[260px] w-full bg-white" />
+            ) : (
+              <div className="flex min-h-[210px] flex-col items-center justify-center px-5 text-center">
+                <Monitor size={28} className="mb-3 text-text-subtle" />
+                <p className="text-xs font-semibold text-text">Preview belum aktif</p>
+                <p className="mt-1 text-[10px] leading-relaxed text-text-muted">
+                  Jalankan workspace untuk melihat aplikasi live di panel ini.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Workspace pulse</div>
+          <div className="flex gap-2 rounded-xl border border-accent/20 bg-accent/5 p-3">
+            <Activity size={15} className="mt-0.5 shrink-0 text-accent" />
+            <div>
+              <p className="text-[11px] font-semibold text-text">{healthy ? "Everything is ready to ship" : "Workspace is ready to run"}</p>
+              <p className="mt-0.5 text-[10px] leading-relaxed text-text-muted">
+                {healthy ? "Preview is responding normally." : "Start the container to connect the live preview."}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Quick tools</div>
+          <div className="grid grid-cols-2 gap-2">
+            {quickTools.map((tool) => (
+              <button
+                key={tool.id}
+                className="rounded-xl border border-bg-border bg-bg p-2.5 text-left transition hover:-translate-y-0.5 hover:border-accent/50 hover:bg-bg-hover"
+                onClick={() => onOpenTool(tool.id)}
+              >
+                <span className="text-accent">{tool.icon}</span>
+                <span className="mt-1.5 block truncate text-[10px] font-semibold text-text">{tool.label}</span>
+                <span className="mt-0.5 block truncate text-[9px] text-text-muted">{tool.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </aside>
   );
 }
 
