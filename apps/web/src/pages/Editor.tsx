@@ -126,7 +126,7 @@ function isBinaryFile(p: string) {
 }
 
 type WorkspaceTool =
-  | "console" | "terminal" | "preview" | "database" | "cron" | "secrets" | "git"
+  | "tools" | "console" | "terminal" | "preview" | "database" | "cron" | "secrets" | "git"
   | "checkpoints" | "db-connection" | "subdomain" | "workspace-config"
   | "quick-actions" | "editor-settings" | "command-palette" | "workspace-search"
   | "share" | "activity" | "find-replace" | "shortcuts" | "diff";
@@ -145,7 +145,7 @@ function hashState(): { file: string | null; tool: WorkspaceTool | null } {
   return {
     file: file ? file.replace(/^\/+/, "") : null,
     tool: tool && [
-      "console", "terminal", "preview", "database", "cron", "secrets", "git",
+      "tools", "console", "terminal", "preview", "database", "cron", "secrets", "git",
       "checkpoints", "db-connection", "subdomain", "workspace-config",
       "quick-actions", "editor-settings", "command-palette", "workspace-search",
       "share", "activity", "find-replace", "shortcuts", "diff",
@@ -545,6 +545,8 @@ export default function EditorPage() {
   function renderActiveSurface() {
     const closeSurface = () => setActiveSurface("file");
     switch (activeSurface) {
+      case "tools":
+        return <ToolsSurface onOpenTool={openTool} />;
       case "cron":
         return <CronJobsPanel workspaceId={id!} embedded onClose={closeSurface} />;
       case "git":
@@ -792,6 +794,7 @@ export default function EditorPage() {
                 <WorkspaceTabBar
                   openTabs={openTabs}
                   activePath={activePath}
+                  activeSurface={activeSurface}
                   newTabOpen={newTabOpen}
                   bottomTab={bottomTab}
                   sidePanelTab={sidePanelTab}
@@ -830,6 +833,7 @@ export default function EditorPage() {
                       openTool(t);
                     }}
                     bottomTab={bottomTab}
+                    activeSurface={activeSurface}
                     recentFiles={recentFiles}
                   />
                 ) : activePath && isImageFile(activePath) ? (
@@ -2019,7 +2023,8 @@ function WorkspaceSidePanel({
   onOpenTool: (tool: WorkspaceTool) => void;
 }) {
   const libraryItems: Array<{ id: WorkspaceTool; label: string; description: string; icon: React.ReactNode }> = [
-    { id: "console", label: "Tools / Workflows", description: "Process logs and workflows", icon: <Layers size={14} /> },
+    { id: "tools", label: "Tools", description: "Everything to configure, connect, and ship", icon: <Wand2 size={14} /> },
+    { id: "console", label: "Console", description: "Process logs and workflows", icon: <Layers size={14} /> },
     { id: "preview", label: "Preview", description: "Live app preview", icon: <Eye size={14} /> },
     { id: "terminal", label: "Shell", description: "Workspace terminal", icon: <Terminal size={14} /> },
     { id: "database", label: "Database", description: "Workspace database", icon: <Database size={14} /> },
@@ -2265,6 +2270,105 @@ function ToolEmptyState({ title, message }: { title: string; message: string }) 
         <h2 className="text-sm font-semibold text-text">{title}</h2>
         <p className="mt-1 max-w-md text-xs text-text-muted">{message}</p>
       </div>
+    </div>
+  );
+}
+
+function ToolsSurface({ onOpenTool }: { onOpenTool: (tool: WorkspaceTool) => void }) {
+  const groups: Array<{
+    title: string;
+    items: Array<{ id: WorkspaceTool; label: string; description: string; icon: React.ReactNode }>;
+  }> = [
+    {
+      title: "Develop",
+      items: [
+        { id: "console", label: "Console", description: "View terminal output after running your code", icon: <Layers size={15} /> },
+        { id: "terminal", label: "Shell", description: "Direct access to your workspace", icon: <Terminal size={15} /> },
+        { id: "preview", label: "Preview", description: "View your running app", icon: <Eye size={15} /> },
+        { id: "database", label: "Database", description: "Query your workspace database", icon: <Database size={15} /> },
+      ],
+    },
+    {
+      title: "Configure",
+      items: [
+        { id: "db-connection", label: "Database Connection", description: "External database credentials", icon: <Database size={15} /> },
+        { id: "secrets", label: "Secrets", description: "Workspace environment variables", icon: <Lock size={15} /> },
+        { id: "cron", label: "Cron Jobs", description: "Scheduled workspace tasks", icon: <Clock size={15} /> },
+        { id: "workspace-config", label: "Workspace Config", description: "Open .premdev settings", icon: <Settings size={15} /> },
+      ],
+    },
+    {
+      title: "Ship",
+      items: [
+        { id: "git", label: "Git", description: "Changes, commits, and history", icon: <GitBranch size={15} /> },
+        { id: "checkpoints", label: "Checkpoints", description: "Save and restore workspace states", icon: <History size={15} /> },
+        { id: "subdomain", label: "Custom Subdomain", description: "Configure the workspace URL", icon: <Globe size={15} /> },
+      ],
+    },
+  ];
+
+  return (
+    <div className="flex h-full min-h-0 overflow-hidden bg-bg-base">
+      <aside className="hidden w-48 shrink-0 border-r border-bg-border bg-bg-panel p-3 sm:block">
+        <div className="mb-3 flex items-center gap-2 px-2">
+          <Wand2 size={15} className="text-accent" />
+          <span className="text-sm font-semibold text-text">Tools</span>
+        </div>
+        <div className="space-y-1">
+          {groups.map((group) => (
+            <div key={group.title} className="mb-3">
+              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                {group.title}
+              </div>
+              {group.items.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => onOpenTool(item.id)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] text-text-muted transition hover:bg-bg-hover hover:text-text"
+                >
+                  <span className="text-text-subtle">{item.icon}</span>
+                  <span className="truncate">{item.label}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      </aside>
+      <main className="min-w-0 flex-1 overflow-auto p-5 sm:p-8">
+        <div className="mx-auto max-w-4xl">
+          <div className="mb-6">
+            <h1 className="text-xl font-semibold tracking-tight text-text">Tools</h1>
+            <p className="mt-1 text-xs text-text-muted">
+              Everything to configure, connect, and ship your workspace.
+            </p>
+          </div>
+          {groups.map((group) => (
+            <section key={group.title} className="mb-6">
+              <h2 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
+                {group.title}
+              </h2>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {group.items.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => onOpenTool(item.id)}
+                    className="group flex items-center gap-3 rounded-lg border border-bg-border bg-bg-panel p-3 text-left transition hover:border-accent/40 hover:bg-bg-hover"
+                  >
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-accent/10 text-accent group-hover:bg-accent/20">
+                      {item.icon}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-xs font-semibold text-text">{item.label}</span>
+                      <span className="mt-0.5 block text-[11px] text-text-muted">{item.description}</span>
+                    </span>
+                    <ChevronRight size={13} className="ml-auto shrink-0 text-text-subtle transition group-hover:translate-x-0.5 group-hover:text-accent" />
+                  </button>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </main>
     </div>
   );
 }
@@ -2973,7 +3077,7 @@ function GroupedTree({
 
 // ── NewTabPage — Replit-style launcher shown when "+" tab is clicked ────────
 function NewTabPage({
-  workspaceId, openTabs, activePath, onOpenFile, onOpenTool, bottomTab, recentFiles,
+  workspaceId, openTabs, activePath, onOpenFile, onOpenTool, bottomTab, activeSurface, recentFiles,
 }: {
   workspaceId: string;
   openTabs: string[];
@@ -2981,6 +3085,7 @@ function NewTabPage({
   onOpenFile: (p: string) => void;
   onOpenTool: (t: WorkspaceTool) => void;
   bottomTab: "console" | "terminal" | "preview" | "database";
+  activeSurface: WorkspaceSurface;
   recentFiles?: string[];
 }) {
   const [q, setQ] = useState("");
@@ -3000,7 +3105,8 @@ function NewTabPage({
     : [];
 
   const TOOLS: { id: WorkspaceTool; label: string; desc: string; icon: React.ReactNode }[] = [
-    { id: "console",  label: "Tools", desc: "Workflows and logs",                    icon: <Layers size={18} /> },
+    { id: "tools",    label: "Tools", desc: "Everything to configure, connect, and ship", icon: <Wand2 size={18} /> },
+    { id: "console",  label: "Console", desc: "View terminal output after running your code", icon: <Layers size={18} /> },
     { id: "preview",  label: "Preview", desc: "Live preview of your running app",    icon: <Eye size={18} /> },
     { id: "terminal", label: "Shell", desc: "Shell akses langsung ke workspace",      icon: <Terminal size={18} /> },
     { id: "database", label: "Database", desc: "Query your workspace database",       icon: <Database size={18} /> },
@@ -3105,7 +3211,7 @@ function NewTabPage({
             <h3 className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Suggested</h3>
             <div className="rounded-lg border border-bg-border overflow-hidden">
               {TOOLS.map((tool, i) => {
-                const isActive = bottomTab === tool.id;
+                const isActive = activeSurface === tool.id;
                 return (
                   <button
                     key={tool.id}
@@ -3132,6 +3238,7 @@ function NewTabPage({
 function WorkspaceTabBar({
   openTabs,
   activePath,
+  activeSurface,
   newTabOpen,
   bottomTab,
   sidePanelTab,
@@ -3150,6 +3257,7 @@ function WorkspaceTabBar({
 }: {
   openTabs: string[];
   activePath: string | null;
+  activeSurface: WorkspaceSurface;
   newTabOpen: boolean;
   bottomTab: "console" | "terminal" | "preview" | "database";
   sidePanelTab: "files" | "library";
@@ -3173,7 +3281,11 @@ function WorkspaceTabBar({
     active: boolean;
     onClick: () => void;
   }> = [
-    // File tabs are rendered below; workspace tools live in the right Tools tab.
+    { id: "tools", label: "Tools", icon: <Wand2 size={11} />, active: activeSurface === "tools", onClick: () => onOpenTool("tools") },
+    { id: "preview", label: "Preview", icon: <Eye size={11} />, active: activeSurface === "preview", onClick: () => onOpenTool("preview") },
+    { id: "console", label: "Console", icon: <Layers size={11} />, active: activeSurface === "console", onClick: () => onOpenTool("console") },
+    { id: "terminal", label: "Shell", icon: <Terminal size={11} />, active: activeSurface === "terminal", onClick: () => onOpenTool("terminal") },
+    { id: "database", label: "Database", icon: <Database size={11} />, active: activeSurface === "database", onClick: () => onOpenTool("database") },
   ];
   return (
     <div className="flex min-w-0 shrink-0 overflow-x-auto border-b border-bg-border bg-bg-subtle/80" style={{ scrollbarWidth: "thin" }}>
@@ -3245,10 +3357,15 @@ function WorkspaceTabBar({
       )}
       <button
         onClick={onNewTab}
-        className="flex shrink-0 items-center border-t-2 border-t-transparent px-2.5 py-2 text-text-muted hover:bg-bg-hover hover:text-text"
+        className={`flex shrink-0 items-center gap-1.5 border-t-2 px-3 py-2 text-[11px] font-medium transition ${
+          newTabOpen
+            ? "border-t-accent bg-bg text-text"
+            : "border-t-transparent text-text-muted hover:bg-bg-hover hover:text-text"
+        }`}
         title="New Tab"
       >
         <Plus size={12} />
+        <span>New tab</span>
       </button>
     </div>
   );
