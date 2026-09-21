@@ -133,9 +133,15 @@ export async function startCodeServer(opts: {
     const existing = docker.getContainer(name);
     const info = await existing.inspect();
     if (info.State?.Running && !info.State?.Paused && !info.State?.Dead) {
-      return { containerId: info.Id, port: config.CODE_SERVER_PORT };
+      try {
+        await waitForCodeServerReady(opts.workspaceId);
+        return { containerId: info.Id, port: config.CODE_SERVER_PORT };
+      } catch {
+        await existing.remove({ force: true }).catch(() => {});
+      }
+    } else {
+      await existing.remove({ force: true }).catch(() => {});
     }
-    await existing.remove({ force: true }).catch(() => {});
   } catch {}
 
   await ensureRuntimeImage();
@@ -183,7 +189,43 @@ export async function startCodeServer(opts: {
     },
   });
   await container.start();
+  try {
+    await waitForCodeServerReady(opts.workspaceId);
+  } catch (error) {
+    const logs = await container.logs({ stdout: true, stderr: true, tail: 80 }).catch(() => Buffer.from(""));
+    await container.remove({ force: true }).catch(() => {});
+    const detail = logs.toString().trim();
+    throw new Error(
+      detail
+        ? `Code Server gagal listen di port ${config.CODE_SERVER_PORT}: ${detail.slice(-2000)}`
+        : (error as Error)?.message ?? "Code Server gagal listen.",
+    );
+  }
   return { containerId: container.id, port: config.CODE_SERVER_PORT };
+}
+
+/**
+ * Docker reports a container as Running before the code-server process has
+ * finished binding its HTTP port. Do not expose the proxy until the process
+ * is actually reachable from inside the container.
+ */
+export async function waitForCodeServerReady(workspaceId: string, timeoutMs = 20_000): Promise<void> {
+  const result = await execCodeServer(
+    workspaceId,
+    [
+      "set -eu",
+      `for i in $(seq 1 80); do`,
+      `  (echo > /dev/tcp/127.0.0.1/${config.CODE_SERVER_PORT}) 2>/dev/null && exit 0`,
+      "  sleep 0.25",
+      "done",
+      `echo "port ${config.CODE_SERVER_PORT} did not open"`,
+      "exit 1",
+    ].join("\n"),
+    timeoutMs,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(result.output.trim() || `Code Server port ${config.CODE_SERVER_PORT} belum siap.`);
+  }
 }
 
 async function execCodeServer(workspaceId: string, command: string, timeoutMs = 30_000): Promise<{ output: string; exitCode: number }> {

@@ -6,7 +6,6 @@ import { config } from "../lib/config.js";
 import { ensureWorkspaceDir, docker } from "../lib/runtime.js";
 import { resolveWorkspaceEnv } from "../lib/workspace-env.js";
 import {
-  codeServerIsRunning,
   startCodeServer,
 } from "../lib/code-server.js";
 
@@ -182,21 +181,6 @@ async function ensureCodeServerForOwner(workspaceId: string, ownerId: string): P
       quota_mem_mb: number;
     }) | undefined;
     if (!row) return false;
-
-    if (await codeServerIsRunning(workspaceId)) {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO code_server_sessions
-          (workspace_id, owner_id, status, code_server_port, preview_status, last_client_at, created_at, updated_at)
-        VALUES (?, ?, 'running', ?, 'stopped', ?, ?, ?)
-        ON CONFLICT(workspace_id) DO UPDATE SET
-          owner_id = excluded.owner_id,
-          status = 'running',
-          last_client_at = excluded.last_client_at,
-          updated_at = excluded.updated_at
-      `).run(workspaceId, ownerId, config.CODE_SERVER_PORT, now, now, now);
-      return true;
-    }
 
     try {
       const started = await startCodeServer({
