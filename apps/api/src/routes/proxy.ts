@@ -416,6 +416,22 @@ function targetForHost(rawHost: string): ProxyDecision | null {
   return null;
 }
 
+/**
+ * The Fastify WebSocket plugin also listens on the server's raw `upgrade`
+ * event. Workspace upgrades are already tunneled by this module, so the
+ * generic listener must not route them a second time (it would close a
+ * Code Server upgrade as an unregistered Fastify route).
+ */
+export function isWorkspaceUpgradeRequest(req: {
+  url?: string;
+  headers?: { host?: string | string[] };
+}): boolean {
+  const pathWorkspaceId = privateWorkspaceIdFromPath(req.url ?? "");
+  if (pathWorkspaceId) return true;
+  const rawHost = Array.isArray(req.headers?.host) ? req.headers.host[0] : req.headers?.host;
+  return Boolean(targetForHost(rawHost ?? ""));
+}
+
 // ---------------------------------------------------------------------------
 // Nice HTML error page for stopped / unreachable workspaces
 // ---------------------------------------------------------------------------

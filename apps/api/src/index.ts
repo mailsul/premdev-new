@@ -19,7 +19,7 @@ import { aiRoutes } from "./routes/ai.js";
 import { adminRoutes } from "./routes/admin.js";
 import { dbRoutes } from "./routes/db.js";
 import { vfsRoutes } from "./routes/vfs.js";
-import { setupProxy } from "./routes/proxy.js";
+import { isWorkspaceUpgradeRequest, setupProxy } from "./routes/proxy.js";
 import { apiLimiter, aiLimiter, fileWriteLimiter, loginLimiter, clientIp } from "./lib/rate-limit.js";
 import { getAllRtSettings } from "./lib/ai-settings.js";
 import { applyAIBudgets } from "./lib/ai-prompt.js";
@@ -89,11 +89,26 @@ try {
 
 // Subdomain proxy must come first. It attaches an onRequest hook at root
 // scope (NOT via `register`, which would encapsulate the hook to a child
-// scope and silently never fire) plus a raw `upgrade` listener that has
-// to be wired before @fastify/websocket so its handler runs first and can
-// short-circuit upgrades destined for workspace containers.
+// scope and silently never fire) plus a raw `upgrade` listener for workspace
+// containers.
 setupProxy(app);
+
+// @fastify/websocket installs its own raw `upgrade` listener. Keep it for
+// /ws/terminal/*, but do not let it process workspace upgrades after the
+// proxy has already tunneled them. Without this guard, its no-route handler
+// closes Code Server's `/`/`/vscode` WebSocket with a 404.
+const upgradeListenersBeforeWebsocket = new Set(app.server.listeners("upgrade"));
 await app.register(fastifyWebsocket);
+const genericUpgradeListeners = app.server
+  .listeners("upgrade")
+  .filter((listener) => !upgradeListenersBeforeWebsocket.has(listener));
+for (const listener of genericUpgradeListeners) {
+  app.server.removeListener("upgrade", listener as (...args: any[]) => void);
+  app.server.on("upgrade", (req, socket, head) => {
+    if (isWorkspaceUpgradeRequest(req)) return;
+    (listener as (...args: any[]) => void).call(app.server, req, socket, head);
+  });
+}
 
 // WebSocket terminal — registered at root so the URL stays /ws/terminal/:id
 // (the setNotFoundHandler below specifically excludes /ws/* from the SPA fallback)
