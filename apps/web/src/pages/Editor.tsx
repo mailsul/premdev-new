@@ -790,6 +790,7 @@ export default function EditorPage() {
           <Panel defaultSize={compactLayout ? 70 : (showAI ? 56 : 72)}>
             <PanelGroup direction="vertical">
               <Panel defaultSize={65} minSize={20}>
+                <div className="flex h-full min-h-0 flex-col">
                 {/* ── Breadcrumb ─────────────────────────────────────── */}
                 {activePath && (
                   <div className="flex items-center gap-0.5 border-b border-bg-border bg-bg-subtle px-3 py-1 text-[11px] text-text-muted overflow-x-auto" style={{ scrollbarWidth: "none" }}>
@@ -977,6 +978,7 @@ export default function EditorPage() {
                   </>
                 )}
                  </div>
+                </div>
               </Panel>
             </PanelGroup>
           </Panel>
