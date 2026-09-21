@@ -429,9 +429,16 @@ export default function EditorPage() {
     if (didRestoreRef.current) return;
     didRestoreRef.current = true;
     const initial = hashState();
-    if (initial.tool) openTool(initial.tool, { syncUrl: false });
-    const restorePath = initial.file ?? activePath;
-    if (restorePath) void openFile(restorePath, { syncUrl: false });
+    if (initial.tool) {
+      // A deep-linked workspace tool must win over the last editor file from
+      // localStorage. openFile() intentionally switches back to the file
+      // surface, so restoring it after the tool would make #tool=console,
+      // #tool=preview, etc. render as an apparently blank editor.
+      openTool(initial.tool, { syncUrl: false });
+    } else {
+      const restorePath = initial.file ?? activePath;
+      if (restorePath) void openFile(restorePath, { syncUrl: false });
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
