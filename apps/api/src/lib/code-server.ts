@@ -14,7 +14,7 @@ import {
 
 const PREVIEW_LOG = "/tmp/premdev-code-server-preview.log";
 const PREVIEW_PID = "/tmp/premdev-code-server-preview.pid";
-const CODE_SERVER_CONFIG_VERSION = "open-vsx-gallery-v2";
+const CODE_SERVER_CONFIG_VERSION = "open-vsx-gallery-v3";
 const DEFAULT_EXTENSIONS_GALLERY = JSON.stringify({
   serviceUrl: "https://open-vsx.org/vscode/gallery",
   itemUrl: "https://open-vsx.org/vscode/item",
@@ -32,6 +32,19 @@ export function codeServerBasePath(workspaceId: string): string {
 
 export function codeServerHost(workspaceId: string): string {
   return `code-${workspaceId}.${config.PRIMARY_DOMAIN}`;
+}
+
+function codeServerTrustedOrigins(workspaceId: string): string[] {
+  // Code Server validates the Origin header using hostnames (not URLs).
+  // Normally the editor is opened on its dedicated host, but keeping the
+  // PremDev app and apex hosts trusted as well supports popup/embedded
+  // workbench bootstraps without weakening the API's workspace ownership
+  // check at the proxy layer.
+  return Array.from(new Set([
+    codeServerHost(workspaceId),
+    config.DEPLOY_DOMAIN,
+    config.PRIMARY_DOMAIN,
+  ].map((host) => host.trim().toLowerCase()).filter(Boolean)));
 }
 
 export function codeServerPath(workspaceId: string): string {
@@ -176,6 +189,9 @@ export async function startCodeServer(opts: {
     "PIP_CACHE_DIR=/home/premdev/.cache/pip",
     "PATH=/home/premdev/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
   );
+  const trustedOriginArgs = codeServerTrustedOrigins(opts.workspaceId)
+    .map((origin) => `--trusted-origins=${JSON.stringify(origin)}`)
+    .join(" ");
   const container = await docker.createContainer({
     name,
     Image: config.RUNTIME_IMAGE,
@@ -187,7 +203,7 @@ export async function startCodeServer(opts: {
     Cmd: [
       "bash",
       "-lc",
-       `exec code-server --bind-addr 0.0.0.0:${config.CODE_SERVER_PORT} --auth=none --disable-telemetry --trusted-origins=${JSON.stringify(codeServerHost(opts.workspaceId))} /workspace`,
+      `exec code-server --bind-addr 0.0.0.0:${config.CODE_SERVER_PORT} --auth=none --disable-telemetry ${trustedOriginArgs} /workspace`,
     ],
     HostConfig: {
       NetworkMode: config.DOCKER_NETWORK,
